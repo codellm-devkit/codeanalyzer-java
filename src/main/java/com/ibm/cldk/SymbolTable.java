@@ -593,7 +593,7 @@ public class SymbolTable {
                 Parameter parameter = (Parameter) param;
                 ResolvedType resolvedType = parameter.getType().resolve();
                 if (parameter.isVarArgs()) {
-                    erasureParameterTypes.add(resolvedType.describe() + "[]");
+                    erasureParameterTypes.add(resolvedType.erasure().describe() + "[]");
                 } else {
                     erasureParameterTypes.add(resolvedType.erasure().describe());
                 }

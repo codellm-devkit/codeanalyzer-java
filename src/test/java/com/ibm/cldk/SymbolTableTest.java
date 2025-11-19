@@ -26,7 +26,7 @@ public class SymbolTableTest {
     }
 
     @Test
-    public void testExtractSingleGenricsDuplicateSignature() throws IOException {
+    public void testExtractSingleGenricsDuplicateSignature_Validate() throws IOException {
         String javaCode = getJavaCodeForTestResource("test-applications/generics-varargs-duplicate-signature-test/Validate.java");
         Map<String, JavaCompilationUnit> symbolTable = SymbolTable.extractSingle(javaCode).getLeft();
         Assertions.assertEquals(1, symbolTable.size());
@@ -34,6 +34,17 @@ public class SymbolTableTest {
         Assertions.assertEquals(1, typeDeclaration.size());
         Map<String, Callable> callables = typeDeclaration.values().iterator().next().getCallableDeclarations();
         Assertions.assertEquals(17, callables.size());
+    }
+
+    @Test
+    public void testExtractSingleGenricsDuplicateSignature_FunctorUtils() throws IOException {
+        String javaCode = getJavaCodeForTestResource("test-applications/generics-varargs-duplicate-signature-test/FunctorUtils.java");
+        Map<String, JavaCompilationUnit> symbolTable = SymbolTable.extractSingle(javaCode).getLeft();
+        Assertions.assertEquals(1, symbolTable.size());
+        Map<String, Type> typeDeclaration = symbolTable.values().iterator().next().getTypeDeclarations();
+        Assertions.assertEquals(1, typeDeclaration.size());
+        Map<String, Callable> callables = typeDeclaration.values().iterator().next().getCallableDeclarations();
+        Assertions.assertEquals(10, callables.size());
     }
 
     @Test
