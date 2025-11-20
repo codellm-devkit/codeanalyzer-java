@@ -48,6 +48,15 @@ public class SymbolTableTest {
     }
 
     @Test
+    public void testExtractSingleMissingNodeRange() throws IOException {
+        String javaCode = getJavaCodeForTestResource("test-applications/missing-node-range-test/WeakHashtableTestCase.java");
+        Map<String, JavaCompilationUnit> symbolTable = SymbolTable.extractSingle(javaCode).getLeft();
+        Assertions.assertEquals(1, symbolTable.size());
+        Map<String, Type> typeDeclaration = symbolTable.values().iterator().next().getTypeDeclarations();
+        Assertions.assertEquals(2, typeDeclaration.size());
+    }
+
+    @Test
     public void testCallSiteArgumentExpression() throws IOException {
         String javaCode = getJavaCodeForTestResource("test-applications/generics-varargs-duplicate-signature-test/Validate.java");
         Map<String, Type> typeDeclaration = SymbolTable.extractSingle(javaCode).getLeft()

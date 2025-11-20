@@ -1147,21 +1147,44 @@ public class SymbolTable {
         return false;
     }
 
+    /**
+     * Sets up lexical preserving printer for the given compilation unit in a safe manner by checking
+     * whether any node in the unit is missing ranges, which can result in exception.
+     *
+     * @param compilationUnit Compilation unit to be set with lexical preserving printer
+     * @return compilation unit set up with lexical preserving printer or the original compilation
+     *         unit if the unit contains range-missing nodes
+     */
+    private static CompilationUnit safeLexicalPreservingPrinterSetup(CompilationUnit compilationUnit) {
+        // setup lexical-preserving printer only if CU has no missing-range nodes
+        boolean hasNodeWithMissingRange = compilationUnit.findAll(Node.class).stream()
+                .anyMatch(n -> !n.getRange().isPresent());
+        if (!hasNodeWithMissingRange) {
+            return LexicalPreservingPrinter.setup(compilationUnit);
+        }
+        return compilationUnit;
+    }
+
     public static Pair<Map<String, JavaCompilationUnit>, Map<String, List<Problem>>> extractAll(Path projectRootPath)
             throws IOException {
-        SymbolSolverCollectionStrategy symbolSolverCollectionStrategy = new SymbolSolverCollectionStrategy();
+        ParserConfiguration config = new ParserConfiguration()
+                .setStoreTokens(true)
+                .setAttributeComments(true)
+                .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21);
+        SymbolSolverCollectionStrategy symbolSolverCollectionStrategy = new SymbolSolverCollectionStrategy(config);
         ProjectRoot projectRoot = symbolSolverCollectionStrategy.collect(projectRootPath);
         javaSymbolSolver = (JavaSymbolSolver) symbolSolverCollectionStrategy.getParserConfiguration()
-                .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21).getSymbolResolver().get();
+                .getSymbolResolver().get();
         Map<String, JavaCompilationUnit> symbolTable = new LinkedHashMap<>();
         Map<String, List<Problem>> parseProblems = new HashMap<>();
         for (SourceRoot sourceRoot : projectRoot.getSourceRoots()) {
             if (excludeSourceRoot(sourceRoot.getRoot())) {
                 continue;
             }
+            sourceRoot.setParserConfiguration(config);
             for (ParseResult<CompilationUnit> parseResult : sourceRoot.tryToParse()) {
                 if (parseResult.isSuccessful()) {
-                    CompilationUnit compilationUnit = LexicalPreservingPrinter.setup(parseResult.getResult().get());
+                    CompilationUnit compilationUnit = safeLexicalPreservingPrinterSetup(parseResult.getResult().get());
                     symbolTable.put(compilationUnit.getStorage().get().getPath().toString(),
                             processCompilationUnit(compilationUnit));
                 } else {
@@ -1181,13 +1204,15 @@ public class SymbolTable {
         combinedTypeSolver.add(new ReflectionTypeSolver());
 
         ParserConfiguration parserConfiguration = new ParserConfiguration()
+                .setStoreTokens(true)
+                .setAttributeComments(true)
                 .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21);
         parserConfiguration.setSymbolResolver(new JavaSymbolSolver(combinedTypeSolver));
 
         JavaParser javaParser = new JavaParser(parserConfiguration);
         ParseResult<CompilationUnit> parseResult = javaParser.parse(code);
         if (parseResult.isSuccessful()) {
-            CompilationUnit compilationUnit = LexicalPreservingPrinter.setup(parseResult.getResult().get());
+            CompilationUnit compilationUnit = safeLexicalPreservingPrinterSetup(parseResult.getResult().get());
             Log.debug("Successfully parsed code. Now processing compilation unit");
             symbolTable.put("<pseudo-path>", processCompilationUnit(compilationUnit));
         } else {
@@ -1216,6 +1241,8 @@ public class SymbolTable {
                 .getSymbolResolver().get();
         Log.info("Setting parser language level to JAVA_21");
         ParserConfiguration parserConfiguration = new ParserConfiguration()
+                .setStoreTokens(true)
+                .setAttributeComments(true)
                 .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21);
         parserConfiguration.setSymbolResolver(javaSymbolSolver);
 
@@ -1229,7 +1256,7 @@ public class SymbolTable {
         for (Path javaFilePath : javaFilePaths) {
             ParseResult<CompilationUnit> parseResult = javaParser.parse(javaFilePath);
             if (parseResult.isSuccessful()) {
-                CompilationUnit compilationUnit = LexicalPreservingPrinter.setup(parseResult.getResult().get());
+                CompilationUnit compilationUnit = safeLexicalPreservingPrinterSetup(parseResult.getResult().get());
                 System.out.println("Successfully parsed file: " + javaFilePath.toString());
                 symbolTable.put(compilationUnit.getStorage().get().getPath().toString(),
                         processCompilationUnit(compilationUnit));
