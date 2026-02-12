@@ -57,6 +57,17 @@ public class SymbolTableTest {
     }
 
     @Test
+    public void testExtractSingleDefaultKeywordMethodDecl() throws IOException {
+        String javaCode = getJavaCodeForTestResource("test-applications/default-keyword-method-decl/IndexExtractor.java");
+        Map<String, JavaCompilationUnit> symbolTable = SymbolTable.extractSingle(javaCode).getLeft();
+        Assertions.assertEquals(1, symbolTable.size());
+        Map<String, Type> typeDeclaration = symbolTable.values().iterator().next().getTypeDeclarations();
+        Assertions.assertEquals(1, typeDeclaration.size());
+        Map<String, Callable> callables = typeDeclaration.values().iterator().next().getCallableDeclarations();
+        Assertions.assertEquals(5, callables.size());
+    }
+
+    @Test
     public void testCallSiteArgumentExpression() throws IOException {
         String javaCode = getJavaCodeForTestResource("test-applications/generics-varargs-duplicate-signature-test/Validate.java");
         Map<String, Type> typeDeclaration = SymbolTable.extractSingle(javaCode).getLeft()

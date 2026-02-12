@@ -11,6 +11,7 @@ import com.github.javaparser.ast.nodeTypes.NodeWithName;
 import com.github.javaparser.ast.stmt.*;
 import com.github.javaparser.ast.type.ReferenceType;
 import com.github.javaparser.ast.type.Type;
+import com.github.javaparser.printer.DefaultPrettyPrinter;
 import com.github.javaparser.printer.lexicalpreservation.LexicalPreservingPrinter;
 import com.github.javaparser.resolution.declarations.ResolvedMethodDeclaration;
 import com.github.javaparser.resolution.declarations.ResolvedMethodLikeDeclaration;
@@ -554,7 +555,15 @@ public class SymbolTable {
         callableNode.setStartLine(callableDecl.getRange().isPresent() ? callableDecl.getRange().get().begin.line : -1);
         callableNode.setEndLine(callableDecl.getRange().isPresent() ? callableDecl.getRange().get().end.line : -1);
         callableNode.setReferencedTypes(getReferencedTypes(body));
-        callableNode.setCode(body.isPresent() ? LexicalPreservingPrinter.print(body.get()) : "");
+        try {
+            callableNode.setCode(body.isPresent() ? LexicalPreservingPrinter.print(body.get()) : "");
+        } catch (UnsupportedOperationException uoe) {
+            Log.warn("LexicalPreservingPrinter.print() failed on method " + callableDecl.getSignature() +
+                    " of type "+typeName);
+            Log.warn("Reverting to default printing");
+            Log.warn(body.get().toString());
+            callableNode.setCode(body.get().toString());
+        }
         callableNode.setCodeStartLine(body.isPresent()? body.get().getBegin().get().line : -1);
 
         callableNode.setAccessedFields(getAccessedFields(body, classFields, typeName));
