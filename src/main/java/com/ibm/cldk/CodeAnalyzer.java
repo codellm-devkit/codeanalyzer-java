@@ -251,12 +251,38 @@ public class CodeAnalyzer implements Runnable {
         }
     }
 
+    private static boolean hasLegacyImportSchema(JsonObject symbolTableJson) {
+        if (symbolTableJson == null) {
+            return false;
+        }
+        for (Map.Entry<String, JsonElement> entry : symbolTableJson.entrySet()) {
+            JsonElement compilationUnitElement = entry.getValue();
+            if (!compilationUnitElement.isJsonObject()) {
+                continue;
+            }
+            JsonObject compilationUnitJson = compilationUnitElement.getAsJsonObject();
+            if (!compilationUnitJson.has("imports") || !compilationUnitJson.get("imports").isJsonArray()) {
+                continue;
+            }
+            for (JsonElement importElement : compilationUnitJson.getAsJsonArray("imports")) {
+                if (importElement.isJsonPrimitive() && importElement.getAsJsonPrimitive().isString()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private static Map<String, JavaCompilationUnit> readSymbolTableFromFile(File analysisJsonFile) {
         Type symbolTableType = new TypeToken<Map<String, JavaCompilationUnit>>() {
         }.getType();
         try (FileReader reader = new FileReader(analysisJsonFile)) {
             JsonObject jsonObject = JsonParser.parseReader(reader).getAsJsonObject();
-            return gson.fromJson(jsonObject.get("symbol_table"), symbolTableType);
+            JsonObject symbolTableJson = jsonObject.getAsJsonObject("symbol_table");
+            if (hasLegacyImportSchema(symbolTableJson)) {
+                throw new IllegalStateException("Existing analysis.json uses legacy import schema (imports as strings). Regenerate analysis with codeanalyzer 2.3.7 or newer.");
+            }
+            return gson.fromJson(symbolTableJson, symbolTableType);
         } catch (IOException e) {
             Log.error("Error reading analysis file: " + e.getMessage());
         }
