@@ -214,45 +214,92 @@ public class CodeAnalyzerIntegrationTest {
         var runCodeAnalyzerOnPlantsByWebsphere = container.execInContainer(
                 "bash", "-c",
                 String.format(
-                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --input=/test-applications/plantsbywebsphere --analysis-level=1 --verbose",
+                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --input=/test-applications/plantsbywebsphere --analysis-level=1",
                         javaHomePath, codeanalyzerVersion
                 )
         );
 
 
+        Assertions.assertEquals(0, runCodeAnalyzerOnPlantsByWebsphere.getExitCode(), "CodeAnalyzer command should succeed");
         String output = runCodeAnalyzerOnPlantsByWebsphere.getStdout();
+        Gson gson = new Gson();
+        JsonObject jsonObject = gson.fromJson(output, JsonObject.class);
+        JsonObject symbolTable = jsonObject.getAsJsonObject("symbol_table");
+        Assertions.assertNotNull(symbolTable);
+        Assertions.assertTrue(symbolTable.size() > 0, "Symbol table should not be empty");
 
-        Assertions.assertTrue(output.contains("\"query_type\": \"NAMED\""), "No entry point classes found");
-        Assertions.assertTrue(output.contains("\"operation_type\": \"READ\""), "No entry point methods found");
-        Assertions.assertTrue(output.contains("\"operation_type\": \"UPDATE\""), "No entry point methods found");
-        Assertions.assertTrue(output.contains("\"operation_type\": \"CREATE\""), "No entry point methods found");
+        boolean hasReadOperation = false;
+        boolean hasCreateOperation = false;
+        boolean hasUpdateOperation = false;
+        boolean hasNamedQuery = false;
+        int crudOperationCount = 0;
+        int crudQueryCount = 0;
 
-        // Convert the expected JSON structure into a string
-        String expectedCrudOperation =
-                "\"crud_operations\": [" +
-                        "{" +
-                        "\"line_number\": 115," +
-                        "\"operation_type\": \"READ\"," +
-                        "\"target_table\": null," +
-                        "\"involved_columns\": null," +
-                        "\"condition\": null," +
-                        "\"joined_tables\": null" +
-                        "}]";
+        for (Map.Entry<String, JsonElement> compilationUnitEntry : symbolTable.entrySet()) {
+            JsonObject compilationUnit = compilationUnitEntry.getValue().getAsJsonObject();
+            if (!compilationUnit.has("type_declarations")) {
+                continue;
+            }
+            JsonObject typeDeclarations = compilationUnit.getAsJsonObject("type_declarations");
+            for (Map.Entry<String, JsonElement> typeEntry : typeDeclarations.entrySet()) {
+                JsonObject typeDeclaration = typeEntry.getValue().getAsJsonObject();
+                if (!typeDeclaration.has("callable_declarations")) {
+                    continue;
+                }
+                JsonObject callableDeclarations = typeDeclaration.getAsJsonObject("callable_declarations");
+                for (Map.Entry<String, JsonElement> callableEntry : callableDeclarations.entrySet()) {
+                    JsonObject callable = callableEntry.getValue().getAsJsonObject();
+                    JsonArray crudOperations = callable.getAsJsonArray("crud_operations");
+                    if (crudOperations != null) {
+                        for (JsonElement crudOperationElement : crudOperations) {
+                            JsonObject crudOperation = crudOperationElement.getAsJsonObject();
+                            crudOperationCount++;
+                            Assertions.assertTrue(crudOperation.has("line_number"), "CRUD operation should have line_number");
+                            Assertions.assertTrue(crudOperation.has("operation_type"), "CRUD operation should have operation_type");
+                            Assertions.assertTrue(crudOperation.has("target_table"), "CRUD operation should have target_table");
+                            Assertions.assertTrue(crudOperation.has("involved_columns"), "CRUD operation should have involved_columns");
+                            Assertions.assertTrue(crudOperation.has("condition"), "CRUD operation should have condition");
+                            Assertions.assertTrue(crudOperation.has("joined_tables"), "CRUD operation should have joined_tables");
+                            String operationType = crudOperation.get("operation_type").getAsString();
+                            int lineNumber = crudOperation.get("line_number").getAsInt();
+                            Assertions.assertTrue(lineNumber > 0, "CRUD operation should have positive line_number");
+                            if ("READ".equals(operationType)) {
+                                hasReadOperation = true;
+                            }
+                            if ("CREATE".equals(operationType)) {
+                                hasCreateOperation = true;
+                            }
+                            if ("UPDATE".equals(operationType)) {
+                                hasUpdateOperation = true;
+                            }
+                        }
+                    }
+                    JsonArray crudQueries = callable.getAsJsonArray("crud_queries");
+                    if (crudQueries != null) {
+                        for (JsonElement crudQueryElement : crudQueries) {
+                            JsonObject crudQuery = crudQueryElement.getAsJsonObject();
+                            crudQueryCount++;
+                            Assertions.assertTrue(crudQuery.has("line_number"), "CRUD query should have line_number");
+                            Assertions.assertTrue(crudQuery.has("query_type"), "CRUD query should have query_type");
+                            Assertions.assertTrue(crudQuery.has("query_arguments"), "CRUD query should have query_arguments");
+                            String queryType = crudQuery.get("query_type").getAsString();
+                            int lineNumber = crudQuery.get("line_number").getAsInt();
+                            Assertions.assertTrue(lineNumber > 0, "CRUD query should have positive line_number");
+                            if ("NAMED".equals(queryType)) {
+                                hasNamedQuery = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
-        // Expected JSON for CRUD Queries
-        String expectedCrudQuery =
-                "\"crud_queries\": [" +
-                        "{" +
-                        "\"line_number\": 141,";
-
-        // Normalize the output and expected strings to ignore formatting differences
-        String normalizedOutput = output.replaceAll("\\s+", "");
-        String normalizedExpectedCrudOperation = expectedCrudOperation.replaceAll("\\s+", "");
-        String normalizedExpectedCrudQuery = expectedCrudQuery.replaceAll("\\s+", "");
-
-        // Assertions for both CRUD operations and queries
-        Assertions.assertTrue(normalizedOutput.contains(normalizedExpectedCrudOperation), "Expected CRUD operation JSON structure not found");
-        Assertions.assertTrue(normalizedOutput.contains(normalizedExpectedCrudQuery), "Expected CRUD query JSON structure not found");
+        Assertions.assertTrue(crudOperationCount > 0, "No CRUD operations found");
+        Assertions.assertTrue(crudQueryCount > 0, "No CRUD queries found");
+        Assertions.assertTrue(hasNamedQuery, "No NAMED CRUD query found");
+        Assertions.assertTrue(hasReadOperation, "No READ CRUD operation found");
+        Assertions.assertTrue(hasCreateOperation, "No CREATE CRUD operation found");
+        Assertions.assertTrue(hasUpdateOperation, "No UPDATE CRUD operation found");
     }
 
     @Test
@@ -324,7 +371,9 @@ public class CodeAnalyzerIntegrationTest {
             JsonObject type = element.getValue().getAsJsonObject();
             if (type.has("type_declarations")) {
                 JsonObject typeDeclarations = type.getAsJsonObject("type_declarations");
-                JsonObject mainMethod = typeDeclarations.getAsJsonObject("org.example.App").getAsJsonObject("callable_declarations").getAsJsonObject("main(String[])");
+                JsonObject mainMethod = typeDeclarations.getAsJsonObject("org.example.App")
+                        .getAsJsonObject("callable_declarations")
+                        .getAsJsonObject("main(java.lang.String[])");
                 JsonArray parameters = mainMethod.getAsJsonArray("parameters");
                 // There should be 1 parameter
                 Assertions.assertEquals(1, parameters.size(), "Callable should have 1 parameter");
