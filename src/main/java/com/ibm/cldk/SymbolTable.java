@@ -133,7 +133,13 @@ public class SymbolTable {
         // Add javadoc comment
         // Add imports
         cUnit.setImports(
-                parseResult.getImports().stream().map(NodeWithName::getNameAsString).collect(Collectors.toList()));
+                parseResult.getImports().stream().map(importDecl -> {
+                    Import importNode = new Import();
+                    importNode.setPath(importDecl.getNameAsString());
+                    importNode.setStatic(importDecl.isStatic());
+                    importNode.setWildcard(importDecl.isAsterisk());
+                    return importNode;
+                }).collect(Collectors.toList()));
 
         // create array node for type declarations
         cUnit.setTypeDeclarations(parseResult.findAll(TypeDeclaration.class).stream()

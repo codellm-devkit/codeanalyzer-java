@@ -1,7 +1,12 @@
 package com.ibm.cldk;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.ibm.cldk.entities.CallSite;
 import com.ibm.cldk.entities.Callable;
+import com.ibm.cldk.entities.Import;
 import com.ibm.cldk.entities.JavaCompilationUnit;
 import com.ibm.cldk.entities.Type;
 import java.io.BufferedReader;
@@ -83,6 +88,47 @@ public class SymbolTableTest {
                 break;
             }
         }
+    }
+
+    @Test
+    public void testExtractSingleImportMetadata() throws IOException {
+        String javaCode = String.join("\n",
+                "import java.util.List;",
+                "import java.util.Map.*;",
+                "import static java.util.Collections.emptyList;",
+                "import static java.util.Collections.*;",
+                "class T {}");
+        Map<String, JavaCompilationUnit> symbolTable = SymbolTable.extractSingle(javaCode).getLeft();
+        Assertions.assertEquals(1, symbolTable.size());
+        List<Import> imports = symbolTable.values().iterator().next().getImports();
+        Assertions.assertNotNull(imports);
+        Assertions.assertEquals(4, imports.size());
+
+        assertImport(imports, "java.util.List", false, false);
+        assertImport(imports, "java.util.Map", false, true);
+        assertImport(imports, "java.util.Collections.emptyList", true, false);
+        assertImport(imports, "java.util.Collections", true, true);
+
+        JsonArray serializedImports = JsonParser.parseString(CodeAnalyzer.gson.toJson(imports)).getAsJsonArray();
+        Assertions.assertEquals(4, serializedImports.size());
+        for (JsonElement serializedImport : serializedImports) {
+            Assertions.assertTrue(serializedImport.isJsonObject());
+            JsonObject serializedImportObject = serializedImport.getAsJsonObject();
+            Assertions.assertTrue(serializedImportObject.has("path"));
+            Assertions.assertTrue(serializedImportObject.has("is_static"));
+            Assertions.assertTrue(serializedImportObject.has("is_wildcard"));
+        }
+    }
+
+    private static void assertImport(List<Import> imports, String path, boolean isStatic, boolean isWildcard) {
+        Import matchingImport = imports.stream()
+                .filter(imp -> path.equals(imp.getPath())
+                        && imp.isStatic() == isStatic
+                        && imp.isWildcard() == isWildcard)
+                .findFirst()
+                .orElse(null);
+        Assertions.assertNotNull(matchingImport,
+                String.format("Expected import '%s' with isStatic=%s and isWildcard=%s", path, isStatic, isWildcard));
     }
 
 }
