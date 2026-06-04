@@ -1,0 +1,103 @@
+---
+title: Quickstart
+description: Build the codeanalyzer-java JAR and run your first analysis — symbol table and call graph — in a couple of minutes.
+---
+
+import { Steps, Tabs, TabItem, Aside } from "@astrojs/starlight/components";
+
+This guide gets you from a clone to a working `analysis.json` in a couple of minutes. For installation alternatives (native binary, pre-built JAR via the Python SDK), see [Installation](/codeanalyzer-java/installing/).
+
+## Prerequisites
+
+- A Linux, macOS, or WSL machine
+- A JDK, version **11 or above** (Java 17 recommended). We suggest installing it with [SDKMan!](https://sdkman.io/)
+
+<Aside type="tip">
+If you only need the JAR to power the CLDK Python SDK, you don't have to build anything — `pip install cldk` bundles a compatible JAR. See [Python SDK integration](/codeanalyzer-java/integration/python-sdk/).
+</Aside>
+
+## Build the JAR
+
+<Steps>
+
+1. **Install a JDK** (Java 17 shown here, via SDKMan!):
+
+   ```bash
+   sdk install java 17.0.10-sem
+   sdk use java 17.0.10-sem
+   ```
+
+2. **Clone and build the fat JAR:**
+
+   ```bash
+   git clone https://github.com/codellm-devkit/codeanalyzer-java
+   cd codeanalyzer-java
+   ./gradlew fatJar
+   ```
+
+   The build produces a self-contained JAR at `build/libs/codeanalyzer-2.3.7.jar`.
+
+3. **Confirm it runs:**
+
+   ```bash
+   java -jar build/libs/codeanalyzer-2.3.7.jar --version
+   ```
+
+</Steps>
+
+## Run your first analysis
+
+### Symbol table only (fast)
+
+Analysis level 1 parses source and builds the symbol table. It does not require building the target project, so it's quick:
+
+```bash
+java -jar build/libs/codeanalyzer-2.3.7.jar \
+  -i /path/to/your/project \
+  -a 1 \
+  -o ./output
+```
+
+This writes `./output/analysis.json` containing the `symbol_table` for every `.java` file.
+
+### Symbol table + call graph
+
+Analysis level 2 additionally builds the WALA call graph. By default codeanalyzer will build the target project (so WALA has compiled classes and resolved dependencies to work from):
+
+```bash
+java -jar build/libs/codeanalyzer-2.3.7.jar \
+  -i /path/to/your/project \
+  -a 2 \
+  -o ./output \
+  -v
+```
+
+The `-v` flag streams progress logs so you can watch the build and call-graph construction.
+
+### Analyze a single source string
+
+No project, no build — pass Java source directly and get a symbol table back on stdout:
+
+```bash
+java -jar build/libs/codeanalyzer-2.3.7.jar \
+  -s "public class Hello { public static void main(String[] a){} }" \
+  -a 1
+```
+
+<Aside type="note">
+When `-o` is omitted, the consolidated JSON is printed to stdout instead of being written to a file. This is how the Python SDK can capture output without a temp directory.
+</Aside>
+
+## Read the output
+
+`analysis.json` has this top-level shape:
+
+```json
+{
+  "symbol_table": { "/abs/path/File.java": { /* compilation unit */ } },
+  "call_graph": [ /* caller→callee edges, present at level 2 */ ],
+  "version": "2.3.7"
+}
+```
+
+Continue to the [Output schema](/codeanalyzer-java/schema/) for the full structure, or the [CLI reference](/codeanalyzer-java/reference/cli/) for every flag.

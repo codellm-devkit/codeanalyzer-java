@@ -1,0 +1,85 @@
+---
+title: codeanalyzer-java
+description: The WALA + Javaparser static-analysis backend behind CodeLLM-DevKit's Java support — a standalone JAR that turns a Java project into a symbol table and call graph, emitted as one versioned JSON schema.
+template: splash
+hero:
+  tagline: One JAR turns an enterprise Java project into a symbol table and call graph — emitted as a single versioned JSON schema your tools can consume.
+  actions:
+    - text: Quickstart
+      link: /codeanalyzer-java/quickstart/
+      icon: rocket
+      variant: primary
+    - text: Output schema
+      link: /codeanalyzer-java/schema/
+      icon: right-arrow
+      variant: secondary
+    - text: GitHub
+      link: https://github.com/codellm-devkit/codeanalyzer-java
+      icon: github
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+```bash frame="none"
+java -jar codeanalyzer-2.3.7.jar -i /path/to/project -a 2 -o ./output
+```
+
+Point **codeanalyzer-java** at a Java project and get back `analysis.json` — a single document describing every class, method, field, and import in the codebase, plus an interprocedural call graph computed by WALA. The schema is the *same shape* the CLDK Python SDK deserializes into typed models, so whatever consumes it — an agent, a script, or the SDK — works against structured analysis instead of raw source.
+
+## What it produces
+
+<ul class="cldk-capabilities">
+  <a class="cldk-capability" href="/codeanalyzer-java/schema/symbol-table/">
+    <p class="cldk-capability__title">Symbol table</p>
+    <p class="cldk-capability__def">Every type, method, field, and import — typed and located in source.</p>
+    <pre class="cldk-capability__thumb">symbol_table[file].type_declarations
+  .callable_declarations</pre>
+    <ul class="cldk-capability__examples"><li>List every method in a class</li><li>Pull a method's source body and span</li></ul>
+  </a>
+  <a class="cldk-capability" href="/codeanalyzer-java/schema/call-graph/">
+    <p class="cldk-capability__title">Call graph</p>
+    <p class="cldk-capability__def">Who-calls-whom as explicit caller→callee edges from WALA.</p>
+    <pre class="cldk-capability__thumb">call_graph[].source
+call_graph[].target</pre>
+    <ul class="cldk-capability__examples"><li>Find every caller of a method</li><li>Walk callees transitively</li></ul>
+  </a>
+  <a class="cldk-capability" href="/codeanalyzer-java/frameworks/entry-points/">
+    <p class="cldk-capability__title">Entry points</p>
+    <p class="cldk-capability__def">Main methods and framework endpoints — Spring, JAX-RS, Struts, Servlets.</p>
+    <pre class="cldk-capability__thumb">callable.is_entrypoint
+type.is_entrypoint_class</pre>
+    <ul class="cldk-capability__examples"><li>Find REST endpoints</li><li>Seed reachability from real entry points</li></ul>
+  </a>
+  <a class="cldk-capability" href="/codeanalyzer-java/frameworks/crud/">
+    <p class="cldk-capability__title">CRUD operations</p>
+    <p class="cldk-capability__def">JPA persistence calls classified as CREATE / READ / UPDATE / DELETE.</p>
+    <pre class="cldk-capability__thumb">callable.crud_operations
+callable.crud_queries</pre>
+    <ul class="cldk-capability__examples"><li>Audit data-access patterns</li><li>Find every read/write to storage</li></ul>
+  </a>
+</ul>
+
+## Start here
+
+<CardGrid>
+  <LinkCard title="What is codeanalyzer-java?" description="The mental model: project → JAR → analysis.json → typed consumers." href="/codeanalyzer-java/what-is-codeanalyzer/" />
+  <LinkCard title="Quickstart" description="Build the JAR and run your first analysis in a couple of minutes." href="/codeanalyzer-java/quickstart/" />
+  <LinkCard title="Installation" description="Run as a fat JAR, or compile a native binary with GraalVM." href="/codeanalyzer-java/installing/" />
+  <LinkCard title="Architecture" description="The pipeline: Javaparser symbol extraction + WALA call-graph construction." href="/codeanalyzer-java/guides/architecture/" />
+</CardGrid>
+
+## Go deeper
+
+<CardGrid>
+  <LinkCard title="CLI reference" description="Every flag: input, analysis level, build command, target files." href="/codeanalyzer-java/reference/cli/" />
+  <LinkCard title="Output schema" description="The full shape of analysis.json — symbol table and call graph." href="/codeanalyzer-java/schema/" />
+  <LinkCard title="Analysis levels" description="Level 1 (symbol table) vs. level 2 (+ call graph), and what each costs." href="/codeanalyzer-java/guides/analysis-levels/" />
+  <LinkCard title="Python SDK integration" description="How CLDK shells out to this JAR and wraps the output as JavaAnalysis." href="/codeanalyzer-java/integration/python-sdk/" />
+</CardGrid>
+
+<p class="cldk-badges">
+  <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-green?style=for-the-badge" alt="License Apache 2.0" /></a>
+  <a href="https://github.com/codellm-devkit/codeanalyzer-java"><img src="https://img.shields.io/badge/WALA-1.6.7-blue?style=for-the-badge" alt="WALA 1.6.7" /></a>
+  <a href="https://discord.gg/zEjz9YrmqN"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord" /></a>
+</p>

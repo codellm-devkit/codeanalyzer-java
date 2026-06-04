@@ -1,0 +1,79 @@
+---
+title: Entry points
+description: How codeanalyzer-java identifies program entry points — main methods plus Spring, JAX-RS, Struts, and Jakarta/Servlet endpoints — and how that surfaces in the schema.
+---
+
+import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
+
+An **entry point** is a method the runtime (or a framework) can invoke without an in-program caller: a `main`, a REST handler, a servlet, a scheduled job. They matter because they anchor the WALA [call graph](/codeanalyzer-java/schema/call-graph/) and seed reachability — a taint path has to start *somewhere*.
+
+codeanalyzer-java detects entry points through an `EntrypointsFinderFactory` that dispatches to per-framework finders. Detected entry points surface in the schema as:
+
+- `type.is_entrypoint_class` — `true` on the [type](/codeanalyzer-java/schema/symbol-table/#type-jtype) when it's a recognized entry-point class (including any class with a `main(String[])`).
+- `callable.is_entrypoint` — `true` on the [callable](/codeanalyzer-java/schema/symbol-table/#callable-jcallable) for the specific entry-point method.
+
+## Supported frameworks
+
+<Tabs>
+  <TabItem label="Spring">
+**Class-level annotations:** `@RestController`, `@Controller`, `@HandlerInterceptor`, `@SpringBootApplication`, `@Configuration`, `@Component`, `@Service`, `@Repository`.
+
+**Interfaces:** classes implementing `CommandLineRunner` or `ApplicationRunner`.
+
+**Method-level annotations:** `@GetMapping`, `@PostMapping`, `@PutMapping`, `@DeleteMapping`, `@PatchMapping`, `@RequestMapping`, `@EventListener`, `@Scheduled`, `@KafkaListener`, `@RabbitListener`, `@JmsListener`, `@PreAuthorize`, `@PostAuthorize`, `@PostConstruct`, `@PreDestroy`, plus AOP advice (`@Around`, `@Before`, `@After`) and batch scopes (`@JobScope`, `@StepScope`).
+  </TabItem>
+  <TabItem label="JAX-RS">
+**HTTP-method annotations** (at class or method level) mark REST resource methods: `@GET`, `@POST`, `@PUT`, `@DELETE`, `@HEAD`.
+  </TabItem>
+  <TabItem label="Struts">
+**Class-level annotations:** `@Action`, `@Namespace`, `@InterceptorRef`.
+
+**Superclass / interface:** classes extending `ActionSupport` or implementing `Interceptor`.
+
+**Method-level annotations:** `@Action`, `@Actions`, `@ValidationMethod`, `@InputConfig`, `@BeforeResult`, `@Before`, `@After`, `@Result`, `@Results`.
+
+**Convention:** a method named `execute()`.
+  </TabItem>
+  <TabItem label="Jakarta / Servlet">
+**Class-level annotations:** `@WebServlet`, `@WebFilter`, `@WebListener`, `@ServerEndpoint`, `@MessageDriven`, `@WebService`.
+
+**Superclasses:** classes extending `HttpServlet` or `GenericServlet`.
+
+**Interfaces:** classes implementing `ServletContextListener`, `HttpSessionListener`, `ServletRequestListener`, or `MessageListener`.
+
+**Method signature:** methods taking `HttpServletRequest` or `HttpServletResponse` parameters.
+  </TabItem>
+</Tabs>
+
+## Plain `main` methods
+
+Independent of any framework, a class declaring `public static void main(String[] args)` is an entry point. Its type gets `is_entrypoint_class: true` and the `main` callable gets `is_entrypoint: true`. This is the baseline anchor for ordinary applications.
+
+<Aside type="note" title="Apache Camel">
+A Camel finder exists (`RouteBuilder` subclasses, `Processor`/`Producer`/`Consumer` implementers, `@Component`) but is currently a stub marked not-implemented — Camel routes are not yet detected as entry points.
+</Aside>
+
+## Why entry points matter for the call graph
+
+WALA builds the call graph by traversing outward from entry points. If a project has no `main` and none of the framework patterns above match, WALA may have nothing to anchor on and the `call_graph` can come back empty. When that happens, confirm the project actually has a recognized entry point — see [Troubleshooting](/codeanalyzer-java/troubleshooting/).
+
+## Using entry points downstream
+
+Once analyzed, you can filter on the flags to drive reachability. Via the Python SDK:
+
+```python
+analysis = CLDK(language="java").analysis(
+    project_path="my-web-app",
+    analysis_level=AnalysisLevel.call_graph,
+)
+
+# Every method flagged as an entry point
+entrypoints = [
+    (cls, sig)
+    for cls in analysis.get_classes()
+    for sig, m in analysis.get_methods_in_class(cls).items()
+    if m.is_entrypoint
+]
+```
+
+Seed a `networkx` reachability query from these to ask whether a sink is reachable from any externally-invocable method.

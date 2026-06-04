@@ -1,0 +1,121 @@
+---
+title: Installation
+description: Run codeanalyzer-java as a fat JAR, compile a native binary with GraalVM, or let the CLDK Python SDK bundle a compatible JAR for you.
+---
+
+import { Steps, Tabs, TabItem, Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+There are three ways to get codeanalyzer-java, depending on what you're doing.
+
+<CardGrid>
+  <LinkCard title="Fat JAR" description="The standard distribution. Requires a JVM. Best for direct use and scripting." href="#option-1-fat-jar-recommended" />
+  <LinkCard title="Native binary" description="A GraalVM-compiled executable. No JVM needed at runtime." href="#option-2-native-binary-graalvm" />
+  <LinkCard title="Via the Python SDK" description="pip install cldk bundles a compatible JAR — no build needed." href="#option-3-via-the-python-sdk" />
+</CardGrid>
+
+## Prerequisites
+
+- A Linux, macOS, or WSL machine.
+- [SDKMan!](https://sdkman.io/) for managing JDK / GraalVM versions (recommended).
+
+Install SDKMan! if you don't have it:
+
+```bash
+curl -s "https://get.sdkman.io" | bash
+source "$HOME/.sdkman/bin/sdkman-init.sh"
+```
+
+## Option 1: Fat JAR (recommended)
+
+The fat JAR is the standard distribution — the CLDK SDK expects a JVM, and this is the simplest path.
+
+<Steps>
+
+1. **Install a JDK (Java 11 or above).** List available versions and install one:
+
+   ```bash
+   sdk list java | grep sem      # IBM Semeru builds
+   sdk install java 17.0.10-sem
+   sdk use java 17.0.10-sem
+   ```
+
+2. **Build the JAR:**
+
+   ```bash
+   git clone https://github.com/codellm-devkit/codeanalyzer-java
+   cd codeanalyzer-java
+   ./gradlew fatJar
+   ```
+
+3. **Use it** — the JAR lands at `build/libs/codeanalyzer-2.3.7.jar`:
+
+   ```bash
+   java -jar build/libs/codeanalyzer-2.3.7.jar -i /path/to/project -a 2 -o ./output
+   ```
+
+</Steps>
+
+## Option 2: Native binary (GraalVM)
+
+A native image needs no JVM at runtime. This is heavier to build but gives a standalone executable.
+
+<Steps>
+
+1. **Install GraalVM** (17 or above):
+
+   ```bash
+   sdk list java | grep graal
+   sdk install java 21.0.2-graalce
+   sdk use java 21.0.2-graalce
+   ```
+
+2. **Compile the native binary.** `-PbinDir` is optional; without it the binary lands in `build/bin`:
+
+   ```bash
+   ./gradlew nativeCompile -PbinDir=$HOME/.local/bin
+   ```
+
+3. **Run it** (assuming the output dir is on your `$PATH`):
+
+   ```bash
+   codeanalyzer -i /path/to/project -a 2 -o ./output
+   ```
+
+</Steps>
+
+<Aside type="caution" title="Native image and reflection">
+If a native binary throws unexpected exceptions that the JAR doesn't, the bundled `reflect-config.json` is likely stale. Regenerate it with the native-image agent, then rebuild:
+
+```bash
+./gradlew fatJar
+java -agentlib:native-image-agent=config-output-dir=src/main/resources/META-INF/native-image-config \
+  -jar build/libs/codeanalyzer-2.3.7.jar -i /path/to/sample/project -a 2 -v
+./gradlew nativeCompile
+```
+</Aside>
+
+## Option 3: Via the Python SDK
+
+If your goal is to use Java analysis from Python, you don't need to build anything. The CLDK SDK ships a compatible JAR and discovers it automatically:
+
+```bash
+pip install cldk
+```
+
+```python
+from cldk import CLDK
+
+analysis = CLDK(language="java").analysis(project_path="commons-cli")
+print(len(analysis.get_classes()), "classes")
+```
+
+To point the SDK at a JAR you built yourself, pass `analysis_backend_path`. See [Python SDK integration](/codeanalyzer-java/integration/python-sdk/).
+
+## Verify your install
+
+```bash
+java -jar build/libs/codeanalyzer-2.3.7.jar --version
+# 2.3.7
+```
+
+If you see the version string, you're ready — head to the [Quickstart](/codeanalyzer-java/quickstart/).

@@ -1,0 +1,119 @@
+---
+title: Examples
+description: Worked codeanalyzer-java invocations — symbol-table runs, full call-graph analysis, single-source mode, incremental updates, and pre-built projects.
+---
+
+A collection of complete, copy-pasteable invocations. Replace `codeanalyzer-2.3.7.jar` with your built JAR path (or `codeanalyzer` if you compiled a native binary).
+
+## Symbol table only (fast, no build)
+
+Parse a project and emit the symbol table. No project build required:
+
+```bash
+java -jar codeanalyzer-2.3.7.jar \
+  -i /path/to/commons-cli \
+  -a 1 \
+  -o ./output
+# -> ./output/analysis.json with symbol_table
+```
+
+## Full analysis with call graph
+
+Symbol table plus the WALA call graph. The project is built automatically:
+
+```bash
+java -jar codeanalyzer-2.3.7.jar \
+  -i /path/to/commons-cli \
+  -a 2 \
+  -o ./output \
+  -v
+# -> ./output/analysis.json with symbol_table + call_graph
+```
+
+## Single source string (no project, no build)
+
+Analyze a snippet directly; output goes to stdout:
+
+```bash
+java -jar codeanalyzer-2.3.7.jar \
+  -s "public class HelloWorld { public static void main(String[] args) {} }" \
+  -a 1
+```
+
+## Pre-built project (skip the build)
+
+If the project is already compiled, skip the build step for a faster level-2 run:
+
+```bash
+java -jar codeanalyzer-2.3.7.jar \
+  -i /path/to/project \
+  -a 2 \
+  --no-build \
+  -o ./output
+```
+
+## Custom build command
+
+Use your own build instead of the auto build:
+
+```bash
+java -jar codeanalyzer-2.3.7.jar \
+  -i /path/to/project \
+  -a 2 \
+  -b "mvn -q clean package -DskipTests" \
+  -o ./output
+```
+
+## Incremental analysis (target files)
+
+Re-analyze just two files and patch them into an existing `analysis.json`:
+
+```bash
+java -jar codeanalyzer-2.3.7.jar \
+  -i /path/to/project \
+  -t src/main/java/org/apache/commons/cli/Option.java \
+  -t src/main/java/org/apache/commons/cli/Options.java \
+  -o ./output
+```
+
+The named files are tagged `is_modified: true` in the merged output. See [Incremental analysis](/codeanalyzer-java/guides/incremental-analysis/).
+
+## Multi-module project
+
+Analyze a submodule while building from the reactor root:
+
+```bash
+java -jar codeanalyzer-2.3.7.jar \
+  -i /path/to/project/web-module \
+  -f /path/to/project/pom.xml \
+  -a 2 \
+  -o ./output
+```
+
+## Pipe stdout into a tool
+
+Omit `-o` to stream JSON to stdout and process it inline:
+
+```bash
+java -jar codeanalyzer-2.3.7.jar -i /path/to/project -a 1 \
+  | jq '.symbol_table | keys | length'
+# prints the number of analyzed source files
+```
+
+## From Python via CLDK
+
+If you'd rather not manage the JAR yourself, the CLDK SDK invokes it for you:
+
+```python
+from cldk import CLDK
+from cldk.analysis import AnalysisLevel
+
+analysis = CLDK(language="java").analysis(
+    project_path="commons-cli",
+    analysis_level=AnalysisLevel.call_graph,
+)
+print(len(analysis.get_classes()), "classes")
+print(analysis.get_call_graph())   # -> networkx.DiGraph
+```
+
+See [Python SDK integration](/codeanalyzer-java/integration/python-sdk/) for details.

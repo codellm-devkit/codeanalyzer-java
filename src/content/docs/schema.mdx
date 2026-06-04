@@ -1,0 +1,55 @@
+---
+title: Output schema overview
+description: The top-level shape of analysis.json — symbol_table, call_graph, and version — how it's serialized, and how it's versioned.
+---
+
+import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+Every codeanalyzer-java run produces one document: `analysis.json` (or the same JSON on stdout). This page describes its top-level shape; the sub-pages cover each section in detail.
+
+## Top-level shape
+
+```json
+{
+  "symbol_table": {
+    "/absolute/path/to/File.java": { /* JavaCompilationUnit */ }
+  },
+  "call_graph": [ /* edges — present only at analysis level 2 */ ],
+  "version": "2.3.7"
+}
+```
+
+| Key | Type | When present | Description |
+|-----|------|--------------|-------------|
+| `symbol_table` | object | always | Map of absolute file path → compilation unit. See [Symbol table](/codeanalyzer-java/schema/symbol-table/). |
+| `call_graph` | array | level 2 only | Caller→callee edges from WALA. See [Call graph](/codeanalyzer-java/schema/call-graph/). |
+| `version` | string | always | The analyzer version that produced this document, e.g. `"2.3.7"`. |
+
+## Serialization conventions
+
+The JSON is produced by Gson with a fixed configuration:
+
+- **Field naming:** `LOWER_CASE_WITH_UNDERSCORES` — Java fields like `filePath` serialize as `file_path`, `callableDeclarations` as `callable_declarations`, and so on.
+- **Nulls preserved:** `serializeNulls` is on, so absent values appear as explicit `null` rather than being omitted. Consumers can rely on keys existing.
+- **Pretty-printed**, with HTML escaping disabled (so `<`, `>`, `&` in code/strings stay literal).
+
+<Aside type="note" title="snake_case on the wire">
+Throughout these schema pages, field names are shown as they appear in the JSON (snake_case). The corresponding Java entity fields are camelCase — `Callable.cyclomaticComplexity` becomes `cyclomatic_complexity` in the output.
+</Aside>
+
+## Versioning and stability
+
+Each document carries a `version`. The schema is a contract: the CLDK Python SDK's Pydantic models (`JApplication`, `JType`, `JCallable`, …) are locked to a compatible version, and your own consumers should treat the `version` field as the schema identifier.
+
+When the schema changes incompatibly, the version bumps. One concrete example: imports changed from bare strings to structured objects (`{ path, is_static, is_wildcard }`) in 2.3.7. Tools reading an older `analysis.json` against newer code — or vice versa — should check the version. See the [legacy import schema guard](/codeanalyzer-java/guides/incremental-analysis/#schema-compatibility-guard).
+
+<Aside type="tip">
+If you integrate codeanalyzer-java directly (not via the Python SDK), pin to a specific analyzer version and validate the `version` field before deserializing.
+</Aside>
+
+## The two sections
+
+<CardGrid>
+  <LinkCard title="Symbol table" description="Compilation units, types, callables, fields, comments, imports — the always-present structural model." href="/codeanalyzer-java/schema/symbol-table/" />
+  <LinkCard title="Call graph" description="The caller→callee edge array added at analysis level 2." href="/codeanalyzer-java/schema/call-graph/" />
+</CardGrid>

@@ -1,0 +1,60 @@
+---
+title: Analysis levels
+description: codeanalyzer-java has two analysis levels — level 1 builds the symbol table, level 2 adds the WALA call graph. What each computes, what it costs, and when to use which.
+---
+
+import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+The `-a` / `--analysis-level` flag selects how much work codeanalyzer-java does. There are two levels.
+
+| Level | Produces | Builds the project? | Relative cost |
+|-------|----------|---------------------|---------------|
+| **1** (default) | `symbol_table` only | No (source parse only) | Fast |
+| **2** | `symbol_table` + `call_graph` | Yes, by default | Slower |
+
+## Level 1 — Symbol table
+
+```bash
+java -jar codeanalyzer-2.3.7.jar -i /path/to/project -a 1 -o ./output
+```
+
+Level 1 runs only the Javaparser pipeline. It parses every `.java` file and produces the [symbol table](/codeanalyzer-java/schema/symbol-table/): all types, their fields, methods and constructors, comments, and imports — with source locations, method bodies, and cyclomatic complexity.
+
+It does **not** build the project. Library dependencies are still downloaded for type resolution (so qualified names resolve), but no compilation of *your* code is required. This makes level 1 the fast path, suitable when you only need program structure — not who-calls-whom.
+
+<Aside type="note">
+Level 1 is also the only level that supports [incremental target-file analysis](/codeanalyzer-java/guides/incremental-analysis/). If you pass `-t` with level 2, the analyzer downgrades to level 1 and warns.
+</Aside>
+
+## Level 2 — Symbol table + call graph
+
+```bash
+java -jar codeanalyzer-2.3.7.jar -i /path/to/project -a 2 -o ./output -v
+```
+
+Level 2 does everything level 1 does, then runs WALA to build an interprocedural [call graph](/codeanalyzer-java/schema/call-graph/). The result is a `call_graph` array of caller→callee edges added alongside the symbol table.
+
+Because WALA analyzes the *compiled* program, level 2 builds the project by default (auto-detecting Maven or Gradle). You can control this:
+
+- **`-b "<cmd>"`** — supply a custom build command instead of auto-build.
+- **`--no-build`** — skip building entirely; use this when the project is already compiled.
+
+See [Build integration](/codeanalyzer-java/guides/build-integration/) for how the build is invoked.
+
+<Aside type="caution" title="Empty call graph?">
+WALA needs entry points to anchor the graph. If a project has no `main(String[])` and no recognized framework entry points, the call graph can come back empty. See [Entry points](/codeanalyzer-java/frameworks/entry-points/) and [Troubleshooting](/codeanalyzer-java/troubleshooting/).
+</Aside>
+
+## Choosing a level
+
+- **Use level 1** when you need the program's *structure*: listing classes and methods, reading method bodies, finding fields, extracting Javadoc, surveying imports, or doing incremental per-file updates.
+- **Use level 2** when you need *reachability* or *call relationships*: who calls a method, what a method transitively reaches, or seeding a taint/reachability query from an entry point.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Build integration" description="How level 2 builds the project and resolves dependencies." href="/codeanalyzer-java/guides/build-integration/" />
+  <LinkCard title="Symbol table schema" description="Everything level 1 produces." href="/codeanalyzer-java/schema/symbol-table/" />
+  <LinkCard title="Call graph schema" description="The edge shape level 2 adds." href="/codeanalyzer-java/schema/call-graph/" />
+  <LinkCard title="Incremental analysis" description="Level-1 target-file updates to an existing analysis.json." href="/codeanalyzer-java/guides/incremental-analysis/" />
+</CardGrid>

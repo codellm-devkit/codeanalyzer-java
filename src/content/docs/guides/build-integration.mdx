@@ -1,0 +1,82 @@
+---
+title: Build integration
+description: How codeanalyzer-java auto-detects Maven and Gradle, downloads library dependencies for type resolution, and builds the project for WALA call-graph construction.
+---
+
+import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
+
+Accurate analysis needs two things from the build system: **resolved dependencies** (so the symbol solver can resolve qualified type names) and, at [level 2](/codeanalyzer-java/guides/analysis-levels/), **compiled classes** (so WALA can build the call graph). The `BuildProject` utility handles both, auto-detecting the build tool.
+
+## Build-tool auto-detection
+
+codeanalyzer-java inspects the project root and picks a build system:
+
+| Marker file | Build system | Invoked as |
+|-------------|--------------|------------|
+| `pom.xml` | Maven | `mvnw`/`mvnw.cmd` wrapper if present, otherwise system `mvn` |
+| `build.gradle` / `build.gradle.kts` | Gradle | `gradlew`/`gradlew.bat` wrapper if present, otherwise system `gradle` |
+
+Wrappers are preferred when present so the project's pinned tool version is used. The tool is validated by running its `--version` before any real work.
+
+## Dependency download (type resolution)
+
+Before parsing, codeanalyzer downloads the project's library dependencies so Javaparser's symbol solver can resolve types from third-party libraries. The JARs land in a temporary directory inside the project:
+
+<Tabs>
+  <TabItem label="Maven">
+Runs the equivalent of `dependency:copy-dependencies`, copying dependency JARs into:
+
+```
+target/_library_dependencies/
+```
+  </TabItem>
+  <TabItem label="Gradle">
+Applies an init script defining a `downloadDependencies` task that copies resolved dependencies into:
+
+```
+build/_library_dependencies/
+```
+  </TabItem>
+</Tabs>
+
+After analysis, this `_library_dependencies` directory is removed automatically. Pass **`--no-clean-dependencies`** to keep it (useful for debugging resolution problems).
+
+<Aside type="note">
+If dependency download fails, analysis still proceeds — the analyzer logs a warning and continues with whatever it can resolve (the JDK and any classes it does find). Types that can't be resolved appear as simple, rather than fully-qualified, names.
+</Aside>
+
+## Project build (call graph)
+
+At analysis level 2, WALA needs compiled classes. The `-b` / `--build-cmd` and `--no-build` flags control how that happens:
+
+- **Default (auto):** codeanalyzer compiles the project itself.
+  - Maven: `mvn compile` (tests skipped; common verification plugins — RAT, Findbugs, Checkstyle, PMD, Spotbugs, Enforcer, Javadoc, Spotless — are disabled to keep the build fast and resilient).
+  - Gradle: `gradle compileJava`.
+- **`-b "mvn clean install"`** — run your own build command instead of the auto-build.
+- **`--no-build`** — skip building; point the analyzer at an already-compiled project.
+
+### Including test classes
+
+By default only main sources are compiled. The hidden `--include-test-classes` flag additionally compiles test sources (`mvn test-compile` / `gradle compileTestJava`) so tests are included in analysis.
+
+## Pointing at a non-root build file
+
+For multi-module projects, the build descriptor may not sit at the input directory. Use **`-f` / `--project-root-path`** to point at the root `pom.xml` / `build.gradle` while `-i` still names the source directory you want analyzed. When omitted, the project root defaults to the input path.
+
+## Common build scenarios
+
+```bash
+# Pre-built project — skip the build, just analyze
+java -jar codeanalyzer-2.3.7.jar -i ./project -a 2 --no-build -o ./out
+
+# Custom build command
+java -jar codeanalyzer-2.3.7.jar -i ./project -a 2 -b "mvn -q clean package -DskipTests" -o ./out
+
+# Multi-module: analyze a submodule, build from the reactor root
+java -jar codeanalyzer-2.3.7.jar -i ./project/web -f ./project/pom.xml -a 2 -o ./out
+
+# Keep downloaded dependencies for inspection
+java -jar codeanalyzer-2.3.7.jar -i ./project -a 1 --no-clean-dependencies -o ./out
+```
+
+See the full flag list in the [CLI reference](/codeanalyzer-java/reference/cli/).

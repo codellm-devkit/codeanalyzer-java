@@ -1,0 +1,110 @@
+---
+title: Contributing
+description: How to build, test, and extend codeanalyzer-java — adding framework finders, evolving the schema, and keeping native-image config current.
+---
+
+import { Steps, Aside, LinkCard, CardGrid } from "@astrojs/starlight/components";
+
+codeanalyzer-java is open source under the Apache 2.0 license. Contributions — bug fixes, new framework finders, schema enrichments — are welcome.
+
+## Build and test locally
+
+<Steps>
+
+1. **Install a JDK (11+)** and clone:
+
+   ```bash
+   sdk install java 17.0.10-sem
+   git clone https://github.com/codellm-devkit/codeanalyzer-java
+   cd codeanalyzer-java
+   ```
+
+2. **Build the fat JAR:**
+
+   ```bash
+   ./gradlew fatJar
+   # build/libs/codeanalyzer-2.3.7.jar
+   ```
+
+3. **Run the test suite:**
+
+   ```bash
+   ./gradlew test
+   ```
+
+4. **Try it against a sample project:**
+
+   ```bash
+   java -jar build/libs/codeanalyzer-2.3.7.jar \
+     -i src/test/resources/test-applications/<some-app> \
+     -a 2 -v
+   ```
+
+</Steps>
+
+<Aside type="note" title="Code formatting">
+The build uses Spotless. Run `./gradlew spotlessApply` before committing to fix formatting, or `./gradlew spotlessCheck` to verify.
+</Aside>
+
+## Where things live
+
+The codebase is organized under `com.ibm.cldk` (see [Architecture](/codeanalyzer-java/guides/architecture/) for the full map):
+
+- **`CodeAnalyzer.java`** — the CLI orchestrator; add or change flags here.
+- **`SymbolTable.java`** — Javaparser symbol extraction.
+- **`SystemDependencyGraph.java`** — WALA call-graph construction.
+- **`entities/`** — the output data model. Changing these changes the [JSON schema](/codeanalyzer-java/schema/).
+- **`javaee/`** — framework finders, dispatched by `EntrypointsFinderFactory` and `CRUDFinderFactory`.
+- **`utils/BuildProject.java`** — Maven/Gradle build and dependency download.
+
+## Adding a framework finder
+
+Entry-point and CRUD detection are pluggable per framework. To add support for a new framework:
+
+<Steps>
+
+1. **Pick the dimension** — entry points, CRUD, or both — and find the matching factory (`EntrypointsFinderFactory` / `CRUDFinderFactory`).
+
+2. **Add a finder** under `javaee/<framework>/` implementing the finder interface, with the annotations / superclasses / interfaces / method conventions that identify the construct (mirror an existing finder like the Spring or JAX-RS ones).
+
+3. **Register it** in the factory so it's selected when that framework is present.
+
+4. **Set the schema flags** — entry-point finders mark `is_entrypoint` / `is_entrypoint_class`; CRUD finders populate `crud_operations` / `crud_queries`.
+
+5. **Add a test application** under `src/test/resources/test-applications/` and assert the expected output.
+
+</Steps>
+
+See the existing [entry-point](/codeanalyzer-java/frameworks/entry-points/) and [CRUD](/codeanalyzer-java/frameworks/crud/) coverage for the patterns to follow. The Camel finder is a good example of a stub awaiting completion.
+
+## Evolving the schema
+
+The output JSON is a versioned contract that the [CLDK Python SDK](/codeanalyzer-java/integration/python-sdk/) and other consumers depend on.
+
+- Changing an `entities/` class changes the wire format. Field names serialize as `snake_case`.
+- For incompatible changes, bump the version (in `gradle.properties`) and, where feasible, add a guard for the old shape — as was done for the legacy string-import format.
+- Update the [schema docs](/codeanalyzer-java/schema/) alongside the code.
+
+## Keeping native-image config current
+
+If you add reflection-dependent code, regenerate the native-image config so the [native binary](/codeanalyzer-java/installing/#option-2-native-binary-graalvm) keeps working:
+
+```bash
+./gradlew fatJar
+java -agentlib:native-image-agent=config-output-dir=src/main/resources/META-INF/native-image-config \
+  -jar build/libs/codeanalyzer-2.3.7.jar -i <sample-project> -a 2 -v
+./gradlew nativeCompile
+```
+
+## Opening a PR
+
+- Branch from `main`, keep changes focused, and include a test.
+- Run `./gradlew spotlessApply test` before pushing.
+- Reference any related issue in the PR description.
+
+<CardGrid>
+  <LinkCard title="Architecture" description="The pipeline and package layout you'll be working in." href="/codeanalyzer-java/guides/architecture/" />
+  <LinkCard title="Output schema" description="The contract your changes must respect." href="/codeanalyzer-java/schema/" />
+</CardGrid>
+
+Found a limitation? Open an [issue](https://github.com/codellm-devkit/codeanalyzer-java/issues) with details.

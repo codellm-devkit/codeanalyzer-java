@@ -1,0 +1,59 @@
+---
+title: Troubleshooting
+description: Common codeanalyzer-java problems and fixes — missing JDK, unresolved types, empty call graphs, legacy import schema, and native-image quirks.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Quick fixes for the issues you're most likely to hit. Run with `-v` first — most failures explain themselves in the verbose logs.
+
+## Reference table
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `java: command not found` | No JDK on `PATH` | Install Java 11+ and add it to `PATH` (see [Installation](/codeanalyzer-java/installing/)). |
+| `Cannot find symbol type X` / unresolved types | Dependencies not downloaded | Let codeanalyzer build (don't use `--no-build` on an uncompiled project), or ensure dependencies are resolvable. Use `--no-clean-dependencies` to inspect what was fetched. |
+| `call_graph` is empty | No entry point for WALA to anchor on | Verify the project has a `main(String[])` or a recognized framework [entry point](/codeanalyzer-java/frameworks/entry-points/). |
+| Legacy import schema error | Old `analysis.json` read by a new JAR | Regenerate `analysis.json` with codeanalyzer 2.3.7+ (see below). |
+| Build fails during level-2 analysis | Project doesn't build with the default command | Pass a working `-b "<cmd>"`, or pre-build and use `--no-build`. |
+| Native binary throws, JAR doesn't | Stale `reflect-config.json` | Regenerate native-image config (see below). |
+| `analysis.json` truncated / corrupt | Process killed or out of disk | Check disk space and re-run; ensure the run completes. |
+
+## Empty call graph
+
+WALA traverses the call graph outward from entry points. If none are found, the graph can be empty even though the symbol table is complete.
+
+- Confirm the project actually has an entry point — a `main(String[])` or one of the [supported framework patterns](/codeanalyzer-java/frameworks/entry-points/).
+- Confirm the project **built**. WALA needs compiled classes; if the build silently failed, there's nothing to analyze. Re-run with `-v` and check the build log.
+- If you used `--no-build`, make sure the compiled output is actually present and current.
+
+## Unresolved types
+
+Symbol resolution depends on library dependencies being available. If types from third-party libraries show up as simple (unqualified) names:
+
+- Don't run `--no-build` on a project that isn't already built — dependency download is part of the normal flow.
+- Inspect what was fetched by adding `--no-clean-dependencies` and looking in `target/_library_dependencies/` (Maven) or `build/_library_dependencies/` (Gradle).
+- For multi-module projects, point `-f` at the reactor root `pom.xml` / `build.gradle`. See [Build integration](/codeanalyzer-java/guides/build-integration/).
+
+## Legacy import schema
+
+When merging [incremental updates](/codeanalyzer-java/guides/incremental-analysis/) into an existing `analysis.json`, you may see:
+
+> Existing analysis.json uses legacy import schema (imports as strings). Regenerate analysis with codeanalyzer 2.3.7 or newer.
+
+Older analyzers emitted imports as bare strings; from 2.3.7 they are structured objects (`{ path, is_static, is_wildcard }`). The merge guard refuses to mix the two. **Fix:** delete the old `analysis.json` and regenerate it with a current JAR before re-running incremental updates.
+
+## Native-image exceptions
+
+If the GraalVM [native binary](/codeanalyzer-java/installing/#option-2-native-binary-graalvm) throws random exceptions that `java -jar` does not, the reflection config is likely out of date. Regenerate it with the native-image agent and rebuild:
+
+```bash
+./gradlew fatJar
+java -agentlib:native-image-agent=config-output-dir=src/main/resources/META-INF/native-image-config \
+  -jar build/libs/codeanalyzer-2.3.7.jar -i <sample-project> -a 2 -v
+./gradlew nativeCompile
+```
+
+<Aside type="tip">
+Still stuck? Re-run with `-v` and open an [issue](https://github.com/codellm-devkit/codeanalyzer-java/issues) with the command you ran, the verbose output, and the project's build system (Maven/Gradle).
+</Aside>

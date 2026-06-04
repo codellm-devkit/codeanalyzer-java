@@ -1,0 +1,75 @@
+---
+title: Call graph schema
+description: The call_graph section of analysis.json — WALA-derived caller→callee edges, their endpoints, and how to load them into a graph library.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+At [analysis level 2](/codeanalyzer-java/guides/analysis-levels/), codeanalyzer-java runs WALA over the compiled program and adds a `call_graph` array to the output. Each element is one **caller→callee edge**.
+
+```json
+{
+  "call_graph": [
+    {
+      "source": { "file_path": "...", "type_declaration": "...", "signature": "...", "callable_declaration": "..." },
+      "target": { "file_path": "...", "type_declaration": "...", "signature": "...", "callable_declaration": "..." },
+      "type": "CALL",
+      "weight": "1"
+    }
+  ]
+}
+```
+
+## Edge shape
+
+```typescript
+{
+  source: CallableVertex                      // The caller
+  target: CallableVertex                      // The callee
+  type: string                                // Edge kind, e.g. "CALL"
+  weight: string                              // Call multiplicity (usually "1")
+}
+```
+
+## Vertex shape (`CallableVertex`)
+
+Both `source` and `target` identify a method or constructor:
+
+```typescript
+{
+  file_path: string                           // File the callable lives in
+  type_declaration: string                    // Declaring type
+  signature: string                           // "methodName(Type1, Type2)"
+  callable_declaration: string                // Full declaration text
+}
+```
+
+The `signature` matches the keys used in the symbol table's `callable_declarations`, so you can join an edge endpoint back to its full [callable](/codeanalyzer-java/schema/symbol-table/#callable-jcallable) record (body, complexity, annotations, …).
+
+<Aside type="note" title="Edges are explicit, not nested">
+The call graph is a flat array of edges, not a nested tree. To answer "who calls X?" or "what does X reach?", load the edges into a graph structure and query it — see below.
+</Aside>
+
+## Working with the edges
+
+Because edges are flat, the natural move is to load them into a graph library. The CLDK Python SDK does exactly this, exposing the call graph as a `networkx.DiGraph`:
+
+```python
+from cldk import CLDK
+from cldk.analysis import AnalysisLevel
+import networkx as nx
+
+analysis = CLDK(language="java").analysis(
+    project_path="commons-cli",
+    analysis_level=AnalysisLevel.call_graph,
+)
+
+cg = analysis.get_call_graph()              # networkx.DiGraph
+nx.has_path(cg, source_node, sink_node)     # reachability as a graph query
+```
+
+If you consume the JSON directly, the same idea applies — build adjacency from `source` → `target` and run your traversal of choice.
+
+## Why a build is required
+
+WALA analyzes *compiled* classes and needs an entry point to anchor traversal. That's why level 2 builds the project by default ([Build integration](/codeanalyzer-java/guides/build-integration/)) and why a project with no `main` and no recognized framework [entry points](/codeanalyzer-java/frameworks/entry-points/) can yield an empty `call_graph`. See [Troubleshooting](/codeanalyzer-java/troubleshooting/) if that happens.

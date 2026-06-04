@@ -1,0 +1,52 @@
+---
+title: Incremental analysis
+description: Use target files to re-analyze only the files that changed and patch them into an existing analysis.json, instead of re-running the whole project.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+When only a handful of files change, re-analyzing the whole project is wasteful. The **`-t` / `--target-files`** flag re-runs symbol extraction for just the named files and merges the result into an existing `analysis.json`.
+
+## How it works
+
+```bash
+java -jar codeanalyzer-2.3.7.jar \
+  -i /path/to/project \
+  -t src/main/java/com/example/Service.java \
+  -t src/main/java/com/example/Repository.java \
+  -o ./output
+```
+
+<Steps>
+
+1. codeanalyzer extracts the symbol table for **only** the target files.
+2. If `./output/analysis.json` already exists, the analyzer reads its existing `symbol_table`.
+3. Each re-analyzed compilation unit is tagged `is_modified: true` and replaces the corresponding entry in the existing table.
+4. The merged symbol table is written back to `analysis.json`.
+
+</Steps>
+
+This is much faster than a full run because only the named files are parsed, while the rest of the symbol table is preserved as-is.
+
+<Aside type="caution" title="Level 1 only">
+Incremental analysis is a **symbol-table** operation. If you pass `-t` together with `-a 2`, the analyzer downgrades to level 1 and logs a warning — it will not recompute the call graph for individual files. To refresh the call graph, run a full level-2 analysis.
+</Aside>
+
+## The `is_modified` flag
+
+Files updated through a target-file run carry `is_modified: true` on their compilation unit in the output. Consumers can use this to detect which entries changed since the last full run — for example, to invalidate caches or re-render only the affected parts of a UI.
+
+## Schema-compatibility guard
+
+When merging into an existing `analysis.json`, codeanalyzer checks that the file uses the current import schema (imports as structured objects, not bare strings). If it detects the **legacy** string-based import format, it refuses to merge and raises:
+
+> Existing analysis.json uses legacy import schema (imports as strings). Regenerate analysis with codeanalyzer 2.3.7 or newer.
+
+The fix is to regenerate the base `analysis.json` with a current JAR (2.3.7+) before applying incremental updates. See [Troubleshooting](/codeanalyzer-java/troubleshooting/).
+
+## When to use it
+
+- **CI / editor integrations** that re-analyze on save and want sub-second turnaround.
+- **Large codebases** where a full parse is expensive but most files are unchanged.
+
+For call-graph-dependent work, or after large structural changes, prefer a full [level-2 analysis](/codeanalyzer-java/guides/analysis-levels/).

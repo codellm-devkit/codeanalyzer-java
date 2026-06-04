@@ -1,0 +1,68 @@
+---
+title: Command-line options
+description: The complete codeanalyzer-java CLI reference — every flag, what it does, and its default.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+codeanalyzer-java is a Picocli command. Invoke it as a fat JAR (`java -jar codeanalyzer-2.3.7.jar ...`) or, if you built a native image, as `codeanalyzer ...`.
+
+## Usage
+
+```
+Usage: codeanalyzer [-hvV] [--no-build] [--no-clean-dependencies]
+                    [--include-test-classes] [-a=<analysisLevel>] [-b=<build>]
+                    [-f=<projectRootPom>] [-i=<input>] [-o=<output>]
+                    [-s=<sourceAnalysis>] [-t=<targetFiles>]...
+
+Analyze java application.
+```
+
+## Options
+
+| Flag | Argument | Description | Default |
+|------|----------|-------------|---------|
+| `-i`, `--input` | path | Path to the project root directory to analyze. | — |
+| `-s`, `--source-analysis` | string | Analyze a single string of Java source instead of a project. No build required. | — |
+| `-o`, `--output` | path | Directory to write `analysis.json`. If omitted, JSON is printed to stdout. | stdout |
+| `-a`, `--analysis-level` | `1` \| `2` | `1` = symbol table only; `2` = symbol table + call graph. | `1` |
+| `-b`, `--build-cmd` | string | Custom build command. When omitted at level 2, an auto build is used. | auto |
+| `--no-build` | flag | Do not build the application; use already-compiled output. | off |
+| `--no-clean-dependencies` | flag | Do not delete the downloaded `_library_dependencies` directory after analysis. | off |
+| `-f`, `--project-root-path` | path | Path to the root `pom.xml` / `build.gradle` (for multi-module projects). | value of `-i` |
+| `-t`, `--target-files` | path | A file to (re)analyze incrementally; repeatable. Forces level 1. | — |
+| `--include-test-classes` | flag | Also compile/analyze test sources. (Hidden option.) | off |
+| `-v`, `--verbose` | flag | Print logs to the console. | off |
+| `-h`, `--help` | flag | Show help and exit. | — |
+| `-V`, `--version` | flag | Print version information and exit. | — |
+
+<Aside type="note">
+Options are mutually informing, not all combinable. `-s` (single source) bypasses the project/build path entirely. `-t` (target files) forces level 1 even if `-a 2` is given. See the linked guides for the semantics behind each flag.
+</Aside>
+
+## Notes on key flags
+
+### `-i` vs. `-s`
+
+- **`-i`** points at a project directory on disk. This is the normal mode; dependencies are downloaded and (at level 2) the project is built.
+- **`-s`** passes Java source as a string. The symbol table is built directly from that snippet with JDK-only type resolution — no project, no build, no dependency download.
+
+Exactly one of these is the analysis subject. `-s` takes precedence when both are present.
+
+### `-o` (output)
+
+With `-o`, the analyzer writes `<output>/analysis.json` (creating the directory if needed). Without `-o`, the consolidated JSON goes to stdout — convenient for piping, and how the [Python SDK](/codeanalyzer-java/integration/python-sdk/) can capture output without a temp file.
+
+### `-a` (analysis level)
+
+See [Analysis levels](/codeanalyzer-java/guides/analysis-levels/). Level 2 implies a build unless you pass `--no-build` or a custom `-b`.
+
+### `-t` (target files)
+
+See [Incremental analysis](/codeanalyzer-java/guides/incremental-analysis/). Repeat the flag for multiple files. Forces level 1; merges into an existing `analysis.json` when one is present in the output directory.
+
+## Exit behavior
+
+The command exits non-zero on failure. Run with `-v` to see the underlying logs (build invocation, dependency download, parse problems, WALA progress) when diagnosing a failed run.
+
+See worked invocations in [Examples](/codeanalyzer-java/reference/examples/).

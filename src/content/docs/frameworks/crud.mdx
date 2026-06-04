@@ -1,0 +1,93 @@
+---
+title: CRUD detection
+description: How codeanalyzer-java detects database operations — JPA persistence calls and queries classified as CREATE / READ / UPDATE / DELETE — and where they appear in the schema.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+codeanalyzer-java surfaces data-access patterns by detecting **CRUD operations** in method bodies and attaching them to the relevant [callable](/codeanalyzer-java/schema/symbol-table/#callable-jcallable). This lets you audit where an application reads from and writes to persistent storage without reading every method by hand.
+
+Detection is dispatched per framework by a `CRUDFinderFactory`. Today **JPA / Jakarta Persistence** detection is fully implemented; **Spring Data** and **JDBC** finders exist but are currently stubs.
+
+## Where it appears
+
+Each callable carries two arrays:
+
+```typescript
+{
+  crud_operations: JCRUDOperation[]   // persistence operations (persist/find/merge/remove, ...)
+  crud_queries: JCRUDQuery[]          // query definitions (createQuery / createNamedQuery)
+}
+```
+
+## CRUD operations (`JCRUDOperation`)
+
+```typescript
+{
+  line_number: number
+  operation_type: "CREATE" | "READ" | "UPDATE" | "DELETE"
+  target_table: string                // reserved — not yet populated
+  involved_columns: string[]          // reserved — not yet populated
+  condition: string                   // reserved — not yet populated
+  joined_tables: string[]             // reserved — not yet populated
+}
+```
+
+### JPA operation mapping
+
+For JPA, calls on the `EntityManager` and on query objects map to operation types:
+
+| Operation type | Detected from |
+|----------------|---------------|
+| **CREATE** | `EntityManager.persist(...)` |
+| **READ** | `EntityManager.find(...)`; query execution `getResultList()`, `getSingleResult()`, `getFirstResult()`, `getMaxResults()` |
+| **UPDATE** | `EntityManager.merge(...)`; query `executeUpdate()` |
+| **DELETE** | `EntityManager.remove(...)` |
+
+<Aside type="note" title="executeUpdate ambiguity">
+`executeUpdate()` is classified as **UPDATE**. Without dataflow analysis over the query string, an UPDATE and a DELETE issued through the same API call can't be distinguished, so it is reported as UPDATE.
+</Aside>
+
+## CRUD queries (`JCRUDQuery`)
+
+Query *definitions* (as opposed to executions) are captured separately:
+
+```typescript
+{
+  line_number: number
+  query_arguments: string[]           // the query string and any parameters
+  query_type: "READ" | "WRITE" | "NAMED"
+}
+```
+
+These come from `EntityManager.createQuery(String)` and `EntityManager.createNamedQuery(String)`. The `query_type` is inferred from the query text:
+
+| `query_type` | Inferred when |
+|--------------|---------------|
+| **READ** | the query string begins with `select` |
+| **WRITE** | the query string begins with `update`, `delete`, or `insert` |
+| **NAMED** | the query was created via `createNamedQuery(...)` |
+
+## Coverage and limits
+
+- **JPA / Jakarta Persistence** — implemented as described above.
+- **Spring Data** — finder present but stubbed; repository-derived queries are not yet classified.
+- **JDBC** — finder present but stubbed; raw `Statement` / `PreparedStatement` calls are not yet classified.
+- The `target_table`, `involved_columns`, `condition`, and `joined_tables` fields on `JCRUDOperation` are reserved for future enrichment and are not populated yet.
+
+<Aside type="tip">
+CRUD data is part of the symbol table, so it's available at [analysis level 1](/codeanalyzer-java/guides/analysis-levels/) — you don't need a call graph to enumerate persistence operations across the app.
+</Aside>
+
+## Using it downstream
+
+```python
+analysis = CLDK(language="java").analysis(project_path="my-app")
+
+for cls in analysis.get_classes():
+    for sig, m in analysis.get_methods_in_class(cls).items():
+        for op in m.crud_operations:
+            print(f"{op.operation_type} at {cls}:{op.line_number}")
+```
+
+Combine with [entry-point](/codeanalyzer-java/frameworks/entry-points/) and call-graph data to answer questions like "which externally-reachable methods perform writes?"
