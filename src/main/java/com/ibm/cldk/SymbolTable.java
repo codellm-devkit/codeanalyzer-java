@@ -714,6 +714,15 @@ public class SymbolTable {
         field.setVariables(
                 fieldDecl.getVariables().stream().map(v -> v.getName().asString()).collect(Collectors.toList()));
 
+        // add variable initializers, keyed per variable (one declaration may flatten multiple declarators)
+        field.setVariableInitializers(fieldDecl.getVariables().stream()
+                .filter(v -> v.getInitializer().isPresent())
+                .collect(Collectors.toMap(
+                        v -> v.getName().asString(),
+                        v -> v.getInitializer().get().toString(),
+                        (a, b) -> a,
+                        LinkedHashMap::new)));
+
         // add field modifiers
         field.setModifiers(
                 fieldDecl.getModifiers().stream().map(m -> m.toString().strip()).collect(Collectors.toList()));
