@@ -1,6 +1,7 @@
 package com.ibm.cldk.entities;
 
 import java.util.List;
+import java.util.Map;
 import lombok.Data;
 
 @Data
@@ -13,4 +14,5 @@ public class Field {
     private List<String> variables;
     private List<String> modifiers;
     private List<String> annotations;
+    private Map<String, String> variableInitializers;
 }

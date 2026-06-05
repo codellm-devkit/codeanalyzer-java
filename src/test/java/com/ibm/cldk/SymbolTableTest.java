@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.ibm.cldk.entities.CallSite;
 import com.ibm.cldk.entities.Callable;
+import com.ibm.cldk.entities.Field;
 import com.ibm.cldk.entities.Import;
 import com.ibm.cldk.entities.JavaCompilationUnit;
 import com.ibm.cldk.entities.Type;
@@ -118,6 +119,38 @@ public class SymbolTableTest {
             Assertions.assertTrue(serializedImportObject.has("is_static"));
             Assertions.assertTrue(serializedImportObject.has("is_wildcard"));
         }
+    }
+
+    @Test
+    public void testExtractSingleFieldInitializers() throws IOException {
+        String javaCode = String.join("\n",
+                "class T {",
+                "    private static final String QUOTES_PATH = \"/rest/quotes\";",
+                "    private int count;",
+                "    private int first = 1, second, third = first + 2;",
+                "}");
+        Map<String, JavaCompilationUnit> symbolTable = SymbolTable.extractSingle(javaCode).getLeft();
+        Assertions.assertEquals(1, symbolTable.size());
+        List<Field> fields = symbolTable.values().iterator().next().getTypeDeclarations()
+                .values().iterator().next().getFieldDeclarations();
+        Assertions.assertEquals(3, fields.size());
+
+        Field quotesPath = fields.get(0);
+        Assertions.assertEquals(List.of("QUOTES_PATH"), quotesPath.getVariables());
+        Assertions.assertEquals(Map.of("QUOTES_PATH", "\"/rest/quotes\""), quotesPath.getVariableInitializers());
+
+        Field count = fields.get(1);
+        Assertions.assertEquals(List.of("count"), count.getVariables());
+        Assertions.assertTrue(count.getVariableInitializers().isEmpty());
+
+        Field multi = fields.get(2);
+        Assertions.assertEquals(List.of("first", "second", "third"), multi.getVariables());
+        Assertions.assertEquals(Map.of("first", "1", "third", "first + 2"), multi.getVariableInitializers());
+
+        JsonObject serializedField = JsonParser.parseString(CodeAnalyzer.gson.toJson(quotesPath)).getAsJsonObject();
+        Assertions.assertTrue(serializedField.has("variable_initializers"));
+        Assertions.assertEquals("\"/rest/quotes\"",
+                serializedField.getAsJsonObject("variable_initializers").get("QUOTES_PATH").getAsString());
     }
 
     private static void assertImport(List<Import> imports, String path, boolean isStatic, boolean isWildcard) {
