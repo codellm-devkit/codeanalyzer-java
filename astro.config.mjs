@@ -24,7 +24,7 @@ export default defineConfig({
         "codeanalyzer-java is the JVM static-analysis backend behind CodeLLM-DevKit's Java support: a standalone JAR that turns a Java project into a symbol table and call graph, emitted as one versioned JSON schema.",
       logo: {
         src: "./src/assets/logo.png",
-        replacesTitle: false,
+        replacesTitle: true,
       },
       favicon: "/favicon.png",
       customCss: ["./src/styles/docs.css"],
