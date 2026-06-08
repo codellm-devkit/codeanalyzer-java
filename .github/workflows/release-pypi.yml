@@ -219,10 +219,22 @@ jobs:
           ls -l "$PWD/dist"
 
       - name: Smoke test wheel
+        if: matrix.rosetta != true
         shell: bash
         env:
           PYTHON: ${{ runner.os == 'Linux' && '/opt/python/cp312-cp312/bin/python' || 'python3' }}
         run: bash .github/scripts/smoke-test.sh dist
+
+      # The cross-built x86_64 wheel can't be installed by the runner's arm64
+      # Python. Run the whole smoke test under Rosetta with the universal
+      # /usr/bin/python3, so the venv, pip install, and bundled native binary
+      # all execute as x86_64.
+      - name: Smoke test wheel (x86_64 via Rosetta)
+        if: matrix.rosetta
+        shell: bash
+        env:
+          PYTHON: /usr/bin/python3
+        run: arch -x86_64 bash .github/scripts/smoke-test.sh dist
 
       - name: Checksums (log only)
         shell: bash
