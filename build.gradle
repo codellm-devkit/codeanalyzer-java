@@ -208,6 +208,12 @@ graalvmNative {
             if (System.getenv("CODEANALYZER_NATIVE_MUSL") == "true") {
                 buildArgs.add("--static")
                 buildArgs.add("--libc=musl")
+                // The musl.cc gcc 11 toolchain is built with
+                // --enable-default-pie/--enable-static-pie, so a plain `-static`
+                // link produces a static-PIE. The linker then rejects GraalVM's
+                // image heap ("read-only segment has dynamic relocations" on
+                // .svm_heap). Force a classic non-PIE static executable.
+                buildArgs.add("-H:NativeLinkerOption=-no-pie")
             }
             buildArgs.add("-H:ReflectionConfigurationFiles=$projectDir/src/main/resources/META-INF/native-image-config/reflect-config.json")
             buildArgs.add("-H:ResourceConfigurationFiles=$projectDir/src/main/resources/META-INF/native-image-config/resource-config.json")
