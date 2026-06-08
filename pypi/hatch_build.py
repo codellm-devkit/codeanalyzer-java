@@ -67,10 +67,19 @@ def read_gradle_version(repo_root: Path) -> str:
 def _wheel_platform_tag() -> str:
     """Concrete wheel tag for the current platform, e.g. ``py3-none-linux_x86_64``.
 
-    Linux wheels are emitted with the plain ``linux_*`` platform; CI runs
-    ``auditwheel repair`` to relabel them to a manylinux/musllinux policy.
+    CI sets ``CODEANALYZER_WHEEL_PLATFORM`` to stamp the exact target tag per
+    build leg (e.g. ``manylinux_2_28_x86_64``, ``musllinux_1_2_aarch64``,
+    ``macosx_11_0_arm64``, ``win_amd64``). The Linux legs build inside the
+    matching manylinux container (or a static musl binary), so the tag is
+    correct by construction and no ``auditwheel repair`` pass is needed. When
+    the override is unset, the tag falls back to the build host's platform.
     """
-    platform = sysconfig.get_platform().replace("-", "_").replace(".", "_")
+    override = os.environ.get("CODEANALYZER_WHEEL_PLATFORM")
+    if override:
+        platform = override
+    else:
+        platform = sysconfig.get_platform()
+    platform = platform.replace("-", "_").replace(".", "_")
     return f"py3-none-{platform}"
 
 

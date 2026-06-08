@@ -201,6 +201,14 @@ graalvmNative {
             buildArgs.add("-Ob")
             buildArgs.add("-march=compatibility")
             buildArgs.add("--no-fallback")
+            // For musllinux wheels: produce a fully static binary linked against
+            // musl libc so it runs on Alpine and any other Linux. Enabled by the
+            // PyPI release workflow's musllinux legs; requires the musl toolchain
+            // and static zlib in the build environment.
+            if (System.getenv("CODEANALYZER_NATIVE_MUSL") == "true") {
+                buildArgs.add("--static")
+                buildArgs.add("--libc=musl")
+            }
             buildArgs.add("-H:ReflectionConfigurationFiles=$projectDir/src/main/resources/META-INF/native-image-config/reflect-config.json")
             buildArgs.add("-H:ResourceConfigurationFiles=$projectDir/src/main/resources/META-INF/native-image-config/resource-config.json")
             buildArgs.add("-H:JNIConfigurationFiles=$projectDir/src/main/resources/META-INF/native-image-config/jni-config.json")

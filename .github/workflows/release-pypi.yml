@@ -1,0 +1,342 @@
+name: PyPI Release
+
+# Builds platform-tagged, impure wheels (each bundles a prebuilt GraalVM native
+# binary + the JDK .jmod files it needs at runtime), an sdist, and publishes to
+# PyPI via OIDC Trusted Publishing.
+#
+# Trusted Publishing: register a pending publisher on PyPI/TestPyPI with
+#   owner=codellm-devkit  repo=codeanalyzer-java  workflow=release-pypi.yml
+#   environment=pypi (for PyPI) / testpypi (for TestPyPI)
+# No long-lived API token is stored; OIDC mints a short-lived one per run.
+#
+# Triggers:
+#   - push a tag vX.Y.Z  -> build everything, create a GitHub Release, publish to PyPI
+#   - manual dispatch    -> build everything; optionally publish to TestPyPI or PyPI
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      publish_target:
+        description: "Where to publish the built artifacts"
+        type: choice
+        default: none
+        options:
+          - none
+          - testpypi
+          - pypi
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-pypi-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GRAALVM_VERSION: "21.0.2"
+
+jobs:
+  # --------------------------------------------------------------------------
+  # One impure, platform-tagged wheel per OS/arch. Each wheel embeds a native
+  # binary built on that platform plus the bundled jmods, so compatibility is
+  # guaranteed by construction (Linux legs build inside manylinux containers).
+  # --------------------------------------------------------------------------
+  build-wheels:
+    name: wheel (${{ matrix.name }})
+    runs-on: ${{ matrix.runs-on }}
+    container: ${{ matrix.container }}
+    continue-on-error: ${{ matrix.experimental == true }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ---- glibc Linux (manylinux_2_28 = AlmaLinux 8, glibc 2.28) --------
+          - name: manylinux-x86_64
+            runs-on: ubuntu-22.04
+            container: quay.io/pypa/manylinux_2_28_x86_64
+            arch: x64
+            graal_arch: linux-x64
+            wheel_platform: manylinux_2_28_x86_64
+            musl: false
+          - name: manylinux-aarch64
+            runs-on: ubuntu-22.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64
+            arch: aarch64
+            graal_arch: linux-aarch64
+            wheel_platform: manylinux_2_28_aarch64
+            musl: false
+          # ---- musl Linux: fully-static binary built on the glibc container --
+          # GraalVM can't run on Alpine, so we build a `--static --libc=musl`
+          # binary on a glibc host; the resulting static binary runs anywhere.
+          - name: musllinux-x86_64
+            runs-on: ubuntu-22.04
+            container: quay.io/pypa/manylinux_2_28_x86_64
+            arch: x64
+            graal_arch: linux-x64
+            wheel_platform: musllinux_1_2_x86_64
+            musl: true
+            experimental: true
+          - name: musllinux-aarch64
+            runs-on: ubuntu-22.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64
+            arch: aarch64
+            graal_arch: linux-aarch64
+            wheel_platform: musllinux_1_2_aarch64
+            musl: true
+            experimental: true
+          # ---- macOS --------------------------------------------------------
+          - name: macos-x86_64
+            runs-on: macos-13
+            arch: x64
+            wheel_platform: macosx_11_0_x86_64
+            macos_target: "11.0"
+            musl: false
+          - name: macos-arm64
+            runs-on: macos-14
+            arch: arm64
+            wheel_platform: macosx_11_0_arm64
+            macos_target: "11.0"
+            musl: false
+          # ---- Windows ------------------------------------------------------
+          - name: windows-x86_64
+            runs-on: windows-2022
+            arch: x64
+            wheel_platform: win_amd64
+            musl: false
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Configure git safe directory
+        if: runner.os == 'Linux'
+        shell: bash
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # native-image links libz; ensure headers/static archive are present.
+      # Best-effort: manylinux already ships a working C toolchain.
+      - name: Install Linux build prerequisites
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          (dnf install -y zlib-devel zlib-static || yum install -y zlib-devel zlib-static) || true
+
+      # On Linux we install GraalVM by hand: setup-graalvm is awkward inside a
+      # container, and we want the JDK image (with jmods) on the manylinux host.
+      - name: Install GraalVM (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-${GRAALVM_VERSION}/graalvm-community-jdk-${GRAALVM_VERSION}_${{ matrix.graal_arch }}_bin.tar.gz"
+          echo "Downloading $url"
+          mkdir -p /opt/graalvm
+          curl -fsSL "$url" | tar -xz -C /opt/graalvm --strip-components=1
+          echo "JAVA_HOME=/opt/graalvm" >> "$GITHUB_ENV"
+          echo "/opt/graalvm/bin" >> "$GITHUB_PATH"
+
+      - name: Set up GraalVM (macOS / Windows)
+        if: runner.os != 'Linux'
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: "21"
+          distribution: graalvm-community
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up Python (macOS / Windows)
+        if: runner.os != 'Linux'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up musl toolchain (experimental)
+        if: matrix.musl
+        shell: bash
+        run: bash .github/scripts/setup-musl.sh "${{ matrix.arch }}"
+
+      - name: Build native image
+        shell: bash
+        env:
+          CODEANALYZER_NATIVE_MUSL: ${{ matrix.musl && 'true' || 'false' }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_target }}
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew || true
+          ./gradlew --no-daemon clean nativeCompile
+
+      - name: Build wheel
+        shell: bash
+        env:
+          CODEANALYZER_WHEEL_PLATFORM: ${{ matrix.wheel_platform }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_target }}
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            PY=/opt/python/cp312-cp312/bin/python
+          else
+            PY=python3
+          fi
+          BIN="$PWD/build/native/nativeCompile/codeanalyzer"
+          [ -f "$BIN" ] || BIN="$PWD/build/native/nativeCompile/codeanalyzer.exe"
+          export CODEANALYZER_NATIVE_BINARY="$BIN"
+          export CODEANALYZER_JMODS_DIR="$JAVA_HOME/jmods"
+          echo "binary:   $CODEANALYZER_NATIVE_BINARY"
+          echo "jmods:    $CODEANALYZER_JMODS_DIR"
+          echo "platform: $CODEANALYZER_WHEEL_PLATFORM"
+          "$PY" -m pip install --upgrade pip build
+          "$PY" -m build --wheel --outdir "$PWD/dist" "$PWD/pypi"
+          ls -l "$PWD/dist"
+
+      - name: Smoke test wheel
+        shell: bash
+        env:
+          PYTHON: ${{ runner.os == 'Linux' && '/opt/python/cp312-cp312/bin/python' || 'python3' }}
+        run: bash .github/scripts/smoke-test.sh dist
+
+      - name: Checksums (log only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum dist/*.whl
+          else
+            shasum -a 256 dist/*.whl
+          fi
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.name }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------------
+  # Source distribution. Carries only the wrapper sources; building a wheel from
+  # it later requires a prebuilt binary + jmods (the build hook fails loudly
+  # otherwise), so the sdist is a metadata/source artifact, not a build path.
+  # --------------------------------------------------------------------------
+  build-sdist:
+    name: sdist
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --sdist --outdir dist pypi
+          ls -l dist
+
+      - name: Upload sdist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------------
+  # GitHub Release (tag pushes only): attach every wheel + sdist + checksums.
+  # --------------------------------------------------------------------------
+  github-release:
+    name: github-release
+    needs: [build-wheels, build-sdist]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum *.whl *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          generate_release_notes: true
+
+  # --------------------------------------------------------------------------
+  # Publish to PyPI via OIDC Trusted Publishing (no stored token).
+  # Runs on tag push, or manual dispatch with publish_target=pypi.
+  # --------------------------------------------------------------------------
+  publish-pypi:
+    name: publish-pypi
+    needs: [build-wheels, build-sdist]
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_target == 'pypi')
+    runs-on: ubuntu-22.04
+    environment:
+      name: pypi
+      url: https://pypi.org/p/codeanalyzer-java
+    permissions:
+      id-token: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Keep only distributables
+        run: find dist -type f ! -name '*.whl' ! -name '*.tar.gz' -delete && ls -l dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true
+
+  # --------------------------------------------------------------------------
+  # Optional TestPyPI dry-run (manual dispatch with publish_target=testpypi).
+  # --------------------------------------------------------------------------
+  publish-testpypi:
+    name: publish-testpypi
+    needs: [build-wheels, build-sdist]
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_target == 'testpypi'
+    runs-on: ubuntu-22.04
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/codeanalyzer-java
+    permissions:
+      id-token: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Keep only distributables
+        run: find dist -type f ! -name '*.whl' ! -name '*.tar.gz' -delete && ls -l dist
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist
+          skip-existing: true
