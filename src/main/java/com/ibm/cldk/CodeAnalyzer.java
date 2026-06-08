@@ -27,12 +27,14 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Type;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.stream.Collectors;
 import org.apache.commons.lang3.tuple.Pair;
 import picocli.CommandLine;
@@ -42,6 +44,21 @@ import picocli.CommandLine.Option;
 class VersionProvider implements CommandLine.IVersionProvider {
 
     public String[] getVersion() throws Exception {
+        // Read the version baked into an embedded resource at build time. The JAR
+        // manifest's Implementation-Version is unavailable in a GraalVM native
+        // image (no manifest at runtime), so the resource is the portable source.
+        try (InputStream in = getClass().getResourceAsStream("/codeanalyzer-version.properties")) {
+            if (in != null) {
+                Properties props = new Properties();
+                props.load(in);
+                String v = props.getProperty("version");
+                if (v != null && !v.isBlank() && !v.contains("${")) {
+                    return new String[] { v };
+                }
+            }
+        } catch (IOException ignored) {
+            // fall through to manifest lookup
+        }
         String version = getClass().getPackage().getImplementationVersion();
         return new String[] { version != null ? version : "unknown" };
     }

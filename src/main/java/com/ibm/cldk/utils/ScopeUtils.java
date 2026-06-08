@@ -37,6 +37,15 @@ public class ScopeUtils {
   private static final String EXCLUSIONS = "";
 
   /**
+   * Env var pointing directly at a directory of {@code .jmod} files for WALA's
+   * primordial (JDK) scope. Set by the packaged native distribution to the
+   * bundled jmods so a host {@code JAVA_HOME} (which may point at an unrelated
+   * JDK version or a JRE with no jmods) cannot shadow them. Falls back to
+   * {@code $JAVA_HOME/jmods} when unset, for JVM/dev use.
+   */
+  private static final String JMODS_DIR_ENV = "CODEANALYZER_JMODS_DIR";
+
+  /**
    * The Std libs.
    */
   public static String[] stdLibs;
@@ -64,12 +73,9 @@ public class ScopeUtils {
 
     Log.info("Loading Java SE standard libs.");
 
-    if (System.getenv("JAVA_HOME") == null) {
-      Log.error("JAVA_HOME is not set.");
-      throw new RuntimeException("JAVA_HOME is not set.");
-    }
+    Path jmodsDir = resolveJmodsDir();
 
-    String[] stdlibs = Files.walk(Paths.get(System.getenv("JAVA_HOME"), "jmods"))
+    String[] stdlibs = Files.walk(jmodsDir)
         .filter(path -> path.toString().endsWith(".jmod"))
         .map(path -> path.toAbsolutePath().toString())
         .toArray(String[]::new);
@@ -121,6 +127,38 @@ public class ScopeUtils {
         });
 
     return scope;
+  }
+
+  /**
+   * Resolve the directory containing the JDK {@code .jmod} files used to build
+   * WALA's primordial scope. Prefers {@link #JMODS_DIR_ENV} (set by the
+   * packaged distribution) over {@code $JAVA_HOME/jmods}.
+   *
+   * @return an existing directory of jmod files
+   */
+  public static Path resolveJmodsDir() {
+    String bundled = System.getenv(JMODS_DIR_ENV);
+    if (bundled != null && !bundled.isBlank()) {
+      Path p = Paths.get(bundled);
+      if (Files.isDirectory(p)) {
+        return p;
+      }
+      Log.warn(JMODS_DIR_ENV + " is set to '" + bundled
+          + "' but it is not a directory; falling back to JAVA_HOME.");
+    }
+
+    String javaHome = System.getenv("JAVA_HOME");
+    if (javaHome == null || javaHome.isBlank()) {
+      throw new RuntimeException("Cannot locate JDK jmods for call-graph analysis: neither "
+          + JMODS_DIR_ENV + " nor JAVA_HOME is set.");
+    }
+    Path jmods = Paths.get(javaHome, "jmods");
+    if (!Files.isDirectory(jmods)) {
+      throw new RuntimeException("No 'jmods' directory found at " + jmods
+          + " (from JAVA_HOME=" + javaHome + "). Set " + JMODS_DIR_ENV
+          + " to a directory of .jmod files.");
+    }
+    return jmods;
   }
 
   private static AnalysisScope addDefaultExclusions(AnalysisScope scope)

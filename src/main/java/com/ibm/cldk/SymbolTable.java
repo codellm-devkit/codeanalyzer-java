@@ -18,6 +18,8 @@ import com.github.javaparser.resolution.declarations.ResolvedMethodLikeDeclarati
 import com.github.javaparser.resolution.types.ResolvedType;
 import com.github.javaparser.symbolsolver.JavaSymbolSolver;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.CombinedTypeSolver;
+import com.github.javaparser.symbolsolver.resolution.typesolvers.JarTypeSolver;
+import com.github.javaparser.symbolsolver.resolution.typesolvers.JavaParserTypeSolver;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.ReflectionTypeSolver;
 import com.github.javaparser.symbolsolver.utils.SymbolSolverCollectionStrategy;
 import com.github.javaparser.utils.ProjectRoot;
@@ -29,8 +31,10 @@ import com.ibm.cldk.javaee.CRUDFinderFactory;
 import com.ibm.cldk.javaee.EntrypointsFinderFactory;
 import com.ibm.cldk.javaee.utils.enums.CRUDOperationType;
 import com.ibm.cldk.javaee.utils.enums.CRUDQueryType;
+import com.ibm.cldk.utils.JmodTypeSolver;
 import com.ibm.cldk.utils.Log;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
@@ -1172,6 +1176,61 @@ public class SymbolTable {
     }
 
     /**
+     * Builds the JavaParser symbol solver used for project-mode analysis.
+     * Mirrors {@link SymbolSolverCollectionStrategy}'s composition (a
+     * {@code JavaParserTypeSolver} per source root + reflection + the project's
+     * dependency jars) but resolves JDK and dependency types from bytecode via a
+     * {@link JmodTypeSolver} instead of reflection / javassist's
+     * {@code JarTypeSolver}.
+     *
+     * <p>The bytecode solver precedes reflection because, in the native image,
+     * {@code Class.forName} succeeds for reachable JDK classes so the reflection
+     * solver "wins" the type lookup but then enumerates zero members
+     * (methods/fields aren't registered), leaving calls unresolved. Reading
+     * bytecode first yields identical results in the JVM and the native image.
+     * Dependency jars are indexed into the same bytecode solver rather than
+     * javassist's {@code JarTypeSolver}, whose built-in jar class path cannot
+     * read class bytes under native-image.
+     */
+    private static JavaSymbolSolver buildProjectSymbolSolver(ProjectRoot projectRoot, Path projectRootPath,
+            ParserConfiguration config) {
+        CombinedTypeSolver combinedTypeSolver = new CombinedTypeSolver();
+        JmodTypeSolver jmodTypeSolver = JmodTypeSolver.tryCreate();
+        if (jmodTypeSolver != null) {
+            jmodTypeSolver.addJars(findDependencyJars(projectRootPath));
+            combinedTypeSolver.add(jmodTypeSolver);
+        }
+        combinedTypeSolver.add(new ReflectionTypeSolver());
+        for (SourceRoot sourceRoot : projectRoot.getSourceRoots()) {
+            if (excludeSourceRoot(sourceRoot.getRoot())) {
+                continue;
+            }
+            combinedTypeSolver.add(new JavaParserTypeSolver(sourceRoot.getRoot(), config));
+        }
+        // Fallback for environments without jmods (e.g. a JRE-only dev box):
+        // resolve dependency jars via javassist's JarTypeSolver under the JVM.
+        if (jmodTypeSolver == null) {
+            for (Path jar : findDependencyJars(projectRootPath)) {
+                try {
+                    combinedTypeSolver.add(new JarTypeSolver(jar.toString()));
+                } catch (IOException e) {
+                    Log.warn("Skipping unreadable jar for symbol resolution: " + jar + " (" + e.getMessage() + ")");
+                }
+            }
+        }
+        return new JavaSymbolSolver(combinedTypeSolver);
+    }
+
+    private static List<Path> findDependencyJars(Path projectRootPath) {
+        try (java.util.stream.Stream<Path> paths = Files.walk(projectRootPath)) {
+            return paths.filter(p -> p.toString().endsWith(".jar")).collect(Collectors.toList());
+        } catch (IOException e) {
+            Log.warn("Failed to scan for jars under " + projectRootPath + ": " + e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
+    /**
      * Sets up lexical preserving printer for the given compilation unit in a safe manner by checking
      * whether any node in the unit is missing ranges, which can result in exception.
      *
@@ -1197,8 +1256,8 @@ public class SymbolTable {
                 .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21);
         SymbolSolverCollectionStrategy symbolSolverCollectionStrategy = new SymbolSolverCollectionStrategy(config);
         ProjectRoot projectRoot = symbolSolverCollectionStrategy.collect(projectRootPath);
-        javaSymbolSolver = (JavaSymbolSolver) symbolSolverCollectionStrategy.getParserConfiguration()
-                .getSymbolResolver().get();
+        javaSymbolSolver = buildProjectSymbolSolver(projectRoot, projectRootPath, config);
+        config.setSymbolResolver(javaSymbolSolver);
         Map<String, JavaCompilationUnit> symbolTable = new LinkedHashMap<>();
         Map<String, List<Problem>> parseProblems = new HashMap<>();
         for (SourceRoot sourceRoot : projectRoot.getSourceRoots()) {
@@ -1223,8 +1282,14 @@ public class SymbolTable {
             throws IOException {
         Map symbolTable = new LinkedHashMap<String, JavaCompilationUnit>();
         Map parseProblems = new HashMap<String, List<Problem>>();
-        // Setting up symbol solvers
+        // Setting up symbol solvers. The jmod (bytecode) solver precedes the
+        // reflection solver so JDK types resolve identically in the JVM and the
+        // native image (see buildProjectSymbolSolver for the rationale).
         CombinedTypeSolver combinedTypeSolver = new CombinedTypeSolver();
+        JmodTypeSolver jmodTypeSolver = JmodTypeSolver.tryCreate();
+        if (jmodTypeSolver != null) {
+            combinedTypeSolver.add(jmodTypeSolver);
+        }
         combinedTypeSolver.add(new ReflectionTypeSolver());
 
         ParserConfiguration parserConfiguration = new ParserConfiguration()
@@ -1259,15 +1324,15 @@ public class SymbolTable {
             List<Path> javaFilePaths) throws IOException {
 
         // create symbol solver and parser configuration
-        SymbolSolverCollectionStrategy symbolSolverCollectionStrategy = new SymbolSolverCollectionStrategy();
-        ProjectRoot projectRoot = symbolSolverCollectionStrategy.collect(projectRootPath);
-        javaSymbolSolver = (JavaSymbolSolver) symbolSolverCollectionStrategy.getParserConfiguration()
-                .getSymbolResolver().get();
         Log.info("Setting parser language level to JAVA_21");
         ParserConfiguration parserConfiguration = new ParserConfiguration()
                 .setStoreTokens(true)
                 .setAttributeComments(true)
                 .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21);
+        SymbolSolverCollectionStrategy symbolSolverCollectionStrategy =
+                new SymbolSolverCollectionStrategy(parserConfiguration);
+        ProjectRoot projectRoot = symbolSolverCollectionStrategy.collect(projectRootPath);
+        javaSymbolSolver = buildProjectSymbolSolver(projectRoot, projectRootPath, parserConfiguration);
         parserConfiguration.setSymbolResolver(javaSymbolSolver);
 
         // create java parser with the configuration

@@ -160,6 +160,14 @@ compileJava.dependsOn spotlessApply
 // Optionally, automatically format before compilation
 // compileJava.dependsOn googleJavaFormat
 
+// Bake the project version into an embedded resource so the native image (which
+// has no JAR manifest at runtime) can report it identically to `java -jar`.
+processResources {
+    filesMatching('codeanalyzer-version.properties') {
+        expand(version: project.version)
+    }
+}
+
 task fatJar(type: Jar) {
     archiveBaseName = 'codeanalyzer'
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
@@ -193,7 +201,6 @@ graalvmNative {
             buildArgs.add("-Ob")
             buildArgs.add("-march=compatibility")
             buildArgs.add("--no-fallback")
-            buildArgs.add("--no-server")
             buildArgs.add("-H:ReflectionConfigurationFiles=$projectDir/src/main/resources/META-INF/native-image-config/reflect-config.json")
             buildArgs.add("-H:ResourceConfigurationFiles=$projectDir/src/main/resources/META-INF/native-image-config/resource-config.json")
             buildArgs.add("-H:JNIConfigurationFiles=$projectDir/src/main/resources/META-INF/native-image-config/jni-config.json")
@@ -206,6 +213,14 @@ graalvmNative {
     binaries.configureEach {
         buildArgs.add("--verbose")
     }
+}
+
+// The native-image config above is passed via -H flags as absolute source
+// paths, which Gradle does not track. Declare the directory as a task input so
+// editing reflect-/resource-/jni-/proxy-config.json reliably re-runs the build.
+tasks.named('nativeCompile').configure {
+    inputs.dir("$projectDir/src/main/resources/META-INF/native-image-config")
+            .withPropertyName('nativeImageConfig')
 }
 
 // Define a property for the output directory
@@ -294,5 +309,5 @@ tasks.register('bumpVersion') {
 
 nativeCompile.finalizedBy copyNativeExecutable
     kotlin {
-        jvmToolchain(11)
+        jvmToolchain(21)
     }

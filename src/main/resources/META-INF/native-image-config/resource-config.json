@@ -1,7 +1,12 @@
 {
-  "resources":{
-  "includes":[{
-    "pattern":"java.base:\\Qjdk/internal/icu/impl/data/icudt67b/nfkc.nrm\\E"
-  }]},
-  "bundles":[]
+  "resources": {
+    "includes": [
+      { "pattern": "\\Qcodeanalyzer-version.properties\\E" },
+      { "pattern": "\\QMETA-INF/services/java.lang.System$LoggerFinder\\E" },
+      { "pattern": "\\QMETA-INF/services/java.time.zone.ZoneRulesProvider\\E" },
+      { "pattern": "\\QMETA-INF/services/javax.xml.parsers.SAXParserFactory\\E" },
+      { "pattern": "\\Qnatives.xml\\E" }
+    ]
+  },
+  "bundles": []
 }
