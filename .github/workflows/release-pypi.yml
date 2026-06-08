@@ -218,8 +218,10 @@ jobs:
           "$PY" -m build --wheel --outdir "$PWD/dist" "$PWD/pypi"
           ls -l "$PWD/dist"
 
+      # musl wheels can't be pip-installed on this glibc build host; they're
+      # smoke-tested in a real Alpine (musl) container by the smoke-musl job.
       - name: Smoke test wheel
-        if: matrix.rosetta != true
+        if: matrix.rosetta != true && matrix.musl != true
         shell: bash
         env:
           PYTHON: ${{ runner.os == 'Linux' && '/opt/python/cp312-cp312/bin/python' || 'python3' }}
@@ -246,10 +248,14 @@ jobs:
             shasum -a 256 dist/*.whl
           fi
 
+      # Non-musl wheels are uploaded under the publishable `wheel-*` name and go
+      # straight to release/publish. musl wheels are staged under a separate
+      # name and only promoted to `wheel-*` by smoke-musl once they pass the
+      # Alpine smoke test — so an unverified musl wheel is never published.
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.name }}
+          name: ${{ matrix.musl && format('musl-staging-{0}', matrix.name) || format('wheel-{0}', matrix.name) }}
           path: dist/*.whl
           if-no-files-found: error
 
@@ -284,21 +290,92 @@ jobs:
           if-no-files-found: error
 
   # --------------------------------------------------------------------------
+  # Validate the musl wheels in a real Alpine (musl) container — they can't be
+  # pip-installed on the glibc build host. Runs per-arch on native runners,
+  # where docker is available (unlike inside the manylinux build container).
+  # Only wheels that pass here are promoted to the publishable `wheel-*` name,
+  # so an unverified musl wheel never reaches PyPI. Experimental: a musl
+  # failure must never block the glibc/macOS release.
+  # --------------------------------------------------------------------------
+  smoke-musl:
+    name: smoke-musl (${{ matrix.arch }})
+    needs: build-wheels
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runs-on: ubuntu-22.04
+            name: musllinux-x86_64
+          - arch: aarch64
+            runs-on: ubuntu-22.04-arm
+            name: musllinux-aarch64
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - name: Download staged musl wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: musl-staging-${{ matrix.name }}
+          path: dist
+
+      - name: Smoke test in Alpine (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD/dist:/dist:ro" python:3.12-alpine sh -euc '
+            wheel=$(ls /dist/*.whl | head -n1)
+            echo "smoke-musl: testing $wheel"
+            python -m venv /tmp/venv
+            /tmp/venv/bin/pip install --upgrade pip >/dev/null
+            /tmp/venv/bin/pip install "$wheel"
+            echo "smoke-musl: codajv --version"
+            /tmp/venv/bin/codajv --version
+            echo "smoke-musl: codajv -s (level-1 source analysis, exercises bundled jmods)"
+            out=$(/tmp/venv/bin/codajv -s "public class Smoke { public int answer() { return 42; } }")
+            printf "%s" "$out" | head -c 2000; echo
+            printf "%s" "$out" | grep -q Smoke || { echo "smoke-musl: FAILED — expected class Smoke in output"; exit 1; }
+            echo "smoke-musl: OK"
+          '
+
+      - name: Promote verified wheel for publishing
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.name }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------------
   # GitHub Release (tag pushes only): attach every wheel + sdist + checksums.
   # --------------------------------------------------------------------------
   github-release:
     name: github-release
-    needs: [build-wheels, build-sdist]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [build-wheels, build-sdist, smoke-musl]
+    # Wait for smoke-musl (so verified musl wheels are attached) but never block
+    # the release on it — only the essential build jobs must have succeeded.
+    if: >-
+      always() &&
+      needs.build-wheels.result == 'success' &&
+      needs.build-sdist.result == 'success' &&
+      github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
-      - name: Download all artifacts
+      # Pull only publishable artifacts: `wheel-*` (incl. musl wheels promoted
+      # by smoke-musl) and the sdist — never the `musl-staging-*` artifacts.
+      - name: Download wheels
         uses: actions/download-artifact@v4
         with:
+          pattern: wheel-*
           path: dist
           merge-multiple: true
+
+      - name: Download sdist
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
 
       - name: Generate checksums
         run: |
@@ -321,10 +398,17 @@ jobs:
   # --------------------------------------------------------------------------
   publish-pypi:
     name: publish-pypi
-    needs: [build-wheels, build-sdist]
+    needs: [build-wheels, build-sdist, smoke-musl]
+    # Wait for smoke-musl (so verified musl wheels publish too) but never block
+    # the release on it — only the essential build jobs must have succeeded.
     if: >-
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
-      (github.event_name == 'workflow_dispatch' && inputs.publish_target == 'pypi')
+      always() &&
+      needs.build-wheels.result == 'success' &&
+      needs.build-sdist.result == 'success' &&
+      (
+        (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+        (github.event_name == 'workflow_dispatch' && inputs.publish_target == 'pypi')
+      )
     runs-on: ubuntu-22.04
     environment:
       name: pypi
@@ -332,11 +416,19 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - name: Download all artifacts
+      # `wheel-*` (incl. smoke-musl-promoted musl wheels) + sdist; never staging.
+      - name: Download wheels
         uses: actions/download-artifact@v4
         with:
+          pattern: wheel-*
           path: dist
           merge-multiple: true
+
+      - name: Download sdist
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
 
       - name: Keep only distributables
         run: find dist -type f ! -name '*.whl' ! -name '*.tar.gz' -delete && ls -l dist
@@ -352,8 +444,12 @@ jobs:
   # --------------------------------------------------------------------------
   publish-testpypi:
     name: publish-testpypi
-    needs: [build-wheels, build-sdist]
-    if: github.event_name == 'workflow_dispatch' && inputs.publish_target == 'testpypi'
+    needs: [build-wheels, build-sdist, smoke-musl]
+    if: >-
+      always() &&
+      needs.build-wheels.result == 'success' &&
+      needs.build-sdist.result == 'success' &&
+      github.event_name == 'workflow_dispatch' && inputs.publish_target == 'testpypi'
     runs-on: ubuntu-22.04
     environment:
       name: testpypi
@@ -361,11 +457,19 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - name: Download all artifacts
+      # `wheel-*` (incl. smoke-musl-promoted musl wheels) + sdist; never staging.
+      - name: Download wheels
         uses: actions/download-artifact@v4
         with:
+          pattern: wheel-*
           path: dist
           merge-multiple: true
+
+      - name: Download sdist
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
 
       - name: Keep only distributables
         run: find dist -type f ! -name '*.whl' ! -name '*.tar.gz' -delete && ls -l dist
