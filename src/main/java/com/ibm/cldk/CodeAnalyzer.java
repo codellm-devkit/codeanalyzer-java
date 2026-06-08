@@ -226,8 +226,13 @@ public class CodeAnalyzer implements Runnable {
                 combinedJsonObject.add("call_graph", gson.toJsonTree(sdgEdges));
             }
         }
-        // Cleanup library dependencies directory
-        BuildProject.cleanLibraryDependencies();
+        // Cleanup library dependencies directory. Source-string analysis (-s) never
+        // downloads dependencies, so skip it: touching BuildProject would run its
+        // static initializer, which resolves a build command against the (null)
+        // project root and throws.
+        if (sourceAnalysis == null) {
+            BuildProject.cleanLibraryDependencies();
+        }
 
         // Convert the JavaCompilationUnit to JSON and add to consolidated json object
         String symbolTableJSONString = gson.toJson(symbolTable);
