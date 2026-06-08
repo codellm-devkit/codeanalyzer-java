@@ -21,9 +21,30 @@ esac
 PREFIX=/opt/musl
 mkdir -p "$PREFIX"
 
-toolchain_url="https://musl.cc/${MUSL_TRIPLE}-native.tgz"
-echo "setup-musl: downloading toolchain $toolchain_url"
-curl -fsSL "$toolchain_url" | tar -xz -C "$PREFIX" --strip-components=1
+# Download a file, trying each mirror in turn with retries. musl.cc is chronic-
+# ally flaky (the first release run died on "connect to musl.cc timed out"), so
+# a GitHub-hosted mirror is tried first — GitHub is reliably reachable from CI.
+# `--retry-all-errors` is avoided on purpose: the manylinux_2_28 container ships
+# curl 7.61, which predates that flag. Plain `--retry` covers transient timeouts.
+fetch() {
+  dest="$1"; shift
+  for url in "$@"; do
+    echo "setup-musl: fetching $url"
+    if curl -fL --retry 5 --retry-delay 3 --connect-timeout 20 --max-time 600 \
+            -o "$dest" "$url"; then
+      return 0
+    fi
+    echo "setup-musl: mirror failed, trying next" >&2
+  done
+  echo "setup-musl: all mirrors failed for ${dest##*/}" >&2
+  return 1
+}
+
+toolchain_tgz="$(mktemp --suffix=.tgz)"
+fetch "$toolchain_tgz" \
+  "https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/${MUSL_TRIPLE}-native.tgz" \
+  "https://musl.cc/${MUSL_TRIPLE}-native.tgz"
+tar -xzf "$toolchain_tgz" -C "$PREFIX" --strip-components=1
 
 export PATH="$PREFIX/bin:$PATH"
 echo "$PREFIX/bin" >> "$GITHUB_PATH"
@@ -33,7 +54,12 @@ echo "$PREFIX/bin" >> "$GITHUB_PATH"
 ZLIB_VERSION=1.3.1
 workdir="$(mktemp -d)"
 echo "setup-musl: building static zlib ${ZLIB_VERSION} with ${MUSL_TRIPLE}-gcc"
-curl -fsSL "https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz" | tar -xz -C "$workdir" --strip-components=1
+zlib_tgz="$(mktemp --suffix=.tar.gz)"
+fetch "$zlib_tgz" \
+  "https://github.com/madler/zlib/releases/download/v${ZLIB_VERSION}/zlib-${ZLIB_VERSION}.tar.gz" \
+  "https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz" \
+  "https://zlib.net/fossils/zlib-${ZLIB_VERSION}.tar.gz"
+tar -xzf "$zlib_tgz" -C "$workdir" --strip-components=1
 (
   cd "$workdir"
   CC="${MUSL_TRIPLE}-gcc" ./configure --static --prefix="$PREFIX"
