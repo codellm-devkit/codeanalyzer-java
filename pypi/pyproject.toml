@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codeanalyzer-java"
+dynamic = ["version"]
+description = "Static analysis for Java, shipped as a self-contained native binary (no JVM required)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+authors = [{ name = "Rahul Krishna", email = "i.m.ralk@gmail.com" }]
+keywords = ["java", "static-analysis", "wala", "javaparser", "call-graph", "codeanalyzer"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Java",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+[project.urls]
+Homepage = "https://github.com/codellm-devkit/codeanalyzer-java"
+Issues = "https://github.com/codellm-devkit/codeanalyzer-java/issues"
+Source = "https://github.com/codellm-devkit/codeanalyzer-java"
+
+[project.scripts]
+codajv = "codeanalyzer_java.__main__:main"
+
+# Version is read from ../gradle.properties by CustomMetadataHook so the wheel
+# stays in lockstep with the native binary.
+[tool.hatch.metadata.hooks.custom]
+path = "hatch_build.py"
+
+# Bundles the native binary + jmods and forces an impure, platform-tagged wheel.
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["codeanalyzer_java"]
+# The native binary and jmods are injected at build time via force_include in
+# hatch_build.py; nothing under _vendor/ is tracked in source control.
+exclude = ["codeanalyzer_java/_vendor"]
+
+[tool.hatch.build.targets.sdist]
+# The sdist carries only the wrapper sources. Building a wheel from it requires
+# a prebuilt native binary (CODEANALYZER_NATIVE_BINARY) and jmods; without them
+# the build hook fails with a clear message rather than silently shipping a
+# binary-less, non-functional wheel.
+include = [
+    "codeanalyzer_java",
+    "hatch_build.py",
+    "pyproject.toml",
+    "README.md",
+]

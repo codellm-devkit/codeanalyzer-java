@@ -1,0 +1,11 @@
+# Build outputs
+/dist/
+/build/
+*.egg-info/
+
+# Native binary + jmods are injected at build time, never committed.
+codeanalyzer_java/_vendor/
+
+# Python caches
+__pycache__/
+*.py[cod]
