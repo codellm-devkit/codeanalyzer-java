@@ -1162,9 +1162,10 @@ public class SymbolTable {
             Paths.get("src", "it", "resources").toString(),
             Paths.get("src", "xdocs-examples").toString()
     };
-    private static boolean excludeSourceRoot(Path sourceRoot) {
+    private static boolean excludeSourceRoot(Path sourceRoot, Path projectRootPath) {
+        Path relativeSourceRoot = projectRootPath.toAbsolutePath().relativize(sourceRoot.toAbsolutePath());
         for (String excludedSrcRoot : EXCLUDED_SOURCE_ROOTS) {
-            if (Pattern.compile(excludedSrcRoot).matcher(sourceRoot.toString()).find()) {
+            if (Pattern.compile(excludedSrcRoot).matcher(relativeSourceRoot.toString()).find()) {
                 return true;
             }
         }
@@ -1202,7 +1203,7 @@ public class SymbolTable {
         Map<String, JavaCompilationUnit> symbolTable = new LinkedHashMap<>();
         Map<String, List<Problem>> parseProblems = new HashMap<>();
         for (SourceRoot sourceRoot : projectRoot.getSourceRoots()) {
-            if (excludeSourceRoot(sourceRoot.getRoot())) {
+            if (excludeSourceRoot(sourceRoot.getRoot(), projectRootPath)) {
                 continue;
             }
             sourceRoot.setParserConfiguration(config);
