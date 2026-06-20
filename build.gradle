@@ -124,9 +124,14 @@ dependencies {
     implementation('com.github.javaparser:javaparser-symbol-solver-core:3.26.3')
     implementation('com.github.javaparser:javaparser-core:3.26.3')
 
+    // Neo4j Bolt driver for `--emit neo4j --neo4j-uri ...` (live incremental graph push).
+    // 4.4.x retains Java 8/11 compatibility for the GraalVM native-image build.
+    implementation('org.neo4j.driver:neo4j-java-driver:4.4.12')
+
     // TestContainers
     testImplementation 'org.testcontainers:testcontainers:1.20.6'
     testImplementation 'org.testcontainers:junit-jupiter:1.20.6'
+    testImplementation 'org.testcontainers:neo4j:1.20.6'
 
     // JUnit 5
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.1'

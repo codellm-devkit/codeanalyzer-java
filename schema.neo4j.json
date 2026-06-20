@@ -1,0 +1,384 @@
+{
+  "schema_version": "1.0.0",
+  "generator": "codeanalyzer-java",
+  "marker_labels": [
+    "Entrypoint"
+  ],
+  "node_labels": [
+    {
+      "label": "Application",
+      "merge_label": "Application",
+      "key": "name",
+      "properties": {
+        "name": "string",
+        "schema_version": "string"
+      }
+    },
+    {
+      "label": "CompilationUnit",
+      "merge_label": "CompilationUnit",
+      "key": "file_key",
+      "properties": {
+        "file_key": "string",
+        "file_path": "string",
+        "package_name": "string",
+        "content_hash": "string",
+        "comment_count": "integer",
+        "_unit": "string"
+      }
+    },
+    {
+      "label": "Type",
+      "merge_label": "Symbol",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "name": "string",
+        "fqn": "string",
+        "kind": "string",
+        "modifiers": "string[]",
+        "annotations": "string[]",
+        "extends_list": "string[]",
+        "implements_list": "string[]",
+        "nested_type_declarations": "string[]",
+        "is_interface": "boolean",
+        "is_nested_type": "boolean",
+        "is_inner_class": "boolean",
+        "is_local_class": "boolean",
+        "is_entrypoint_class": "boolean",
+        "parent_type": "string",
+        "docstring": "string",
+        "_unit": "string"
+      }
+    },
+    {
+      "label": "Callable",
+      "merge_label": "Symbol",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "name": "string",
+        "signature": "string",
+        "declaration": "string",
+        "return_type": "string",
+        "modifiers": "string[]",
+        "annotations": "string[]",
+        "thrown_exceptions": "string[]",
+        "parameter_types": "string[]",
+        "referenced_types": "string[]",
+        "accessed_fields": "string[]",
+        "code": "string",
+        "code_start_line": "integer",
+        "start_line": "integer",
+        "end_line": "integer",
+        "cyclomatic_complexity": "integer",
+        "is_constructor": "boolean",
+        "is_implicit": "boolean",
+        "is_entrypoint": "boolean",
+        "docstring": "string",
+        "_unit": "string"
+      }
+    },
+    {
+      "label": "Field",
+      "merge_label": "Field",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "name": "string",
+        "type": "string",
+        "modifiers": "string[]",
+        "annotations": "string[]",
+        "variables": "string[]",
+        "start_line": "integer",
+        "end_line": "integer",
+        "docstring": "string",
+        "_unit": "string"
+      }
+    },
+    {
+      "label": "Parameter",
+      "merge_label": "Parameter",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "name": "string",
+        "type": "string",
+        "annotations": "string[]",
+        "modifiers": "string[]",
+        "start_line": "integer",
+        "end_line": "integer",
+        "_unit": "string"
+      }
+    },
+    {
+      "label": "Variable",
+      "merge_label": "Variable",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "name": "string",
+        "type": "string",
+        "initializer": "string",
+        "start_line": "integer",
+        "end_line": "integer",
+        "_unit": "string"
+      }
+    },
+    {
+      "label": "CallSite",
+      "merge_label": "CallSite",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "method_name": "string",
+        "receiver_expr": "string",
+        "receiver_type": "string",
+        "return_type": "string",
+        "callee_signature": "string",
+        "argument_types": "string[]",
+        "is_static_call": "boolean",
+        "is_constructor_call": "boolean",
+        "is_public": "boolean",
+        "is_private": "boolean",
+        "is_protected": "boolean",
+        "start_line": "integer",
+        "start_column": "integer",
+        "end_line": "integer",
+        "end_column": "integer",
+        "_unit": "string"
+      }
+    },
+    {
+      "label": "EnumConstant",
+      "merge_label": "EnumConstant",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "name": "string",
+        "arguments": "string[]",
+        "_unit": "string"
+      }
+    },
+    {
+      "label": "RecordComponent",
+      "merge_label": "RecordComponent",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "name": "string",
+        "type": "string",
+        "modifiers": "string[]",
+        "annotations": "string[]",
+        "is_var_args": "boolean",
+        "_unit": "string"
+      }
+    },
+    {
+      "label": "Package",
+      "merge_label": "Package",
+      "key": "name",
+      "properties": {
+        "name": "string"
+      }
+    },
+    {
+      "label": "Annotation",
+      "merge_label": "Annotation",
+      "key": "name",
+      "properties": {
+        "name": "string"
+      }
+    }
+  ],
+  "relationship_types": [
+    {
+      "type": "HAS_UNIT",
+      "from": [
+        "Application"
+      ],
+      "to": [
+        "CompilationUnit"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "DECLARES_TYPE",
+      "from": [
+        "CompilationUnit"
+      ],
+      "to": [
+        "Type"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "HAS_NESTED_TYPE",
+      "from": [
+        "Type"
+      ],
+      "to": [
+        "Type"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "HAS_CALLABLE",
+      "from": [
+        "Type"
+      ],
+      "to": [
+        "Callable"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "HAS_FIELD",
+      "from": [
+        "Type"
+      ],
+      "to": [
+        "Field"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "HAS_PARAMETER",
+      "from": [
+        "Callable"
+      ],
+      "to": [
+        "Parameter"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "HAS_CALLSITE",
+      "from": [
+        "Callable"
+      ],
+      "to": [
+        "CallSite"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "DECLARES_VAR",
+      "from": [
+        "Callable"
+      ],
+      "to": [
+        "Variable"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "HAS_ENUM_CONSTANT",
+      "from": [
+        "Type"
+      ],
+      "to": [
+        "EnumConstant"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "HAS_RECORD_COMPONENT",
+      "from": [
+        "Type"
+      ],
+      "to": [
+        "RecordComponent"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "EXTENDS",
+      "from": [
+        "Type"
+      ],
+      "to": [
+        "Type"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "IMPLEMENTS",
+      "from": [
+        "Type"
+      ],
+      "to": [
+        "Type"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "ANNOTATED_BY",
+      "from": [
+        "Type",
+        "Callable",
+        "Field"
+      ],
+      "to": [
+        "Annotation"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "IMPORTS",
+      "from": [
+        "CompilationUnit"
+      ],
+      "to": [
+        "Type",
+        "Package"
+      ],
+      "properties": {
+        "is_static": "boolean",
+        "is_wildcard": "boolean"
+      }
+    },
+    {
+      "type": "RESOLVES_TO",
+      "from": [
+        "CallSite"
+      ],
+      "to": [
+        "Callable"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "CALLS",
+      "from": [
+        "Callable"
+      ],
+      "to": [
+        "Callable"
+      ],
+      "properties": {
+        "type": "string",
+        "weight": "integer"
+      }
+    }
+  ],
+  "constraints": [
+    "CREATE CONSTRAINT symbol_id IF NOT EXISTS FOR (s:Symbol) REQUIRE s.id IS UNIQUE",
+    "CREATE CONSTRAINT application_name IF NOT EXISTS FOR (a:Application) REQUIRE a.name IS UNIQUE",
+    "CREATE CONSTRAINT compilation_unit_key IF NOT EXISTS FOR (c:CompilationUnit) REQUIRE c.file_key IS UNIQUE",
+    "CREATE CONSTRAINT package_name IF NOT EXISTS FOR (p:Package) REQUIRE p.name IS UNIQUE",
+    "CREATE CONSTRAINT annotation_name IF NOT EXISTS FOR (an:Annotation) REQUIRE an.name IS UNIQUE",
+    "CREATE CONSTRAINT callsite_id IF NOT EXISTS FOR (cs:CallSite) REQUIRE cs.id IS UNIQUE",
+    "CREATE CONSTRAINT field_id IF NOT EXISTS FOR (f:Field) REQUIRE f.id IS UNIQUE",
+    "CREATE CONSTRAINT parameter_id IF NOT EXISTS FOR (p:Parameter) REQUIRE p.id IS UNIQUE",
+    "CREATE CONSTRAINT variable_id IF NOT EXISTS FOR (v:Variable) REQUIRE v.id IS UNIQUE",
+    "CREATE CONSTRAINT enum_constant_id IF NOT EXISTS FOR (e:EnumConstant) REQUIRE e.id IS UNIQUE",
+    "CREATE CONSTRAINT record_component_id IF NOT EXISTS FOR (r:RecordComponent) REQUIRE r.id IS UNIQUE"
+  ],
+  "indexes": [
+    "CREATE INDEX callable_name IF NOT EXISTS FOR (c:Callable) ON (c.name)",
+    "CREATE INDEX type_name IF NOT EXISTS FOR (t:Type) ON (t.name)",
+    "CREATE INDEX annotation_name_idx IF NOT EXISTS FOR (an:Annotation) ON (an.name)",
+    "CREATE FULLTEXT INDEX code_fts IF NOT EXISTS FOR (c:Callable) ON EACH [c.code, c.docstring]"
+  ]
+}
