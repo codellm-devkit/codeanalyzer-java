@@ -72,15 +72,15 @@ public class Neo4jSchemaConformanceTest {
     /** The specific (catalog) label for a node row: the non-merge, non-marker label. */
     private static String specificLabel(List<String> labels) {
         String merge = labels.get(0);
-        if (!merge.equals("Symbol")) {
+        if (!merge.equals("JSymbol")) {
             return merge;
         }
         for (String l : labels) {
-            if (!l.equals("Symbol") && !MARKERS.contains(l)) {
+            if (!l.equals("JSymbol") && !MARKERS.contains(l)) {
                 return l;
             }
         }
-        return "Symbol";
+        return "JSymbol";
     }
 
     private static Set<String> mergeLabelsFor(List<String> specifics) {

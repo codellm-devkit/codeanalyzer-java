@@ -31,8 +31,9 @@ import java.util.Map;
 public final class CypherWriter {
 
     private static final int BATCH = 500;
-    static final String DESCENDANTS = "[:DECLARES_TYPE|HAS_NESTED_TYPE|HAS_CALLABLE|HAS_FIELD|HAS_PARAMETER"
-            + "|HAS_CALLSITE|DECLARES_VAR|HAS_ENUM_CONSTANT|HAS_RECORD_COMPONENT*1..]";
+    static final String DESCENDANTS = "[:J_DECLARES_TYPE|J_HAS_NESTED_TYPE|J_HAS_CALLABLE|J_HAS_FIELD|J_HAS_PARAMETER"
+            + "|J_HAS_CALLSITE|J_DECLARES_VAR|J_HAS_ENUM_CONSTANT|J_HAS_RECORD_COMPONENT|J_HAS_INIT_BLOCK"
+            + "|J_HAS_CRUD_OPERATION|J_HAS_CRUD_QUERY|J_HAS_COMMENT*1..]";
 
     private CypherWriter() {}
 
@@ -64,8 +65,8 @@ public final class CypherWriter {
     }
 
     private static String wipe(String appName) {
-        return "MATCH (a:Application {name: " + cypherValue(appName) + "})\n"
-                + "OPTIONAL MATCH (a)-[:HAS_UNIT]->(c:CompilationUnit)\n"
+        return "MATCH (a:JApplication {name: " + cypherValue(appName) + "})\n"
+                + "OPTIONAL MATCH (a)-[:J_HAS_UNIT]->(c:JCompilationUnit)\n"
                 + "OPTIONAL MATCH (c)-" + DESCENDANTS + "->(x)\n"
                 + "DETACH DELETE x, c, a;";
     }

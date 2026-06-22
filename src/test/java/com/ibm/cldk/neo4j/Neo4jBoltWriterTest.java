@@ -18,7 +18,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.github.javaparser.Problem;
 import com.ibm.cldk.SymbolTable;
 import com.ibm.cldk.entities.JavaCompilationUnit;
-import com.ibm.cldk.neo4j.BoltWriter.BoltConfig;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
@@ -88,16 +87,16 @@ public class Neo4jBoltWriterTest {
     @Test
     public void fullPushMaterializesTheWholeGraphAndSchema() throws Exception {
         GraphRows rows = projectFixture();
-        BoltWriter.write(rows, cfg, true);
+        new BoltWriter().write(rows, cfg, true);
 
         // Every projected node/edge lands.
         assertEquals(rows.nodes.size(), num("MATCH (n) RETURN count(n)"));
         assertEquals(rows.edges.size(), num("MATCH ()-[r]->() RETURN count(r)"));
 
-        // Shared :Symbol label spans the id-keyed declaration kinds (Type + Callable).
-        long symbol = num("MATCH (s:Symbol) RETURN count(s)");
-        long kinds = num("MATCH (s:Symbol) WHERE s:Type OR s:Callable RETURN count(s)");
-        assertTrue(symbol > 0, "expected Symbol nodes");
+        // Shared :JSymbol label spans the id-keyed declaration kinds (JType + JCallable).
+        long symbol = num("MATCH (s:JSymbol) RETURN count(s)");
+        long kinds = num("MATCH (s:JSymbol) WHERE s:JType OR s:JCallable RETURN count(s)");
+        assertTrue(symbol > 0, "expected JSymbol nodes");
         assertEquals(symbol, kinds);
 
         // Constraints + indexes were created up front.
@@ -108,8 +107,8 @@ public class Neo4jBoltWriterTest {
     @Test
     public void rePushingIdenticalAnalysisIsIdempotent() throws Exception {
         GraphRows rows = projectFixture();
-        BoltWriter.write(rows, cfg, true);
-        BoltWriter.write(rows, cfg, true);
+        new BoltWriter().write(rows, cfg, true);
+        new BoltWriter().write(rows, cfg, true);
         assertEquals(rows.nodes.size(), num("MATCH (n) RETURN count(n)"));
         assertEquals(rows.edges.size(), num("MATCH ()-[r]->() RETURN count(r)"));
     }
@@ -119,21 +118,21 @@ public class Neo4jBoltWriterTest {
         Pair<Map<String, JavaCompilationUnit>, Map<String, List<Problem>>> extracted =
                 SymbolTable.extractAll(FIXTURE);
         Map<String, JavaCompilationUnit> symbolTable = extracted.getLeft();
-        BoltWriter.write(GraphProjector.project(symbolTable, null, APP), cfg, true);
+        new BoltWriter().write(GraphProjector.project(symbolTable, null, APP), cfg, true);
 
         // Drop one compilation unit and re-push as a full run.
         String victim = symbolTable.keySet().stream().sorted().findFirst().orElseThrow(IllegalStateException::new);
         symbolTable.remove(victim);
         GraphRows reduced = GraphProjector.project(symbolTable, null, APP);
-        BoltWriter.write(reduced, cfg, true);
+        new BoltWriter().write(reduced, cfg, true);
 
         // The victim's unit-scoped nodes are gone; the surviving unit-scoped graph matches.
         try (Session s = driver.session()) {
-            long victimNodes = s.run("MATCH (n {_unit: $m}) RETURN count(n)",
+            long victimNodes = s.run("MATCH (n {_module: $m}) RETURN count(n)",
                     org.neo4j.driver.Values.parameters("m", victim)).single().get(0).asLong();
             assertEquals(0L, victimNodes);
         }
-        long unitScoped = reduced.nodes.stream().filter(n -> n.props.containsKey("_unit")).count();
-        assertEquals(unitScoped, num("MATCH (n) WHERE n._unit IS NOT NULL RETURN count(n)"));
+        long unitScoped = reduced.nodes.stream().filter(n -> n.props.containsKey("_module")).count();
+        assertEquals(unitScoped, num("MATCH (n) WHERE n._module IS NOT NULL RETURN count(n)"));
     }
 }

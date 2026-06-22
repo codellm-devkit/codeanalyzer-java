@@ -37,7 +37,7 @@ public final class GraphRows {
 
     /** How an edge addresses one of its endpoints: the label + key property to MATCH on, and value. */
     public static final class NodeRef {
-        /** The label carrying the uniqueness constraint (e.g. "Symbol", "CompilationUnit"). */
+        /** The label carrying the uniqueness constraint (e.g. "JSymbol", "JCompilationUnit"). */
         public final String label;
         /** "id" | "file_key" | "name". */
         public final String keyProp;

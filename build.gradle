@@ -125,7 +125,10 @@ dependencies {
     implementation('com.github.javaparser:javaparser-core:3.26.3')
 
     // Neo4j Bolt driver for `--emit neo4j --neo4j-uri ...` (live incremental graph push).
-    // 4.4.x retains Java 8/11 compatibility for the GraalVM native-image build.
+    // Bundled into the fat jar so `java -jar` supports live push out of the box. It is reached ONLY
+    // reflectively, via the BoltSink seam (see Neo4jEmitter#loadBoltSink), so the GraalVM native image
+    // prunes BoltWriter and never compiles the driver + Netty into the binary — the native build stays
+    // small and Netty-metadata-free, and `--neo4j-uri` there falls back to a graph.cypher snapshot.
     implementation('org.neo4j.driver:neo4j-java-driver:4.4.12')
 
     // TestContainers

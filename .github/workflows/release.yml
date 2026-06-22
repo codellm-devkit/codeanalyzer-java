@@ -52,7 +52,7 @@ jobs:
           mkdir -p release-assets
           cp build/libs/codeanalyzer-${{ steps.ver.outputs.version }}.jar release-assets/codeanalyzer.jar
           cp build/libs/codeanalyzer-${{ steps.ver.outputs.version }}.jar "release-assets/codeanalyzer-${{ steps.ver.outputs.version }}.jar"
-          java -jar build/libs/codeanalyzer-${{ steps.ver.outputs.version }}.jar --emit schema > release-assets/schema.json
+          java -jar build/libs/codeanalyzer-${{ steps.ver.outputs.version }}.jar --emit schema > release-assets/schema.neo4j.json
           cp packaging/install/codeanalyzer-installer.sh release-assets/codeanalyzer-installer.sh
           ls -lh release-assets
 
@@ -88,7 +88,7 @@ jobs:
             echo "| --- | --- |"
             echo "| \`codeanalyzer.jar\` | Self-contained analyzer (run with \`java -jar\`) |"
             echo "| \`codeanalyzer-installer.sh\` | Installer that fetches the jar and adds a \`codeanalyzer\` launcher |"
-            echo "| \`schema.json\` | Neo4j graph schema contract (node labels, relationships, DDL) |"
+            echo "| \`schema.neo4j.json\` | Neo4j graph schema contract (node labels, relationships, DDL) |"
             echo
             echo "---"
             echo
@@ -101,7 +101,7 @@ jobs:
           files: |
             release-assets/codeanalyzer.jar
             release-assets/codeanalyzer-${{ steps.ver.outputs.version }}.jar
-            release-assets/schema.json
+            release-assets/schema.neo4j.json
             release-assets/codeanalyzer-installer.sh
           body_path: release-notes.md
         env:

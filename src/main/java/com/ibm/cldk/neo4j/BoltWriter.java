@@ -44,31 +44,18 @@ import org.neo4j.driver.Values;
  * </ol>
  *
  * <p>Nodes are MERGE-upserted, never blindly deleted, so a declaration another (unchanged) unit
- * still references survives and its incoming edges stay valid. {@code :Package}/{@code :Annotation}
- * are shared (no {@code _unit}) and are MERGE-only.
+ * still references survives and its incoming edges stay valid. {@code :JPackage}/{@code :JAnnotation}
+ * are shared (no {@code _module}) and are MERGE-only.
  */
-public final class BoltWriter {
+public final class BoltWriter implements BoltSink {
 
     private static final int BATCH = 1000;
 
-    /** Bolt connection configuration. */
-    public static final class BoltConfig {
-        public final String uri;
-        public final String user;
-        public final String password;
-        public final String database;
+    /** Public no-arg constructor: {@link Neo4jEmitter} instantiates this reflectively via {@link BoltSink}. */
+    public BoltWriter() {}
 
-        public BoltConfig(String uri, String user, String password, String database) {
-            this.uri = uri;
-            this.user = user;
-            this.password = password;
-            this.database = database;
-        }
-    }
-
-    private BoltWriter() {}
-
-    public static void write(GraphRows rows, BoltConfig cfg, boolean fullRun) {
+    @Override
+    public void write(GraphRows rows, BoltConfig cfg, boolean fullRun) {
         try (Driver driver = GraphDatabase.driver(cfg.uri, AuthTokens.basic(cfg.user, cfg.password))) {
             new Runner(driver, cfg.database).run(rows, fullRun);
         }
@@ -100,12 +87,12 @@ public final class BoltWriter {
                 }
             }
 
-            // Partition nodes by owning unit; shared nodes have no _unit.
+            // Partition nodes by owning unit; shared nodes have no _module.
             Map<String, List<NodeRow>> byUnit = new LinkedHashMap<>();
             List<NodeRow> shared = new ArrayList<>();
             Map<String, String> unitOf = new HashMap<>(); // node value → owning unit
             for (NodeRow n : rows.nodes) {
-                Object m = n.props.get("_unit");
+                Object m = n.props.get("_module");
                 if (m instanceof String) {
                     byUnit.computeIfAbsent((String) m, x -> new ArrayList<>()).add(n);
                     unitOf.put(n.value, (String) m);
@@ -117,7 +104,7 @@ public final class BoltWriter {
             // 2. diff content_hash.
             Map<String, String> dbHash = new HashMap<>();
             try (Session s = session()) {
-                s.run("MATCH (c:CompilationUnit) RETURN c.file_key AS k, c.content_hash AS h").list()
+                s.run("MATCH (c:JCompilationUnit) RETURN c.file_key AS k, c.content_hash AS h").list()
                         .forEach(rec -> dbHash.put(rec.get("k").asString(null), rec.get("h").asString(null)));
             }
             Set<String> changed = new HashSet<>();
@@ -143,8 +130,8 @@ public final class BoltWriter {
                 }
                 try (Session s = session()) {
                     s.writeTransaction(tx -> {
-                        tx.run("MATCH (x {_unit: $m})-[r]->() DELETE r", Values.parameters("m", unit));
-                        tx.run("MATCH (x {_unit: $m}) WHERE NOT coalesce(x.id, x.file_key) IN $keys DETACH DELETE x",
+                        tx.run("MATCH (x {_module: $m})-[r]->() DELETE r", Values.parameters("m", unit));
+                        tx.run("MATCH (x {_module: $m}) WHERE NOT coalesce(x.id, x.file_key) IN $keys DETACH DELETE x",
                                 Values.parameters("m", unit, "keys", keys));
                         return null;
                     });
@@ -166,7 +153,7 @@ public final class BoltWriter {
             if (fullRun) {
                 List<String> present = new ArrayList<>(byUnit.keySet());
                 try (Session s = session()) {
-                    long pruned = s.run("MATCH (c:CompilationUnit) WHERE NOT c.file_key IN $present "
+                    long pruned = s.run("MATCH (c:JCompilationUnit) WHERE NOT c.file_key IN $present "
                                     + "OPTIONAL MATCH (c)-" + CypherWriter.DESCENDANTS + "->(x) "
                                     + "DETACH DELETE x, c RETURN count(c) AS pruned",
                             Values.parameters("present", present)).single().get("pruned").asLong(0);
@@ -233,7 +220,7 @@ public final class BoltWriter {
 
         private static String hashOf(List<NodeRow> nodes, String fileKey) {
             for (NodeRow n : nodes) {
-                if (n.labels.get(0).equals("CompilationUnit") && n.value.equals(fileKey)) {
+                if (n.labels.get(0).equals("JCompilationUnit") && n.value.equals(fileKey)) {
                     Object h = n.props.get("content_hash");
                     return h instanceof String ? (String) h : null;
                 }

@@ -95,12 +95,12 @@ public final class RowBuilder {
     }
 
     /**
-     * An edge to a {@code :Symbol} target that may be external/library code not present in the
-     * graph. Deferred and kept only if the target id was actually emitted as a node — so EXTENDS /
-     * IMPLEMENTS / RESOLVES_TO / CALLS never dangle.
+     * An edge to a {@code :JSymbol} target that may be external/library code not present in the
+     * graph. Deferred and kept only if the target id was actually emitted as a node — so J_EXTENDS /
+     * J_IMPLEMENTS / J_RESOLVES_TO / J_CALLS never dangle.
      */
     public void edgeToSymbol(String type, NodeRef from, String targetId, Map<String, Object> props) {
-        deferred.add(new EdgeRow(type, from, new NodeRef("Symbol", "id", targetId), props));
+        deferred.add(new EdgeRow(type, from, new NodeRef("JSymbol", "id", targetId), props));
     }
 
     public void edgeToSymbol(String type, NodeRef from, String targetId) {

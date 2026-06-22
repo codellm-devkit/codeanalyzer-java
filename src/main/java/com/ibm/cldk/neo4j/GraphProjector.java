@@ -16,12 +16,15 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.ibm.cldk.entities.CRUDOperation;
+import com.ibm.cldk.entities.CRUDQuery;
 import com.ibm.cldk.entities.CallSite;
 import com.ibm.cldk.entities.Callable;
 import com.ibm.cldk.entities.Comment;
 import com.ibm.cldk.entities.EnumConstant;
 import com.ibm.cldk.entities.Field;
 import com.ibm.cldk.entities.Import;
+import com.ibm.cldk.entities.InitializationBlock;
 import com.ibm.cldk.entities.JavaCompilationUnit;
 import com.ibm.cldk.entities.ParameterInCallable;
 import com.ibm.cldk.entities.RecordComponent;
@@ -45,14 +48,18 @@ import java.util.stream.Collectors;
  * ({@link CypherWriter} snapshot / {@link BoltWriter} incremental) consume the returned
  * {@link GraphRows}.
  *
- * <p>Modelling decisions (mirrors the codeanalyzer-typescript Neo4j projection):
+ * <p>Modelling decisions (mirrors the codeanalyzer-typescript Neo4j projection; all node labels are
+ * {@code J}-prefixed and relationship types {@code J_}-prefixed so a Java graph can share a Neo4j
+ * database with the Python/TypeScript backends without colliding):
  * <ul>
- *   <li>{@code Type} and {@code Callable} carry a shared {@code :Symbol} label (the global-identity
+ *   <li>{@code JType} and {@code JCallable} carry a shared {@code :JSymbol} label (the global-identity
  *       / MERGE key); their {@code id} is the FQN (types) or {@code <fqn>#<signature>} (callables).</li>
- *   <li>call sites, fields, parameters, variables, enum constants and record components are
- *       first-class nodes; annotations are shared {@code :Annotation} nodes (like TS decorators).</li>
- *   <li>entrypoints are a marker label ({@code :Entrypoint}) on the owning callable/type.</li>
- *   <li>every project-owned node carries an internal {@code _unit} provenance prop, so the
+ *   <li>call sites, fields, parameters, variables, enum constants, record components, initialization
+ *       blocks, CRUD operations/queries and comments are all first-class nodes (the graph is a
+ *       lossless projection of the IR); annotations are shared {@code :JAnnotation} nodes (like TS
+ *       decorators) in addition to the {@code annotations} string array on each owner.</li>
+ *   <li>entrypoints are a marker label ({@code :JEntrypoint}) on the owning callable/type.</li>
+ *   <li>every project-owned node carries an internal {@code _module} provenance prop, so the
  *       incremental writer can delete exactly what a re-analyzed compilation unit previously emitted.</li>
  * </ul>
  */
@@ -65,20 +72,20 @@ public final class GraphProjector {
     /**
      * @param symbolTable file path → {@link JavaCompilationUnit} (the {@code symbol_table} map).
      * @param callGraph   the {@code call_graph} array (level 2), or {@code null} at level 1.
-     * @param appName     logical application name for the {@code :Application} anchor.
+     * @param appName     logical application name for the {@code :JApplication} anchor.
      */
     public static GraphRows project(Map<String, JavaCompilationUnit> symbolTable, JsonArray callGraph, String appName) {
         RowBuilder b = new RowBuilder();
 
-        NodeRef app = b.node(Collections.singletonList("Application"), "name", appName,
+        NodeRef app = b.node(Collections.singletonList("JApplication"), "name", appName,
                 map("schema_version", SchemaCatalog.SCHEMA_VERSION, "name", appName));
 
         for (Map.Entry<String, JavaCompilationUnit> e : symbolTable.entrySet()) {
             String fileKey = e.getKey();
             JavaCompilationUnit cu = e.getValue();
-            NodeRef cuRef = b.node(Collections.singletonList("CompilationUnit"), "file_key", fileKey,
+            NodeRef cuRef = b.node(Collections.singletonList("JCompilationUnit"), "file_key", fileKey,
                     compilationUnitProps(cu, fileKey));
-            b.edge("HAS_UNIT", app, cuRef);
+            b.edge("J_HAS_UNIT", app, cuRef);
             projectCompilationUnit(b, fileKey, cuRef, cu);
         }
 
@@ -103,7 +110,7 @@ public final class GraphProjector {
         // Per-type nodes; nested types hang off their parent (HAS_NESTED_TYPE), top-level off the unit.
         Map<String, NodeRef> typeRefs = new java.util.HashMap<>();
         for (Map.Entry<String, Type> te : types.entrySet()) {
-            typeRefs.put(te.getKey(), b.node(symbolLabels("Type", te.getValue().isEntrypointClass()), "id",
+            typeRefs.put(te.getKey(), b.node(symbolLabels("JType", te.getValue().isEntrypointClass()), "id",
                     te.getKey(), typeProps(te.getValue(), te.getKey(), fileKey)));
         }
 
@@ -114,9 +121,9 @@ public final class GraphProjector {
 
             String parent = type.getParentType();
             if (parent != null && typeKeys.contains(parent)) {
-                b.edge("HAS_NESTED_TYPE", typeRefs.get(parent), typeRef);
+                b.edge("J_HAS_NESTED_TYPE", typeRefs.get(parent), typeRef);
             } else {
-                b.edge("DECLARES_TYPE", cuRef, typeRef);
+                b.edge("J_DECLARES_TYPE", cuRef, typeRef);
             }
 
             projectTypeBody(b, fileKey, fqn, typeRef, type);
@@ -128,6 +135,8 @@ public final class GraphProjector {
                 projectImport(b, cuRef, im, typeKeys);
             }
         }
+
+        projectComments(b, cuRef, cu.getComments(), fileKey);
     }
 
     private static void projectImport(RowBuilder b, NodeRef cuRef, Import im, Set<String> typeKeys) {
@@ -137,14 +146,14 @@ public final class GraphProjector {
         }
         Map<String, Object> props = map("is_static", im.isStatic(), "is_wildcard", im.isWildcard());
         if (!im.isWildcard() && typeKeys.contains(path)) {
-            b.edgeToSymbol("IMPORTS", cuRef, path, props);
+            b.edgeToSymbol("J_IMPORTS", cuRef, path, props);
             return;
         }
         // Otherwise model the imported package: the path's package portion (strip the trailing class).
         String pkg = im.isWildcard() ? path : packageOf(path);
         if (pkg != null && !pkg.isEmpty()) {
-            NodeRef pkgRef = b.node(Collections.singletonList("Package"), "name", pkg, map("name", pkg));
-            b.edge("IMPORTS", cuRef, pkgRef, props);
+            NodeRef pkgRef = b.node(Collections.singletonList("JPackage"), "name", pkg, map("name", pkg));
+            b.edge("J_IMPORTS", cuRef, pkgRef, props);
         }
     }
 
@@ -157,10 +166,10 @@ public final class GraphProjector {
             annotate(b, typeRef, s);
         }
         for (String s : safe(type.getExtendsList())) {
-            b.edgeToSymbol("EXTENDS", typeRef, s);
+            b.edgeToSymbol("J_EXTENDS", typeRef, s);
         }
         for (String s : safe(type.getImplementsList())) {
-            b.edgeToSymbol("IMPLEMENTS", typeRef, s);
+            b.edgeToSymbol("J_IMPLEMENTS", typeRef, s);
         }
 
         if (type.getCallableDeclarations() != null) {
@@ -177,14 +186,21 @@ public final class GraphProjector {
         for (RecordComponent rc : safe(type.getRecordComponents())) {
             projectRecordComponent(b, fileKey, fqn, typeRef, rc);
         }
+        List<InitializationBlock> initBlocks = type.getInitializationBlocks();
+        if (initBlocks != null) {
+            for (int i = 0; i < initBlocks.size(); i++) {
+                projectInitializationBlock(b, fileKey, fqn, typeRef, initBlocks.get(i), i);
+            }
+        }
+        projectComments(b, typeRef, type.getComments(), fileKey);
     }
 
     private static void projectCallable(RowBuilder b, String fileKey, String ownerFqn, NodeRef owner,
             Callable c, String mapKey) {
         String signature = c.getSignature() != null ? c.getSignature() : mapKey;
         String id = ownerFqn + "#" + signature;
-        NodeRef ref = b.node(symbolLabels("Callable", c.isEntrypoint()), "id", id, callableProps(c, id, signature, fileKey));
-        b.edge("HAS_CALLABLE", owner, ref);
+        NodeRef ref = b.node(symbolLabels("JCallable", c.isEntrypoint()), "id", id, callableProps(c, id, signature, fileKey));
+        b.edge("J_HAS_CALLABLE", owner, ref);
 
         for (String s : safe(c.getAnnotations())) {
             annotate(b, ref, s);
@@ -202,86 +218,187 @@ public final class GraphProjector {
         for (VariableDeclaration v : safe(c.getVariableDeclarations())) {
             projectVariable(b, fileKey, id, ref, v);
         }
+        List<CRUDOperation> crudOps = c.getCrudOperations();
+        if (crudOps != null) {
+            for (int i = 0; i < crudOps.size(); i++) {
+                projectCrudOperation(b, fileKey, id, ref, crudOps.get(i), i);
+            }
+        }
+        List<CRUDQuery> crudQueries = c.getCrudQueries();
+        if (crudQueries != null) {
+            for (int i = 0; i < crudQueries.size(); i++) {
+                projectCrudQuery(b, fileKey, id, ref, crudQueries.get(i), i);
+            }
+        }
+        projectComments(b, ref, c.getComments(), fileKey);
     }
 
     private static void projectParameter(RowBuilder b, String fileKey, String callableId, NodeRef owner,
             ParameterInCallable p, int index) {
         String id = callableId + "#param#" + index;
-        NodeRef ref = b.node(Collections.singletonList("Parameter"), "id", id, RowBuilder.prune(
+        NodeRef ref = b.node(Collections.singletonList("JParameter"), "id", id, RowBuilder.prune(
                 map("id", id, "name", p.getName(), "type", p.getType(),
                         "annotations", strList(p.getAnnotations()), "modifiers", strList(p.getModifiers()),
                         "start_line", asLong(p.getStartLine()), "end_line", asLong(p.getEndLine()),
-                        "_unit", fileKey)));
-        b.edge("HAS_PARAMETER", owner, ref);
+                        "start_column", asLong(p.getStartColumn()), "end_column", asLong(p.getEndColumn()),
+                        "_module", fileKey)));
+        b.edge("J_HAS_PARAMETER", owner, ref);
     }
 
     private static void projectCallSite(RowBuilder b, String fileKey, String callableId, NodeRef owner, CallSite s) {
         String id = callableId + "@" + s.getStartLine() + ":" + s.getStartColumn()
                 + "-" + s.getEndLine() + ":" + s.getEndColumn();
-        NodeRef ref = b.node(Collections.singletonList("CallSite"), "id", id, RowBuilder.prune(
+        NodeRef ref = b.node(Collections.singletonList("JCallSite"), "id", id, RowBuilder.prune(
                 map("id", id, "method_name", s.getMethodName(), "receiver_expr", s.getReceiverExpr(),
                         "receiver_type", s.getReceiverType(), "return_type", s.getReturnType(),
                         "callee_signature", s.getCalleeSignature(), "argument_types", strList(s.getArgumentTypes()),
+                        "argument_expr", strList(s.getArgumentExpr()),
                         "is_static_call", s.isStaticCall(), "is_constructor_call", s.isConstructorCall(),
                         "is_public", s.isPublic(), "is_private", s.isPrivate(), "is_protected", s.isProtected(),
+                        "is_unspecified", s.isUnspecified(),
                         "start_line", asLong(s.getStartLine()), "start_column", asLong(s.getStartColumn()),
                         "end_line", asLong(s.getEndLine()), "end_column", asLong(s.getEndColumn()),
-                        "_unit", fileKey)));
-        b.edge("HAS_CALLSITE", owner, ref);
+                        "docstring", docstringOf(s.getComment()), "_module", fileKey)));
+        b.edge("J_HAS_CALLSITE", owner, ref);
         if (s.getCalleeSignature() != null && !s.getCalleeSignature().isEmpty()) {
-            // Gated: kept only if the callee was emitted as a Callable node.
-            b.edgeToSymbol("RESOLVES_TO", ref, s.getCalleeSignature());
+            // Gated: kept only if the callee was emitted as a JCallable node.
+            b.edgeToSymbol("J_RESOLVES_TO", ref, s.getCalleeSignature());
         }
+        projectComment(b, ref, s.getComment(), fileKey);
+        projectCrudOperation(b, fileKey, id, ref, s.getCrudOperation(), 0);
+        projectCrudQuery(b, fileKey, id, ref, s.getCrudQuery(), 0);
     }
 
     private static void projectVariable(RowBuilder b, String fileKey, String callableId, NodeRef owner,
             VariableDeclaration v) {
         String id = callableId + "#var#" + v.getName() + "@" + v.getStartLine();
-        NodeRef ref = b.node(Collections.singletonList("Variable"), "id", id, RowBuilder.prune(
+        NodeRef ref = b.node(Collections.singletonList("JVariable"), "id", id, RowBuilder.prune(
                 map("id", id, "name", v.getName(), "type", v.getType(), "initializer", v.getInitializer(),
                         "start_line", asLong(v.getStartLine()), "end_line", asLong(v.getEndLine()),
-                        "_unit", fileKey)));
-        b.edge("DECLARES_VAR", owner, ref);
+                        "start_column", asLong(v.getStartColumn()), "end_column", asLong(v.getEndColumn()),
+                        "docstring", docstringOf(v.getComment()), "_module", fileKey)));
+        b.edge("J_DECLARES_VAR", owner, ref);
+        projectComment(b, ref, v.getComment(), fileKey);
     }
 
     private static void projectField(RowBuilder b, String fileKey, String ownerFqn, NodeRef owner, Field f) {
         String id = ownerFqn + "#field#" + f.getName();
-        NodeRef ref = b.node(Collections.singletonList("Field"), "id", id, RowBuilder.prune(
+        NodeRef ref = b.node(Collections.singletonList("JField"), "id", id, RowBuilder.prune(
                 map("id", id, "name", f.getName(), "type", f.getType(),
                         "modifiers", strList(f.getModifiers()), "annotations", strList(f.getAnnotations()),
                         "variables", strList(f.getVariables()),
+                        "variable_initializers_json", variableInitializersJson(f.getVariableInitializers()),
                         "start_line", asLong(f.getStartLine()), "end_line", asLong(f.getEndLine()),
-                        "docstring", docstringOf(f.getComment()), "_unit", fileKey)));
-        b.edge("HAS_FIELD", owner, ref);
+                        "docstring", docstringOf(f.getComment()), "_module", fileKey)));
+        b.edge("J_HAS_FIELD", owner, ref);
         for (String s : safe(f.getAnnotations())) {
             annotate(b, ref, s);
         }
+        projectComment(b, ref, f.getComment(), fileKey);
     }
 
     private static void projectEnumConstant(RowBuilder b, String fileKey, String ownerFqn, NodeRef owner,
             EnumConstant ec) {
         String id = ownerFqn + "#enum#" + ec.getName();
-        NodeRef ref = b.node(Collections.singletonList("EnumConstant"), "id", id, RowBuilder.prune(
-                map("id", id, "name", ec.getName(), "arguments", strList(ec.getArguments()), "_unit", fileKey)));
-        b.edge("HAS_ENUM_CONSTANT", owner, ref);
+        NodeRef ref = b.node(Collections.singletonList("JEnumConstant"), "id", id, RowBuilder.prune(
+                map("id", id, "name", ec.getName(), "arguments", strList(ec.getArguments()), "_module", fileKey)));
+        b.edge("J_HAS_ENUM_CONSTANT", owner, ref);
     }
 
     private static void projectRecordComponent(RowBuilder b, String fileKey, String ownerFqn, NodeRef owner,
             RecordComponent rc) {
         String id = ownerFqn + "#rec#" + rc.getName();
-        NodeRef ref = b.node(Collections.singletonList("RecordComponent"), "id", id, RowBuilder.prune(
+        NodeRef ref = b.node(Collections.singletonList("JRecordComponent"), "id", id, RowBuilder.prune(
                 map("id", id, "name", rc.getName(), "type", rc.getType(),
                         "modifiers", strList(rc.getModifiers()), "annotations", strList(rc.getAnnotations()),
-                        "is_var_args", rc.isVarArgs(), "_unit", fileKey)));
-        b.edge("HAS_RECORD_COMPONENT", owner, ref);
+                        "default_value", rc.getDefaultValue() == null ? null : String.valueOf(rc.getDefaultValue()),
+                        "is_var_args", rc.isVarArgs(),
+                        "docstring", docstringOf(rc.getComment()), "_module", fileKey)));
+        b.edge("J_HAS_RECORD_COMPONENT", owner, ref);
+        projectComment(b, ref, rc.getComment(), fileKey);
     }
 
     private static void annotate(RowBuilder b, NodeRef on, String annotation) {
         if (annotation == null || annotation.isEmpty()) {
             return;
         }
-        NodeRef ann = b.node(Collections.singletonList("Annotation"), "name", annotation, map("name", annotation));
-        b.edge("ANNOTATED_BY", on, ann);
+        NodeRef ann = b.node(Collections.singletonList("JAnnotation"), "name", annotation, map("name", annotation));
+        b.edge("J_ANNOTATED_BY", on, ann);
+    }
+
+    // ----------------------------------------------------------------------------------------------
+    // Initialization blocks, CRUD, comments (first-class nodes — full IR fidelity)
+    // ----------------------------------------------------------------------------------------------
+
+    private static void projectInitializationBlock(RowBuilder b, String fileKey, String ownerFqn, NodeRef owner,
+            InitializationBlock ib, int index) {
+        if (ib == null) {
+            return;
+        }
+        String id = ownerFqn + "#init#" + index;
+        NodeRef ref = b.node(Collections.singletonList("JInitializationBlock"), "id", id, RowBuilder.prune(
+                map("id", id, "file_path", ib.getFilePath(), "code", ib.getCode(),
+                        "annotations", strList(ib.getAnnotations()), "thrown_exceptions", strList(ib.getThrownExceptions()),
+                        "referenced_types", strList(ib.getReferencedTypes()), "accessed_fields", strList(ib.getAccessedFields()),
+                        "is_static", ib.isStatic(), "cyclomatic_complexity", asLong(ib.getCyclomaticComplexity()),
+                        "start_line", asLong(ib.getStartLine()), "end_line", asLong(ib.getEndLine()),
+                        "docstring", docstringOf(ib.getComments()), "_module", fileKey)));
+        b.edge("J_HAS_INIT_BLOCK", owner, ref);
+        projectComments(b, ref, ib.getComments(), fileKey);
+        for (CallSite cs : safe(ib.getCallSites())) {
+            projectCallSite(b, fileKey, id, ref, cs);
+        }
+        for (VariableDeclaration v : safe(ib.getVariableDeclarations())) {
+            projectVariable(b, fileKey, id, ref, v);
+        }
+    }
+
+    private static void projectCrudOperation(RowBuilder b, String fileKey, String ownerId, NodeRef owner,
+            CRUDOperation op, int index) {
+        if (op == null) {
+            return;
+        }
+        String id = ownerId + "#crudop#" + index;
+        NodeRef ref = b.node(Collections.singletonList("JCrudOperation"), "id", id, RowBuilder.prune(
+                map("id", id, "line_number", asLong(op.getLineNumber()),
+                        "operation_type", enumName(op.getOperationType()),
+                        "target_table", op.getTargetTable(), "involved_columns", strList(op.getInvolvedColumns()),
+                        "condition", op.getCondition(), "joined_tables", strList(op.getJoinedTables()),
+                        "_module", fileKey)));
+        b.edge("J_HAS_CRUD_OPERATION", owner, ref);
+    }
+
+    private static void projectCrudQuery(RowBuilder b, String fileKey, String ownerId, NodeRef owner,
+            CRUDQuery q, int index) {
+        if (q == null) {
+            return;
+        }
+        String id = ownerId + "#crudq#" + index;
+        NodeRef ref = b.node(Collections.singletonList("JCrudQuery"), "id", id, RowBuilder.prune(
+                map("id", id, "line_number", asLong(q.getLineNumber()),
+                        "query_type", enumName(q.getQueryType()),
+                        "query_arguments", strList(q.getQueryArguments()), "_module", fileKey)));
+        b.edge("J_HAS_CRUD_QUERY", owner, ref);
+    }
+
+    private static void projectComments(RowBuilder b, NodeRef owner, List<Comment> comments, String fileKey) {
+        for (Comment c : safe(comments)) {
+            projectComment(b, owner, c, fileKey);
+        }
+    }
+
+    private static void projectComment(RowBuilder b, NodeRef owner, Comment c, String fileKey) {
+        if (c == null || c.getContent() == null) {
+            return;
+        }
+        String id = owner.value + "#comment@" + c.getStartLine() + ":" + c.getStartColumn()
+                + "-" + c.getEndLine() + ":" + c.getEndColumn();
+        NodeRef ref = b.node(Collections.singletonList("JComment"), "id", id, RowBuilder.prune(
+                map("id", id, "content", c.getContent(), "is_javadoc", c.isJavadoc(),
+                        "start_line", asLong(c.getStartLine()), "start_column", asLong(c.getStartColumn()),
+                        "end_line", asLong(c.getEndLine()), "end_column", asLong(c.getEndColumn()),
+                        "_module", fileKey)));
+        b.edge("J_HAS_COMMENT", owner, ref);
     }
 
     // ----------------------------------------------------------------------------------------------
@@ -301,10 +418,12 @@ public final class GraphProjector {
             }
             Map<String, Object> props = RowBuilder.prune(map(
                     "type", str(edge, "type"),
-                    "weight", asLong(parseIntOrNull(str(edge, "weight")))));
+                    "weight", asLong(parseIntOrNull(str(edge, "weight"))),
+                    "source_kind", str(edge, "source_kind"),
+                    "destination_kind", str(edge, "destination_kind")));
             // Gated against the symbol table: kept only if both callables were emitted as nodes.
-            b.edgeIfBothResolved("CALLS",
-                    new NodeRef("Symbol", "id", from), new NodeRef("Symbol", "id", to), props);
+            b.edgeIfBothResolved("J_CALLS",
+                    new NodeRef("JSymbol", "id", from), new NodeRef("JSymbol", "id", to), props);
         }
     }
 
@@ -332,7 +451,8 @@ public final class GraphProjector {
                 "package_name", cu.getPackageName(),
                 "content_hash", contentHash(cu),
                 "comment_count", (long) commentCount,
-                "_unit", fileKey));
+                "is_modified", cu.isModified(),
+                "_module", fileKey));
     }
 
     private static Map<String, Object> typeProps(Type t, String fqn, String fileKey) {
@@ -353,7 +473,7 @@ public final class GraphProjector {
                 "is_entrypoint_class", t.isEntrypointClass(),
                 "parent_type", t.getParentType(),
                 "docstring", docstringOf(t.getComments()),
-                "_unit", fileKey);
+                "_module", fileKey);
         return RowBuilder.prune(p);
     }
 
@@ -379,7 +499,7 @@ public final class GraphProjector {
                 "is_implicit", c.isImplicit(),
                 "is_entrypoint", c.isEntrypoint(),
                 "docstring", docstringOf(c.getComments()),
-                "_unit", fileKey);
+                "_module", fileKey);
         return RowBuilder.prune(p);
     }
 
@@ -389,9 +509,9 @@ public final class GraphProjector {
 
     private static List<String> symbolLabels(String specific, boolean entrypoint) {
         if (entrypoint) {
-            return Arrays.asList("Symbol", specific, "Entrypoint");
+            return Arrays.asList("JSymbol", specific, "JEntrypoint");
         }
-        return Arrays.asList("Symbol", specific);
+        return Arrays.asList("JSymbol", specific);
     }
 
     private static String typeKind(Type t) {
@@ -481,6 +601,19 @@ public final class GraphProjector {
 
     private static Long asLong(int i) {
         return (long) i;
+    }
+
+    /** Enum → its {@code name()} (via toString), or null. Avoids importing the CRUD enum types. */
+    private static String enumName(Object e) {
+        return e == null ? null : e.toString();
+    }
+
+    /** Serialize a field's per-variable initializer map to a JSON string (Neo4j has no map type), or null. */
+    private static String variableInitializersJson(Map<String, String> initializers) {
+        if (initializers == null || initializers.isEmpty()) {
+            return null;
+        }
+        return GSON.toJson(initializers);
     }
 
     private static String str(JsonObject o, String key) {

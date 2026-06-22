@@ -105,18 +105,20 @@ Analyze java application.
   -b, --build-cmd=<build>    Custom build command. Defaults to auto build.
       --no-build             Do not build your application (use if already built).
   -a, --analysis-level=<n>   Level of analysis: 1 (symbol table) or 2 (call graph).
-                               Default: 1. Level 2 adds CALLS edges to the graph.
+                               Default: 1. Level 2 adds J_CALLS edges to the graph.
   -t, --target-files=<f>...  Restrict analysis to specific files (incremental).
       --emit=<emit>          Output target: json (analysis.json, default) |
                                neo4j (graph.cypher or live Bolt push) |
-                               schema (the Neo4j schema.json contract).
-      --app-name=<name>      Logical application name for the graph :Application
+                               schema (the Neo4j schema.neo4j.json contract).
+      --app-name=<name>      Logical application name for the graph :JApplication
                                anchor (default: input dir name).
       --neo4j-uri=<uri>      Push the graph to a live Neo4j over Bolt (incremental);
-                               omit to write graph.cypher.
-      --neo4j-user=<user>    Neo4j username (default: neo4j).
-      --neo4j-password=<pw>  Neo4j password (default: neo4j).
-      --neo4j-database=<db>  Neo4j database name (default: server default).
+                               omit to write graph.cypher. Falls back to the
+                               NEO4J_URI environment variable.
+      --neo4j-user=<user>    Neo4j username (env: NEO4J_USERNAME, default: neo4j).
+      --neo4j-password=<pw>  Neo4j password (env: NEO4J_PASSWORD, default: neo4j).
+      --neo4j-database=<db>  Neo4j database name (env: NEO4J_DATABASE, default:
+                               server default).
   -v, --verbose              Print logs to console.
   -h, --help                 Show this help message and exit.
   -V, --version              Print version information and exit.
@@ -188,14 +190,20 @@ This will produce print the SDG on the console. Explore other flags to save the 
 ## 4. Neo4j graph output
 
 `codeanalyzer` can project the analysis IR into a [Neo4j](https://neo4j.com/) property graph instead
-of `analysis.json`. The graph models the same information — compilation units, types, callables,
-fields, parameters, call sites, variables, enum constants, record components, annotations, packages —
-as first-class nodes and relationships, and (at `-a 2`) adds `CALLS` edges from the call graph.
+of `analysis.json`. The graph is a **lossless** projection of the IR: compilation units, types,
+callables, fields, parameters, call sites, variables, enum constants, record components,
+initialization blocks, CRUD operations/queries, comments, annotations and packages are all
+first-class nodes and relationships, and (at `-a 2`) it adds `J_CALLS` edges from the call graph.
+Every field of the Lombok entity model is represented (scalars as node properties — maps such as a
+field's per-variable initializers are kept as a `*_json` property since Neo4j has no map type;
+comments are `:JComment` nodes in addition to the convenience `docstring` property).
 
 The full contract (node labels, their keys and typed properties, relationship types and endpoints,
 plus the constraint/index DDL) lives in [`schema.neo4j.json`](./schema.neo4j.json) and is visualized
-in [`neo4j-schema.drawio`](./neo4j-schema.drawio). `SCHEMA_VERSION` is stamped onto the
-`:Application` node of every emitted graph.
+in [`neo4j-schema.drawio`](./neo4j-schema.drawio). All node labels are `J`-prefixed and relationship
+types `J_`-prefixed (e.g. `:JType`, `:JCallable`, `J_CALLS`) so a Java graph can share a Neo4j
+database with the Python (`Py*`/`PY_*`) and TypeScript (`TS*`/`TS_*`) backends without colliding.
+`SCHEMA_VERSION` is stamped onto the `:JApplication` node of every emitted graph.
 
 ### 4.1. Cypher snapshot (no database required)
 
@@ -223,7 +231,7 @@ compilation unit's `content_hash`, replaces just the changed units' subgraphs (i
 ### 4.3. Schema contract
 
 ```sh
-codeanalyzer --emit schema -o ./out   # → ./out/schema.json (no project analysis needed)
+codeanalyzer --emit schema -o ./out   # → ./out/schema.neo4j.json (no project analysis needed)
 codeanalyzer --emit schema            # → prints the contract to stdout
 ```
 

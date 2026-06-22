@@ -22,7 +22,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.ibm.cldk.entities.JavaCompilationUnit;
-import com.ibm.cldk.neo4j.BoltWriter;
+import com.ibm.cldk.neo4j.BoltConfig;
 import com.ibm.cldk.neo4j.Neo4jEmitter;
 import com.ibm.cldk.utils.BuildProject;
 import com.ibm.cldk.utils.Log;
@@ -96,24 +96,24 @@ public class CodeAnalyzer implements Runnable {
     private static boolean verbose = false;
 
     @Option(names = {
-            "--emit" }, description = "Output target: json (analysis.json, default) | neo4j (graph.cypher or live Bolt push) | schema (the Neo4j schema.json contract).")
+            "--emit" }, description = "Output target: json (analysis.json, default) | neo4j (graph.cypher or live Bolt push) | schema (the Neo4j schema.neo4j.json contract).")
     private static String emit = "json";
 
     @Option(names = {
-            "--app-name" }, description = "Logical application name for the graph :Application anchor (default: input dir name).")
+            "--app-name" }, description = "Logical application name for the graph :JApplication anchor (default: input dir name).")
     private static String appName;
 
     @Option(names = {
-            "--neo4j-uri" }, description = "Push the graph to a live Neo4j over Bolt (incremental); omit to write graph.cypher.")
+            "--neo4j-uri" }, description = "Push the graph to a live Neo4j over Bolt (incremental); omit to write graph.cypher. Falls back to the NEO4J_URI environment variable.")
     private static String neo4jUri;
 
-    @Option(names = { "--neo4j-user" }, description = "Neo4j username (default: neo4j).")
-    private static String neo4jUser = "neo4j";
+    @Option(names = { "--neo4j-user" }, description = "Neo4j username (env: NEO4J_USERNAME, default: neo4j).")
+    private static String neo4jUser;
 
-    @Option(names = { "--neo4j-password" }, description = "Neo4j password (default: neo4j).")
-    private static String neo4jPassword = "neo4j";
+    @Option(names = { "--neo4j-password" }, description = "Neo4j password (env: NEO4J_PASSWORD, default: neo4j).")
+    private static String neo4jPassword;
 
-    @Option(names = { "--neo4j-database" }, description = "Neo4j database name (default: server default).")
+    @Option(names = { "--neo4j-database" }, description = "Neo4j database name (env: NEO4J_DATABASE, default: server default).")
     private static String neo4jDatabase;
 
     private static final String outputFileName = "analysis.json";
@@ -133,6 +133,16 @@ public class CodeAnalyzer implements Runnable {
     public static void main(String[] args) {
         int exitCode = new CommandLine(new CodeAnalyzer()).execute(args);
         System.exit(exitCode);
+    }
+
+    /** First non-null, non-blank value among the candidates, or null if none qualify. */
+    private static String firstNonEmpty(String... candidates) {
+        for (String c : candidates) {
+            if (c != null && !c.trim().isEmpty()) {
+                return c;
+            }
+        }
+        return null;
     }
 
     @Override
@@ -248,9 +258,14 @@ public class CodeAnalyzer implements Runnable {
             JsonArray callGraph = combinedJsonObject.has("call_graph")
                     ? combinedJsonObject.getAsJsonArray("call_graph")
                     : null;
-            BoltWriter.BoltConfig bolt = neo4jUri == null
+            // Connection options resolve with precedence: CLI flag > NEO4J_* env var > default.
+            String uri = firstNonEmpty(neo4jUri, System.getenv("NEO4J_URI"));
+            BoltConfig bolt = uri == null
                     ? null
-                    : new BoltWriter.BoltConfig(neo4jUri, neo4jUser, neo4jPassword, neo4jDatabase);
+                    : new BoltConfig(uri,
+                            firstNonEmpty(neo4jUser, System.getenv("NEO4J_USERNAME"), "neo4j"),
+                            firstNonEmpty(neo4jPassword, System.getenv("NEO4J_PASSWORD"), "neo4j"),
+                            firstNonEmpty(neo4jDatabase, System.getenv("NEO4J_DATABASE")));
             Neo4jEmitter.emit(symbolTable, callGraph, appName, input, output, targetFiles != null, bolt);
             return;
         }

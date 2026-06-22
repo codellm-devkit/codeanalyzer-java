@@ -28,7 +28,7 @@ import java.util.Map;
  *
  * <p>{@code SCHEMA_VERSION} is the contract version: bump MAJOR on a breaking change (renamed/removed
  * label, relationship or key), MINOR on an additive change (new label/rel/property). It is stamped
- * onto the {@code :Application} node of every emitted graph so any consumer can detect a
+ * onto the {@code :JApplication} node of every emitted graph so any consumer can detect a
  * producer/consumer mismatch at runtime.
  */
 public final class SchemaCatalog {
@@ -38,7 +38,7 @@ public final class SchemaCatalog {
     public static final String SCHEMA_VERSION = "1.0.0";
 
     /** Labels layered onto a node in addition to its primary/specific label. */
-    public static final List<String> MARKER_LABELS = Arrays.asList("Entrypoint");
+    public static final List<String> MARKER_LABELS = Arrays.asList("JEntrypoint");
 
     public static final class NodeLabel {
         public final String label;
@@ -92,14 +92,15 @@ public final class SchemaCatalog {
     private static List<NodeLabel> buildNodeLabels() {
         List<NodeLabel> n = new ArrayList<>();
 
-        n.add(new NodeLabel("Application", "Application", "name",
+        n.add(new NodeLabel("JApplication", "JApplication", "name",
                 new P().put("name", "string").put("schema_version", "string").done()));
 
-        n.add(new NodeLabel("CompilationUnit", "CompilationUnit", "file_key",
+        n.add(new NodeLabel("JCompilationUnit", "JCompilationUnit", "file_key",
                 new P().put("file_key", "string").put("file_path", "string").put("package_name", "string")
-                        .put("content_hash", "string").put("comment_count", "integer").put("_unit", "string").done()));
+                        .put("content_hash", "string").put("comment_count", "integer").put("is_modified", "boolean")
+                        .put("_module", "string").done()));
 
-        n.add(new NodeLabel("Type", "Symbol", "id",
+        n.add(new NodeLabel("JType", "JSymbol", "id",
                 new P().put("id", "string").put("name", "string").put("fqn", "string").put("kind", "string")
                         .put("modifiers", "string[]").put("annotations", "string[]")
                         .put("extends_list", "string[]").put("implements_list", "string[]")
@@ -107,10 +108,11 @@ public final class SchemaCatalog {
                         .put("is_interface", "boolean").put("is_nested_type", "boolean")
                         .put("is_inner_class", "boolean").put("is_local_class", "boolean")
                         .put("is_entrypoint_class", "boolean").put("parent_type", "string")
-                        .put("docstring", "string").put("_unit", "string").done()));
+                        .put("docstring", "string").put("_module", "string").done()));
 
-        n.add(new NodeLabel("Callable", "Symbol", "id",
+        n.add(new NodeLabel("JCallable", "JSymbol", "id",
                 new P().put("id", "string").put("name", "string").put("signature", "string")
+                        .put("file_path", "string")
                         .put("declaration", "string").put("return_type", "string")
                         .put("modifiers", "string[]").put("annotations", "string[]")
                         .put("thrown_exceptions", "string[]").put("parameter_types", "string[]")
@@ -119,45 +121,76 @@ public final class SchemaCatalog {
                         .put("start_line", "integer").put("end_line", "integer")
                         .put("cyclomatic_complexity", "integer")
                         .put("is_constructor", "boolean").put("is_implicit", "boolean")
-                        .put("is_entrypoint", "boolean").put("docstring", "string").put("_unit", "string").done()));
+                        .put("is_entrypoint", "boolean").put("docstring", "string").put("_module", "string").done()));
 
-        n.add(new NodeLabel("Field", "Field", "id",
+        n.add(new NodeLabel("JField", "JField", "id",
                 new P().put("id", "string").put("name", "string").put("type", "string")
                         .put("modifiers", "string[]").put("annotations", "string[]").put("variables", "string[]")
+                        .put("variable_initializers_json", "string")
                         .put("start_line", "integer").put("end_line", "integer")
-                        .put("docstring", "string").put("_unit", "string").done()));
+                        .put("docstring", "string").put("_module", "string").done()));
 
-        n.add(new NodeLabel("Parameter", "Parameter", "id",
+        n.add(new NodeLabel("JParameter", "JParameter", "id",
                 new P().put("id", "string").put("name", "string").put("type", "string")
                         .put("annotations", "string[]").put("modifiers", "string[]")
-                        .put("start_line", "integer").put("end_line", "integer").put("_unit", "string").done()));
+                        .put("start_line", "integer").put("end_line", "integer")
+                        .put("start_column", "integer").put("end_column", "integer")
+                        .put("_module", "string").done()));
 
-        n.add(new NodeLabel("Variable", "Variable", "id",
+        n.add(new NodeLabel("JVariable", "JVariable", "id",
                 new P().put("id", "string").put("name", "string").put("type", "string")
                         .put("initializer", "string").put("start_line", "integer").put("end_line", "integer")
-                        .put("_unit", "string").done()));
+                        .put("start_column", "integer").put("end_column", "integer")
+                        .put("docstring", "string").put("_module", "string").done()));
 
-        n.add(new NodeLabel("CallSite", "CallSite", "id",
+        n.add(new NodeLabel("JCallSite", "JCallSite", "id",
                 new P().put("id", "string").put("method_name", "string").put("receiver_expr", "string")
                         .put("receiver_type", "string").put("return_type", "string")
                         .put("callee_signature", "string").put("argument_types", "string[]")
+                        .put("argument_expr", "string[]")
                         .put("is_static_call", "boolean").put("is_constructor_call", "boolean")
                         .put("is_public", "boolean").put("is_private", "boolean").put("is_protected", "boolean")
+                        .put("is_unspecified", "boolean")
                         .put("start_line", "integer").put("start_column", "integer")
-                        .put("end_line", "integer").put("end_column", "integer").put("_unit", "string").done()));
+                        .put("end_line", "integer").put("end_column", "integer")
+                        .put("docstring", "string").put("_module", "string").done()));
 
-        n.add(new NodeLabel("EnumConstant", "EnumConstant", "id",
+        n.add(new NodeLabel("JEnumConstant", "JEnumConstant", "id",
                 new P().put("id", "string").put("name", "string").put("arguments", "string[]")
-                        .put("_unit", "string").done()));
+                        .put("_module", "string").done()));
 
-        n.add(new NodeLabel("RecordComponent", "RecordComponent", "id",
+        n.add(new NodeLabel("JRecordComponent", "JRecordComponent", "id",
                 new P().put("id", "string").put("name", "string").put("type", "string")
                         .put("modifiers", "string[]").put("annotations", "string[]")
-                        .put("is_var_args", "boolean").put("_unit", "string").done()));
+                        .put("default_value", "string").put("is_var_args", "boolean")
+                        .put("docstring", "string").put("_module", "string").done()));
 
-        n.add(new NodeLabel("Package", "Package", "name", new P().put("name", "string").done()));
+        n.add(new NodeLabel("JInitializationBlock", "JInitializationBlock", "id",
+                new P().put("id", "string").put("file_path", "string").put("code", "string")
+                        .put("annotations", "string[]").put("thrown_exceptions", "string[]")
+                        .put("referenced_types", "string[]").put("accessed_fields", "string[]")
+                        .put("is_static", "boolean").put("cyclomatic_complexity", "integer")
+                        .put("start_line", "integer").put("end_line", "integer")
+                        .put("docstring", "string").put("_module", "string").done()));
 
-        n.add(new NodeLabel("Annotation", "Annotation", "name", new P().put("name", "string").done()));
+        n.add(new NodeLabel("JCrudOperation", "JCrudOperation", "id",
+                new P().put("id", "string").put("line_number", "integer").put("operation_type", "string")
+                        .put("target_table", "string").put("involved_columns", "string[]")
+                        .put("condition", "string").put("joined_tables", "string[]")
+                        .put("_module", "string").done()));
+
+        n.add(new NodeLabel("JCrudQuery", "JCrudQuery", "id",
+                new P().put("id", "string").put("line_number", "integer").put("query_type", "string")
+                        .put("query_arguments", "string[]").put("_module", "string").done()));
+
+        n.add(new NodeLabel("JComment", "JComment", "id",
+                new P().put("id", "string").put("content", "string").put("is_javadoc", "boolean")
+                        .put("start_line", "integer").put("start_column", "integer")
+                        .put("end_line", "integer").put("end_column", "integer").put("_module", "string").done()));
+
+        n.add(new NodeLabel("JPackage", "JPackage", "name", new P().put("name", "string").done()));
+
+        n.add(new NodeLabel("JAnnotation", "JAnnotation", "name", new P().put("name", "string").done()));
 
         return n;
     }
@@ -166,24 +199,36 @@ public final class SchemaCatalog {
         List<RelType> r = new ArrayList<>();
         Map<String, String> none = new LinkedHashMap<>();
 
-        r.add(new RelType("HAS_UNIT", Arrays.asList("Application"), Arrays.asList("CompilationUnit"), none));
-        r.add(new RelType("DECLARES_TYPE", Arrays.asList("CompilationUnit"), Arrays.asList("Type"), none));
-        r.add(new RelType("HAS_NESTED_TYPE", Arrays.asList("Type"), Arrays.asList("Type"), none));
-        r.add(new RelType("HAS_CALLABLE", Arrays.asList("Type"), Arrays.asList("Callable"), none));
-        r.add(new RelType("HAS_FIELD", Arrays.asList("Type"), Arrays.asList("Field"), none));
-        r.add(new RelType("HAS_PARAMETER", Arrays.asList("Callable"), Arrays.asList("Parameter"), none));
-        r.add(new RelType("HAS_CALLSITE", Arrays.asList("Callable"), Arrays.asList("CallSite"), none));
-        r.add(new RelType("DECLARES_VAR", Arrays.asList("Callable"), Arrays.asList("Variable"), none));
-        r.add(new RelType("HAS_ENUM_CONSTANT", Arrays.asList("Type"), Arrays.asList("EnumConstant"), none));
-        r.add(new RelType("HAS_RECORD_COMPONENT", Arrays.asList("Type"), Arrays.asList("RecordComponent"), none));
-        r.add(new RelType("EXTENDS", Arrays.asList("Type"), Arrays.asList("Type"), none));
-        r.add(new RelType("IMPLEMENTS", Arrays.asList("Type"), Arrays.asList("Type"), none));
-        r.add(new RelType("ANNOTATED_BY", Arrays.asList("Type", "Callable", "Field"), Arrays.asList("Annotation"), none));
-        r.add(new RelType("IMPORTS", Arrays.asList("CompilationUnit"), Arrays.asList("Type", "Package"),
+        r.add(new RelType("J_HAS_UNIT", Arrays.asList("JApplication"), Arrays.asList("JCompilationUnit"), none));
+        r.add(new RelType("J_DECLARES_TYPE", Arrays.asList("JCompilationUnit"), Arrays.asList("JType"), none));
+        r.add(new RelType("J_HAS_NESTED_TYPE", Arrays.asList("JType"), Arrays.asList("JType"), none));
+        r.add(new RelType("J_HAS_CALLABLE", Arrays.asList("JType"), Arrays.asList("JCallable"), none));
+        r.add(new RelType("J_HAS_FIELD", Arrays.asList("JType"), Arrays.asList("JField"), none));
+        r.add(new RelType("J_HAS_PARAMETER", Arrays.asList("JCallable"), Arrays.asList("JParameter"), none));
+        r.add(new RelType("J_HAS_CALLSITE", Arrays.asList("JCallable", "JInitializationBlock"),
+                Arrays.asList("JCallSite"), none));
+        r.add(new RelType("J_DECLARES_VAR", Arrays.asList("JCallable", "JInitializationBlock"),
+                Arrays.asList("JVariable"), none));
+        r.add(new RelType("J_HAS_ENUM_CONSTANT", Arrays.asList("JType"), Arrays.asList("JEnumConstant"), none));
+        r.add(new RelType("J_HAS_RECORD_COMPONENT", Arrays.asList("JType"), Arrays.asList("JRecordComponent"), none));
+        r.add(new RelType("J_HAS_INIT_BLOCK", Arrays.asList("JType"), Arrays.asList("JInitializationBlock"), none));
+        r.add(new RelType("J_EXTENDS", Arrays.asList("JType"), Arrays.asList("JType"), none));
+        r.add(new RelType("J_IMPLEMENTS", Arrays.asList("JType"), Arrays.asList("JType"), none));
+        r.add(new RelType("J_ANNOTATED_BY", Arrays.asList("JType", "JCallable", "JField"), Arrays.asList("JAnnotation"), none));
+        r.add(new RelType("J_IMPORTS", Arrays.asList("JCompilationUnit"), Arrays.asList("JType", "JPackage"),
                 new P().put("is_static", "boolean").put("is_wildcard", "boolean").done()));
-        r.add(new RelType("RESOLVES_TO", Arrays.asList("CallSite"), Arrays.asList("Callable"), none));
-        r.add(new RelType("CALLS", Arrays.asList("Callable"), Arrays.asList("Callable"),
-                new P().put("type", "string").put("weight", "integer").done()));
+        r.add(new RelType("J_RESOLVES_TO", Arrays.asList("JCallSite"), Arrays.asList("JCallable"), none));
+        r.add(new RelType("J_CALLS", Arrays.asList("JCallable"), Arrays.asList("JCallable"),
+                new P().put("type", "string").put("weight", "integer")
+                        .put("source_kind", "string").put("destination_kind", "string").done()));
+        r.add(new RelType("J_HAS_CRUD_OPERATION", Arrays.asList("JCallable", "JCallSite"),
+                Arrays.asList("JCrudOperation"), none));
+        r.add(new RelType("J_HAS_CRUD_QUERY", Arrays.asList("JCallable", "JCallSite"),
+                Arrays.asList("JCrudQuery"), none));
+        r.add(new RelType("J_HAS_COMMENT",
+                Arrays.asList("JCompilationUnit", "JType", "JCallable", "JField", "JCallSite", "JVariable",
+                        "JRecordComponent", "JInitializationBlock"),
+                Arrays.asList("JComment"), none));
 
         return r;
     }
