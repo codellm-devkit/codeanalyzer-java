@@ -40,6 +40,22 @@ jobs:
           git push --delete origin ${GITHUB_REF#refs/tags/}
           exit 1  # Fail the workflow
 
+      - name: Resolve version
+        id: ver
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      # Stage release assets: a stable-named codeanalyzer.jar (what the installer fetches), the
+      # Neo4j schema contract (platform-independent, version-locked to this build), and the
+      # cargo-dist-style install script.
+      - name: Stage release assets (jar + Neo4j schema + installer)
+        run: |
+          mkdir -p release-assets
+          cp build/libs/codeanalyzer-${{ steps.ver.outputs.version }}.jar release-assets/codeanalyzer.jar
+          cp build/libs/codeanalyzer-${{ steps.ver.outputs.version }}.jar "release-assets/codeanalyzer-${{ steps.ver.outputs.version }}.jar"
+          java -jar build/libs/codeanalyzer-${{ steps.ver.outputs.version }}.jar --emit schema > release-assets/schema.neo4j.json
+          cp packaging/install/codeanalyzer-installer.sh release-assets/codeanalyzer-installer.sh
+          ls -lh release-assets
+
       - name: Build Changelog
         id: gen_changelog
         uses: mikepenz/release-changelog-builder-action@v5
@@ -49,10 +65,44 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # cargo-dist-style release notes: install one-liner + downloads, then the generated changelog.
+      - name: Compose release notes
+        id: notes
+        run: |
+          {
+            echo "## Install"
+            echo
+            echo '```sh'
+            echo "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/${GITHUB_REPOSITORY}/releases/download/v${{ steps.ver.outputs.version }}/codeanalyzer-installer.sh | sh"
+            echo '```'
+            echo
+            echo "Or run the JAR directly (requires Java 11+):"
+            echo
+            echo '```sh'
+            echo "java -jar codeanalyzer.jar -i /path/to/project -a 2 --emit neo4j -o ./out   # writes out/graph.cypher"
+            echo '```'
+            echo
+            echo "## Downloads"
+            echo
+            echo "| Asset | Description |"
+            echo "| --- | --- |"
+            echo "| \`codeanalyzer.jar\` | Self-contained analyzer (run with \`java -jar\`) |"
+            echo "| \`codeanalyzer-installer.sh\` | Installer that fetches the jar and adds a \`codeanalyzer\` launcher |"
+            echo "| \`schema.neo4j.json\` | Neo4j graph schema contract (node labels, relationships, DDL) |"
+            echo
+            echo "---"
+            echo
+            echo "${{ steps.gen_changelog.outputs.changelog }}"
+          } > release-notes.md
+
       - name: Publish Release
         uses: softprops/action-gh-release@v1
         with:
-          files: build/libs/*.jar
-          body: ${{ steps.gen_changelog.outputs.changelog }}
+          files: |
+            release-assets/codeanalyzer.jar
+            release-assets/codeanalyzer-${{ steps.ver.outputs.version }}.jar
+            release-assets/schema.neo4j.json
+            release-assets/codeanalyzer-installer.sh
+          body_path: release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

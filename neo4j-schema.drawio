@@ -1,0 +1,115 @@
+<mxfile host="Electron">
+  <diagram id="codeanalyzer-java-neo4j" name="Neo4j schema">
+    <mxGraphModel dx="2866" dy="1541" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="2600" pageHeight="1300" math="0" shadow="0" adaptiveColors="auto">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;align=left;verticalAlign=middle;fontSize=20;fontFamily=IBM Plex Sans;fontColor=light-dark(#161616,#f4f4f4);" value="&lt;b&gt;codeanalyzer-java — Neo4j property-graph schema&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#6f6f6f&quot;&gt;all labels J-prefixed · all rel types J_-prefixed · contract = schema.neo4j.json · SCHEMA_VERSION 1.0.0 · 16 node labels · 20 relationship types · --emit neo4j&lt;/font&gt;" vertex="1">
+          <mxGeometry height="50" width="1100" x="40" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="legend" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#ffffff,#1a1a1a);strokeColor=light-dark(#8d8d8d,#6f6f6f);" value="&lt;b&gt;Legend&lt;/b&gt;&lt;hr&gt;→ relationship (J_-prefixed, type on the edge)&lt;br&gt;↺ self-loop = recursive&lt;br&gt;&lt;br&gt;&lt;b&gt;Identity&lt;/b&gt;&lt;br&gt;:JType &amp; :JCallable share the :JSymbol merge&lt;br&gt;label (key = id). JType.id = FQN;&lt;br&gt;JCallable.id = FQN#signature.&lt;br&gt;&lt;br&gt;&lt;b&gt;Provenance&lt;/b&gt;&lt;br&gt;every unit-owned node carries _module (= file_key)&lt;br&gt;so the Bolt writer replaces exactly one unit&#39;s&lt;br&gt;subgraph; :JPackage / :JAnnotation are shared.&lt;br&gt;&lt;br&gt;&lt;b&gt;Tiers&lt;/b&gt;&lt;br&gt;red = root · blue = file · teal = :JSymbol decl&lt;br&gt;gray = leaf records · purple = shared (no _module)" vertex="1">
+          <mxGeometry height="330" width="330" x="40" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="app" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#fff1f1,#4b1a1f);strokeColor=light-dark(#da1e28,#fa4d56);" value="&lt;b&gt;:JApplication&lt;/b&gt;  «root»&lt;hr&gt;name  (key)&lt;br&gt;schema_version" vertex="1">
+          <mxGeometry height="80" width="300" x="40" y="482" as="geometry" />
+        </mxCell>
+        <mxCell id="cu" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#edf5ff,#1c2a3f);strokeColor=light-dark(#0f62fe,#4589ff);" value="&lt;b&gt;:JCompilationUnit&lt;/b&gt;  «file»&lt;hr&gt;file_key  (key)&lt;br&gt;file_path · package_name&lt;br&gt;content_hash · comment_count&lt;br&gt;is_modified · _module" vertex="1">
+          <mxGeometry height="115" width="320" x="480" y="465" as="geometry" />
+        </mxCell>
+        <mxCell id="type" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#d9fbfb,#0c2b2b);strokeColor=light-dark(#007d79,#08bdba);" value="&lt;b&gt;:JType&lt;/b&gt; :JSymbol  «recursive»&lt;hr&gt;id = fqn  (key)&lt;br&gt;name · kind (class/interface/enum/&lt;br&gt;annotation/record)&lt;br&gt;modifiers[] · annotations[]&lt;br&gt;extends_list[] · implements_list[]&lt;br&gt;parent_type · docstring · _module" vertex="1">
+          <mxGeometry height="150" width="320" x="940" y="447" as="geometry" />
+        </mxCell>
+        <mxCell id="callable" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#d9fbfb,#0c2b2b);strokeColor=light-dark(#007d79,#08bdba);" value="&lt;b&gt;:JCallable&lt;/b&gt; :JSymbol  «recursive»&lt;hr&gt;id = fqn#signature  (key)&lt;br&gt;name · signature · return_type&lt;br&gt;file_path · parameter_types[]&lt;br&gt;modifiers[] · annotations[] · code&lt;br&gt;cyclomatic_complexity · docstring · _module" vertex="1">
+          <mxGeometry height="150" width="320" x="1400" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="field" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#f4f4f4,#262626);strokeColor=light-dark(#8d8d8d,#6f6f6f);" value="&lt;b&gt;:JField&lt;/b&gt;&lt;hr&gt;id (key) · name · type&lt;br&gt;modifiers[] · annotations[] · variables[]&lt;br&gt;variable_initializers_json&lt;br&gt;docstring · _module" vertex="1">
+          <mxGeometry height="110" width="320" x="1400" y="335" as="geometry" />
+        </mxCell>
+        <mxCell id="enumc" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#f4f4f4,#262626);strokeColor=light-dark(#8d8d8d,#6f6f6f);" value="&lt;b&gt;:JEnumConstant&lt;/b&gt;&lt;hr&gt;id (key) · name&lt;br&gt;arguments[] · _module" vertex="1">
+          <mxGeometry height="80" width="320" x="1400" y="490" as="geometry" />
+        </mxCell>
+        <mxCell id="record" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#f4f4f4,#262626);strokeColor=light-dark(#8d8d8d,#6f6f6f);" value="&lt;b&gt;:JRecordComponent&lt;/b&gt;&lt;hr&gt;id (key) · name · type&lt;br&gt;modifiers[] · annotations[]&lt;br&gt;default_value · is_var_args&lt;br&gt;docstring · _module" vertex="1">
+          <mxGeometry height="115" width="320" x="1400" y="615" as="geometry" />
+        </mxCell>
+        <mxCell id="initblock" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#f4f4f4,#262626);strokeColor=light-dark(#8d8d8d,#6f6f6f);" value="&lt;b&gt;:JInitializationBlock&lt;/b&gt;&lt;hr&gt;id (key) · code · is_static&lt;br&gt;cyclomatic_complexity · span&lt;br&gt;annotations[] · thrown_exceptions[]&lt;br&gt;referenced_types[] · accessed_fields[]&lt;br&gt;docstring · _module" vertex="1">
+          <mxGeometry height="130" width="320" x="1400" y="775" as="geometry" />
+        </mxCell>
+        <mxCell id="param" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#f4f4f4,#262626);strokeColor=light-dark(#8d8d8d,#6f6f6f);" value="&lt;b&gt;:JParameter&lt;/b&gt;&lt;hr&gt;id (key) · name · type&lt;br&gt;annotations[] · modifiers[]&lt;br&gt;start/end line · start/end column&lt;br&gt;_module" vertex="1">
+          <mxGeometry height="110" width="300" x="1860" y="120" as="geometry" />
+        </mxCell>
+        <mxCell id="callsite" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#f4f4f4,#262626);strokeColor=light-dark(#8d8d8d,#6f6f6f);" value="&lt;b&gt;:JCallSite&lt;/b&gt;&lt;hr&gt;id (key) · method_name&lt;br&gt;receiver_expr/type · return_type&lt;br&gt;callee_signature · argument_types[]&lt;br&gt;argument_expr[] · is_unspecified · flags&lt;br&gt;span+columns · docstring · _module" vertex="1">
+          <mxGeometry height="130" width="300" x="1860" y="275" as="geometry" />
+        </mxCell>
+        <mxCell id="var" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#f4f4f4,#262626);strokeColor=light-dark(#8d8d8d,#6f6f6f);" value="&lt;b&gt;:JVariable&lt;/b&gt;&lt;hr&gt;id (key) · name · type&lt;br&gt;initializer · span + columns&lt;br&gt;docstring · _module" vertex="1">
+          <mxGeometry height="95" width="300" x="1860" y="450" as="geometry" />
+        </mxCell>
+        <mxCell id="crudop" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#f4f4f4,#262626);strokeColor=light-dark(#8d8d8d,#6f6f6f);" value="&lt;b&gt;:JCrudOperation&lt;/b&gt;&lt;hr&gt;id (key) · operation_type&lt;br&gt;line_number · target_table&lt;br&gt;involved_columns[] · condition&lt;br&gt;joined_tables[] · _module" vertex="1">
+          <mxGeometry height="110" width="300" x="2300" y="275" as="geometry" />
+        </mxCell>
+        <mxCell id="crudq" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#f4f4f4,#262626);strokeColor=light-dark(#8d8d8d,#6f6f6f);" value="&lt;b&gt;:JCrudQuery&lt;/b&gt;&lt;hr&gt;id (key) · query_type&lt;br&gt;line_number · query_arguments[]&lt;br&gt;_module" vertex="1">
+          <mxGeometry height="85" width="300" x="2300" y="430" as="geometry" />
+        </mxCell>
+        <mxCell id="crosscut" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#fff8e1,#332a00);strokeColor=light-dark(#f1c21b,#d2a106);" value="&lt;b&gt;Cross-cutting relationships&lt;/b&gt;&lt;hr&gt;&lt;b&gt;J_HAS_COMMENT&lt;/b&gt;: {JCompilationUnit, JType, JCallable, JField, JCallSite, JVariable, JRecordComponent, JInitializationBlock} → :JComment&lt;br&gt;&lt;b&gt;J_ANNOTATED_BY&lt;/b&gt;: {JType, JCallable, JField} → :JAnnotation&lt;br&gt;&lt;b&gt;J_IMPORTS&lt;/b&gt;: JCompilationUnit → {JType, JPackage}   (is_static, is_wildcard)&lt;br&gt;&lt;b&gt;J_RESOLVES_TO&lt;/b&gt;: JCallSite → JCallable&lt;br&gt;&lt;b&gt;J_CALLS&lt;/b&gt;: JCallable → JCallable   (type, weight, source_kind, destination_kind)&lt;br&gt;&lt;b&gt;J_EXTENDS · J_IMPLEMENTS · J_HAS_NESTED_TYPE&lt;/b&gt;: JType → JType&lt;br&gt;also sourced from &lt;b&gt;JInitializationBlock&lt;/b&gt;: J_HAS_CALLSITE, J_DECLARES_VAR&lt;br&gt;also sourced from &lt;b&gt;JCallable&lt;/b&gt;: J_HAS_CRUD_OPERATION, J_HAS_CRUD_QUERY" vertex="1">
+          <mxGeometry height="169" width="860" x="40" y="970" as="geometry" />
+        </mxCell>
+        <mxCell id="pkg" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#f6f2ff,#2a1a3a);strokeColor=light-dark(#8a3ffc,#be95ff);" value="&lt;b&gt;:JPackage&lt;/b&gt;  «shared, no _module»&lt;hr&gt;name  (key)" vertex="1">
+          <mxGeometry height="65" width="280" x="940" y="1000" as="geometry" />
+        </mxCell>
+        <mxCell id="annot" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#f6f2ff,#2a1a3a);strokeColor=light-dark(#8a3ffc,#be95ff);" value="&lt;b&gt;:JAnnotation&lt;/b&gt;  «shared, no _module»&lt;hr&gt;name  (key)" vertex="1">
+          <mxGeometry height="65" width="280" x="1260" y="1000" as="geometry" />
+        </mxCell>
+        <mxCell id="comment" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#f4f4f4,#262626);strokeColor=light-dark(#8d8d8d,#6f6f6f);" value="&lt;b&gt;:JComment&lt;/b&gt;  «unit-owned, referenced by many»&lt;hr&gt;id (key) · content · is_javadoc&lt;br&gt;start/end line · start/end column&lt;br&gt;_module" vertex="1">
+          <mxGeometry height="95" width="340" x="1580" y="1000" as="geometry" />
+        </mxCell>
+        <mxCell id="e_unit" edge="1" parent="1" source="app" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontFamily=IBM Plex Sans;fontSize=11;fontColor=light-dark(#161616,#f4f4f4);labelBackgroundColor=light-dark(#f2f4f8,#262626);labelBorderColor=none;strokeColor=light-dark(#8d8d8d,#6f6f6f);endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="cu" value="J_HAS_UNIT">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_dtype" edge="1" parent="1" source="cu" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontFamily=IBM Plex Sans;fontSize=11;fontColor=light-dark(#161616,#f4f4f4);labelBackgroundColor=light-dark(#f2f4f8,#262626);labelBorderColor=none;strokeColor=light-dark(#8d8d8d,#6f6f6f);endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="type" value="J_DECLARES_TYPE">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_hcall" edge="1" parent="1" source="type" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontFamily=IBM Plex Sans;fontSize=11;fontColor=light-dark(#161616,#f4f4f4);labelBackgroundColor=light-dark(#f2f4f8,#262626);labelBorderColor=none;strokeColor=light-dark(#8d8d8d,#6f6f6f);endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="callable" value="J_HAS_CALLABLE">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_hfield" edge="1" parent="1" source="type" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontFamily=IBM Plex Sans;fontSize=11;fontColor=light-dark(#161616,#f4f4f4);labelBackgroundColor=light-dark(#f2f4f8,#262626);labelBorderColor=none;strokeColor=light-dark(#8d8d8d,#6f6f6f);endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="field" value="J_HAS_FIELD">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_henum" edge="1" parent="1" source="type" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontFamily=IBM Plex Sans;fontSize=11;fontColor=light-dark(#161616,#f4f4f4);labelBackgroundColor=light-dark(#f2f4f8,#262626);labelBorderColor=none;strokeColor=light-dark(#8d8d8d,#6f6f6f);endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="enumc" value="J_HAS_ENUM_CONSTANT">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_hrec" edge="1" parent="1" source="type" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontFamily=IBM Plex Sans;fontSize=11;fontColor=light-dark(#161616,#f4f4f4);labelBackgroundColor=light-dark(#f2f4f8,#262626);labelBorderColor=none;strokeColor=light-dark(#8d8d8d,#6f6f6f);endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="record" value="J_HAS_RECORD_COMPONENT">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_hinit" edge="1" parent="1" source="type" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontFamily=IBM Plex Sans;fontSize=11;fontColor=light-dark(#161616,#f4f4f4);labelBackgroundColor=light-dark(#f2f4f8,#262626);labelBorderColor=none;strokeColor=light-dark(#8d8d8d,#6f6f6f);endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="initblock" value="J_HAS_INIT_BLOCK">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_hparam" edge="1" parent="1" source="callable" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontFamily=IBM Plex Sans;fontSize=11;fontColor=light-dark(#161616,#f4f4f4);labelBackgroundColor=light-dark(#f2f4f8,#262626);labelBorderColor=none;strokeColor=light-dark(#8d8d8d,#6f6f6f);endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="param" value="J_HAS_PARAMETER">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_hcs" edge="1" parent="1" source="callable" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontFamily=IBM Plex Sans;fontSize=11;fontColor=light-dark(#161616,#f4f4f4);labelBackgroundColor=light-dark(#f2f4f8,#262626);labelBorderColor=none;strokeColor=light-dark(#8d8d8d,#6f6f6f);endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="callsite" value="J_HAS_CALLSITE">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_dvar" edge="1" parent="1" source="callable" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontFamily=IBM Plex Sans;fontSize=11;fontColor=light-dark(#161616,#f4f4f4);labelBackgroundColor=light-dark(#f2f4f8,#262626);labelBorderColor=none;strokeColor=light-dark(#8d8d8d,#6f6f6f);endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="var" value="J_DECLARES_VAR">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_hcrudop" edge="1" parent="1" source="callsite" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontFamily=IBM Plex Sans;fontSize=11;fontColor=light-dark(#161616,#f4f4f4);labelBackgroundColor=light-dark(#f2f4f8,#262626);labelBorderColor=none;strokeColor=light-dark(#8d8d8d,#6f6f6f);endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="crudop" value="J_HAS_CRUD_OPERATION">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_hcrudq" edge="1" parent="1" source="callsite" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontFamily=IBM Plex Sans;fontSize=11;fontColor=light-dark(#161616,#f4f4f4);labelBackgroundColor=light-dark(#f2f4f8,#262626);labelBorderColor=none;strokeColor=light-dark(#8d8d8d,#6f6f6f);endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="crudq" value="J_HAS_CRUD_QUERY">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_typeloop" edge="1" parent="1" source="type" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontFamily=IBM Plex Sans;fontSize=11;fontColor=light-dark(#161616,#f4f4f4);labelBackgroundColor=light-dark(#f2f4f8,#262626);labelBorderColor=none;strokeColor=light-dark(#da1e28,#fa4d56);endArrow=block;exitX=0.35;exitY=0;entryX=0.65;entryY=0;" target="type" value="↺ J_EXTENDS · J_IMPLEMENTS · J_HAS_NESTED_TYPE">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_callloop" edge="1" parent="1" source="callable" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontFamily=IBM Plex Sans;fontSize=13;fontStyle=1;fontColor=light-dark(#da1e28,#fa4d56);labelBackgroundColor=light-dark(#fff1f1,#4b1a1f);labelBorderColor=none;strokeColor=light-dark(#da1e28,#fa4d56);strokeWidth=3;endArrow=block;exitX=0.25;exitY=0;entryX=0.75;entryY=0;" target="callable" value="↺ J_CALLS — the call graph (-a 2)">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_resolves" edge="1" parent="1" source="callsite" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;fontFamily=IBM Plex Sans;fontSize=11;fontColor=light-dark(#161616,#f4f4f4);labelBackgroundColor=light-dark(#f2f4f8,#262626);labelBorderColor=none;strokeColor=light-dark(#007d79,#08bdba);strokeWidth=2;endArrow=block;exitX=0;exitY=0.7;entryX=1;entryY=0.65;" target="callable" value="J_RESOLVES_TO">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="callgraph_note" parent="1" style="rounded=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=12;spacingRight=10;spacingTop=8;spacingBottom=8;fontFamily=IBM Plex Sans;fontSize=12;fontColor=light-dark(#161616,#f4f4f4);fillColor=light-dark(#fff1f1,#4b1a1f);strokeColor=light-dark(#da1e28,#fa4d56);strokeWidth=2;" value="&lt;b&gt;Call graph&lt;/b&gt;  (analysis level -a 2)&lt;hr&gt;↺ &lt;b&gt;J_CALLS&lt;/b&gt;: :JCallable → :JCallable, weighted&lt;br&gt;(type · weight · source_kind · destination_kind).&lt;br&gt;Emitted only at -a 2 — at -a 1 the graph is the symbol&lt;br&gt;table (containment) only, with no J_CALLS edges.&lt;br&gt;&lt;b&gt;J_RESOLVES_TO&lt;/b&gt; (dashed): each :JCallSite → the&lt;br&gt;:JCallable it resolves to." vertex="1">
+          <mxGeometry height="135" width="600" x="2180" y="20" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

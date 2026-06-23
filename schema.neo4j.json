@@ -1,0 +1,516 @@
+{
+  "schema_version": "1.0.0",
+  "generator": "codeanalyzer-java",
+  "marker_labels": [
+    "JEntrypoint"
+  ],
+  "node_labels": [
+    {
+      "label": "JApplication",
+      "merge_label": "JApplication",
+      "key": "name",
+      "properties": {
+        "name": "string",
+        "schema_version": "string"
+      }
+    },
+    {
+      "label": "JCompilationUnit",
+      "merge_label": "JCompilationUnit",
+      "key": "file_key",
+      "properties": {
+        "file_key": "string",
+        "file_path": "string",
+        "package_name": "string",
+        "content_hash": "string",
+        "comment_count": "integer",
+        "is_modified": "boolean",
+        "_module": "string"
+      }
+    },
+    {
+      "label": "JType",
+      "merge_label": "JSymbol",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "name": "string",
+        "fqn": "string",
+        "kind": "string",
+        "modifiers": "string[]",
+        "annotations": "string[]",
+        "extends_list": "string[]",
+        "implements_list": "string[]",
+        "nested_type_declarations": "string[]",
+        "is_interface": "boolean",
+        "is_nested_type": "boolean",
+        "is_inner_class": "boolean",
+        "is_local_class": "boolean",
+        "is_entrypoint_class": "boolean",
+        "parent_type": "string",
+        "docstring": "string",
+        "_module": "string"
+      }
+    },
+    {
+      "label": "JCallable",
+      "merge_label": "JSymbol",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "name": "string",
+        "signature": "string",
+        "file_path": "string",
+        "declaration": "string",
+        "return_type": "string",
+        "modifiers": "string[]",
+        "annotations": "string[]",
+        "thrown_exceptions": "string[]",
+        "parameter_types": "string[]",
+        "referenced_types": "string[]",
+        "accessed_fields": "string[]",
+        "code": "string",
+        "code_start_line": "integer",
+        "start_line": "integer",
+        "end_line": "integer",
+        "cyclomatic_complexity": "integer",
+        "is_constructor": "boolean",
+        "is_implicit": "boolean",
+        "is_entrypoint": "boolean",
+        "docstring": "string",
+        "_module": "string"
+      }
+    },
+    {
+      "label": "JField",
+      "merge_label": "JField",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "name": "string",
+        "type": "string",
+        "modifiers": "string[]",
+        "annotations": "string[]",
+        "variables": "string[]",
+        "variable_initializers_json": "string",
+        "start_line": "integer",
+        "end_line": "integer",
+        "docstring": "string",
+        "_module": "string"
+      }
+    },
+    {
+      "label": "JParameter",
+      "merge_label": "JParameter",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "name": "string",
+        "type": "string",
+        "annotations": "string[]",
+        "modifiers": "string[]",
+        "start_line": "integer",
+        "end_line": "integer",
+        "start_column": "integer",
+        "end_column": "integer",
+        "_module": "string"
+      }
+    },
+    {
+      "label": "JVariable",
+      "merge_label": "JVariable",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "name": "string",
+        "type": "string",
+        "initializer": "string",
+        "start_line": "integer",
+        "end_line": "integer",
+        "start_column": "integer",
+        "end_column": "integer",
+        "docstring": "string",
+        "_module": "string"
+      }
+    },
+    {
+      "label": "JCallSite",
+      "merge_label": "JCallSite",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "method_name": "string",
+        "receiver_expr": "string",
+        "receiver_type": "string",
+        "return_type": "string",
+        "callee_signature": "string",
+        "argument_types": "string[]",
+        "argument_expr": "string[]",
+        "is_static_call": "boolean",
+        "is_constructor_call": "boolean",
+        "is_public": "boolean",
+        "is_private": "boolean",
+        "is_protected": "boolean",
+        "is_unspecified": "boolean",
+        "start_line": "integer",
+        "start_column": "integer",
+        "end_line": "integer",
+        "end_column": "integer",
+        "docstring": "string",
+        "_module": "string"
+      }
+    },
+    {
+      "label": "JEnumConstant",
+      "merge_label": "JEnumConstant",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "name": "string",
+        "arguments": "string[]",
+        "_module": "string"
+      }
+    },
+    {
+      "label": "JRecordComponent",
+      "merge_label": "JRecordComponent",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "name": "string",
+        "type": "string",
+        "modifiers": "string[]",
+        "annotations": "string[]",
+        "default_value": "string",
+        "is_var_args": "boolean",
+        "docstring": "string",
+        "_module": "string"
+      }
+    },
+    {
+      "label": "JInitializationBlock",
+      "merge_label": "JInitializationBlock",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "file_path": "string",
+        "code": "string",
+        "annotations": "string[]",
+        "thrown_exceptions": "string[]",
+        "referenced_types": "string[]",
+        "accessed_fields": "string[]",
+        "is_static": "boolean",
+        "cyclomatic_complexity": "integer",
+        "start_line": "integer",
+        "end_line": "integer",
+        "docstring": "string",
+        "_module": "string"
+      }
+    },
+    {
+      "label": "JCrudOperation",
+      "merge_label": "JCrudOperation",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "line_number": "integer",
+        "operation_type": "string",
+        "target_table": "string",
+        "involved_columns": "string[]",
+        "condition": "string",
+        "joined_tables": "string[]",
+        "_module": "string"
+      }
+    },
+    {
+      "label": "JCrudQuery",
+      "merge_label": "JCrudQuery",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "line_number": "integer",
+        "query_type": "string",
+        "query_arguments": "string[]",
+        "_module": "string"
+      }
+    },
+    {
+      "label": "JComment",
+      "merge_label": "JComment",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "content": "string",
+        "is_javadoc": "boolean",
+        "start_line": "integer",
+        "start_column": "integer",
+        "end_line": "integer",
+        "end_column": "integer",
+        "_module": "string"
+      }
+    },
+    {
+      "label": "JPackage",
+      "merge_label": "JPackage",
+      "key": "name",
+      "properties": {
+        "name": "string"
+      }
+    },
+    {
+      "label": "JAnnotation",
+      "merge_label": "JAnnotation",
+      "key": "name",
+      "properties": {
+        "name": "string"
+      }
+    }
+  ],
+  "relationship_types": [
+    {
+      "type": "J_HAS_UNIT",
+      "from": [
+        "JApplication"
+      ],
+      "to": [
+        "JCompilationUnit"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "J_DECLARES_TYPE",
+      "from": [
+        "JCompilationUnit"
+      ],
+      "to": [
+        "JType"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "J_HAS_NESTED_TYPE",
+      "from": [
+        "JType"
+      ],
+      "to": [
+        "JType"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "J_HAS_CALLABLE",
+      "from": [
+        "JType"
+      ],
+      "to": [
+        "JCallable"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "J_HAS_FIELD",
+      "from": [
+        "JType"
+      ],
+      "to": [
+        "JField"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "J_HAS_PARAMETER",
+      "from": [
+        "JCallable"
+      ],
+      "to": [
+        "JParameter"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "J_HAS_CALLSITE",
+      "from": [
+        "JCallable",
+        "JInitializationBlock"
+      ],
+      "to": [
+        "JCallSite"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "J_DECLARES_VAR",
+      "from": [
+        "JCallable",
+        "JInitializationBlock"
+      ],
+      "to": [
+        "JVariable"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "J_HAS_ENUM_CONSTANT",
+      "from": [
+        "JType"
+      ],
+      "to": [
+        "JEnumConstant"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "J_HAS_RECORD_COMPONENT",
+      "from": [
+        "JType"
+      ],
+      "to": [
+        "JRecordComponent"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "J_HAS_INIT_BLOCK",
+      "from": [
+        "JType"
+      ],
+      "to": [
+        "JInitializationBlock"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "J_EXTENDS",
+      "from": [
+        "JType"
+      ],
+      "to": [
+        "JType"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "J_IMPLEMENTS",
+      "from": [
+        "JType"
+      ],
+      "to": [
+        "JType"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "J_ANNOTATED_BY",
+      "from": [
+        "JType",
+        "JCallable",
+        "JField"
+      ],
+      "to": [
+        "JAnnotation"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "J_IMPORTS",
+      "from": [
+        "JCompilationUnit"
+      ],
+      "to": [
+        "JType",
+        "JPackage"
+      ],
+      "properties": {
+        "is_static": "boolean",
+        "is_wildcard": "boolean"
+      }
+    },
+    {
+      "type": "J_RESOLVES_TO",
+      "from": [
+        "JCallSite"
+      ],
+      "to": [
+        "JCallable"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "J_CALLS",
+      "from": [
+        "JCallable"
+      ],
+      "to": [
+        "JCallable"
+      ],
+      "properties": {
+        "type": "string",
+        "weight": "integer",
+        "source_kind": "string",
+        "destination_kind": "string"
+      }
+    },
+    {
+      "type": "J_HAS_CRUD_OPERATION",
+      "from": [
+        "JCallable",
+        "JCallSite"
+      ],
+      "to": [
+        "JCrudOperation"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "J_HAS_CRUD_QUERY",
+      "from": [
+        "JCallable",
+        "JCallSite"
+      ],
+      "to": [
+        "JCrudQuery"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "J_HAS_COMMENT",
+      "from": [
+        "JCompilationUnit",
+        "JType",
+        "JCallable",
+        "JField",
+        "JCallSite",
+        "JVariable",
+        "JRecordComponent",
+        "JInitializationBlock"
+      ],
+      "to": [
+        "JComment"
+      ],
+      "properties": {}
+    }
+  ],
+  "constraints": [
+    "CREATE CONSTRAINT j_symbol_id IF NOT EXISTS FOR (s:JSymbol) REQUIRE s.id IS UNIQUE",
+    "CREATE CONSTRAINT j_application_name IF NOT EXISTS FOR (a:JApplication) REQUIRE a.name IS UNIQUE",
+    "CREATE CONSTRAINT j_compilation_unit_key IF NOT EXISTS FOR (c:JCompilationUnit) REQUIRE c.file_key IS UNIQUE",
+    "CREATE CONSTRAINT j_package_name IF NOT EXISTS FOR (p:JPackage) REQUIRE p.name IS UNIQUE",
+    "CREATE CONSTRAINT j_annotation_name IF NOT EXISTS FOR (an:JAnnotation) REQUIRE an.name IS UNIQUE",
+    "CREATE CONSTRAINT j_callsite_id IF NOT EXISTS FOR (cs:JCallSite) REQUIRE cs.id IS UNIQUE",
+    "CREATE CONSTRAINT j_field_id IF NOT EXISTS FOR (f:JField) REQUIRE f.id IS UNIQUE",
+    "CREATE CONSTRAINT j_parameter_id IF NOT EXISTS FOR (p:JParameter) REQUIRE p.id IS UNIQUE",
+    "CREATE CONSTRAINT j_variable_id IF NOT EXISTS FOR (v:JVariable) REQUIRE v.id IS UNIQUE",
+    "CREATE CONSTRAINT j_enum_constant_id IF NOT EXISTS FOR (e:JEnumConstant) REQUIRE e.id IS UNIQUE",
+    "CREATE CONSTRAINT j_record_component_id IF NOT EXISTS FOR (r:JRecordComponent) REQUIRE r.id IS UNIQUE",
+    "CREATE CONSTRAINT j_init_block_id IF NOT EXISTS FOR (ib:JInitializationBlock) REQUIRE ib.id IS UNIQUE",
+    "CREATE CONSTRAINT j_crud_operation_id IF NOT EXISTS FOR (co:JCrudOperation) REQUIRE co.id IS UNIQUE",
+    "CREATE CONSTRAINT j_crud_query_id IF NOT EXISTS FOR (cq:JCrudQuery) REQUIRE cq.id IS UNIQUE",
+    "CREATE CONSTRAINT j_comment_id IF NOT EXISTS FOR (cm:JComment) REQUIRE cm.id IS UNIQUE"
+  ],
+  "indexes": [
+    "CREATE INDEX j_callable_name IF NOT EXISTS FOR (c:JCallable) ON (c.name)",
+    "CREATE INDEX j_type_name IF NOT EXISTS FOR (t:JType) ON (t.name)",
+    "CREATE INDEX j_annotation_name_idx IF NOT EXISTS FOR (an:JAnnotation) ON (an.name)",
+    "CREATE FULLTEXT INDEX j_code_fts IF NOT EXISTS FOR (c:JCallable) ON EACH [c.code, c.docstring]"
+  ]
+}

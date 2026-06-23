@@ -2,6 +2,24 @@
 
 Native WALA implementation of source code analysis tool for Enterprise Java Applications.
 
+`codeanalyzer` extracts a comprehensive **symbol table** and **call graph** from Java applications
+and emits them either as the canonical `analysis.json`, or as a **Neo4j property graph**
+(`--emit neo4j`) — a `graph.cypher` snapshot or a live, incremental push over Bolt. See
+[§4. Neo4j graph output](#4-neo4j-graph-output).
+
+## Quick install
+
+Grab the latest release jar and a `codeanalyzer` launcher (requires a Java 11+ runtime):
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/codellm-devkit/codeanalyzer-java/releases/latest/download/codeanalyzer-installer.sh | sh
+# or with wget:
+wget -qO- https://github.com/codellm-devkit/codeanalyzer-java/releases/latest/download/codeanalyzer-installer.sh | sh
+```
+
+Overrides: `CODEANALYZER_INSTALL_DIR` (default `~/.local/bin`), `CODEANALYZER_VERSION` (default `latest`).
+Prefer to build from source? See [§2. Building `codeanalyzer`](#2-building-codeanalyzer).
+
 ## 1. Prerequisites
 
 Before you begin, ensure you have met the following requirements:
@@ -68,30 +86,42 @@ Run the Gradle wrapper script to build the project. This will compile the projec
 
 ### 2.3. Using `codeanalyzer`
 
-The jar will be built at `build/libs/codeanalyzer-1.0.jar`. It may be used as follows:
+The jar will be built at `build/libs/codeanalyzer-<version>.jar`. It may be used as follows:
 
 ```help
-Usage: java -jar /path/to/codeanalyzer.jar [-hvV] [--no-build] [-a=<analysisLevel>] [-b=<build>]
+Usage: codeanalyzer [-hvV] [--no-build] [--no-clean-dependencies]
+                    [-a=<analysisLevel>] [-b=<build>] [-f=<projectRootPom>]
                     [-i=<input>] [-o=<output>] [-s=<sourceAnalysis>]
-Convert java binary into a comprehensive system dependency graph.
-  -i, --input=<input>       Path to the project root directory.
-  -s, --source-analysis=<sourceAnalysis>
-                            Analyze a single string of java source code instead
-                              the project.
-  -o, --output=<output>     Destination directory to save the output graphs. By
-                              default, the SDG formatted as a JSON will be
-                              printed to the console.
-  -b, --build-cmd=<build>   Custom build command. Defaults to auto build.
-      --no-build            Do not build your application. Use this option if
-                              you have already built your application.
-  -a, --analysis-level=<analysisLevel>
-                            Level of analysis to perform. Options: 1 (for just
-                              symbol table) or 2 (for call graph). Default: 1
-  -v, --verbose             Print logs to console.
-  -h, --help                Show this help message and exit.
-  -V, --version             Print version information and exit.
-  -t, --target-files        For each file user wants to perform source analysis on top of existing analysis.json
-
+                    [--emit=<emit>] [--app-name=<appName>]
+                    [--neo4j-uri=<uri>] [--neo4j-user=<user>]
+                    [--neo4j-password=<password>] [--neo4j-database=<db>]
+                    [-t=<targetFiles>]...
+Analyze java application.
+  -i, --input=<input>        Path to the project root directory.
+  -s, --source-analysis=<s>  Analyze a single string of java source code instead
+                               of the project.
+  -o, --output=<output>      Destination directory to save the output graphs. By
+                               default, the analysis JSON is printed to the console.
+  -b, --build-cmd=<build>    Custom build command. Defaults to auto build.
+      --no-build             Do not build your application (use if already built).
+  -a, --analysis-level=<n>   Level of analysis: 1 (symbol table) or 2 (call graph).
+                               Default: 1. Level 2 adds J_CALLS edges to the graph.
+  -t, --target-files=<f>...  Restrict analysis to specific files (incremental).
+      --emit=<emit>          Output target: json (analysis.json, default) |
+                               neo4j (graph.cypher or live Bolt push) |
+                               schema (the Neo4j schema.neo4j.json contract).
+      --app-name=<name>      Logical application name for the graph :JApplication
+                               anchor (default: input dir name).
+      --neo4j-uri=<uri>      Push the graph to a live Neo4j over Bolt (incremental);
+                               omit to write graph.cypher. Falls back to the
+                               NEO4J_URI environment variable.
+      --neo4j-user=<user>    Neo4j username (env: NEO4J_USERNAME, default: neo4j).
+      --neo4j-password=<pw>  Neo4j password (env: NEO4J_PASSWORD, default: neo4j).
+      --neo4j-database=<db>  Neo4j database name (env: NEO4J_DATABASE, default:
+                               server default).
+  -v, --verbose              Print logs to console.
+  -h, --help                 Show this help message and exit.
+  -V, --version              Print version information and exit.
 ```
 
 
@@ -156,6 +186,66 @@ There is a sample application in `src/test/resources/sample_apps/daytrader8/bina
    ```
 
 This will produce print the SDG on the console. Explore other flags to save the output to a JSON.
+
+## 4. Neo4j graph output
+
+`codeanalyzer` can project the analysis IR into a [Neo4j](https://neo4j.com/) property graph instead
+of `analysis.json`. The graph is a **lossless** projection of the IR: compilation units, types,
+callables, fields, parameters, call sites, variables, enum constants, record components,
+initialization blocks, CRUD operations/queries, comments, annotations and packages are all
+first-class nodes and relationships, and (at `-a 2`) it adds `J_CALLS` edges from the call graph.
+Every field of the Lombok entity model is represented (scalars as node properties — maps such as a
+field's per-variable initializers are kept as a `*_json` property since Neo4j has no map type;
+comments are `:JComment` nodes in addition to the convenience `docstring` property).
+
+The full contract (node labels, their keys and typed properties, relationship types and endpoints,
+plus the constraint/index DDL) lives in [`schema.neo4j.json`](./schema.neo4j.json) and is visualized
+in [`neo4j-schema.drawio`](./neo4j-schema.drawio). All node labels are `J`-prefixed and relationship
+types `J_`-prefixed (e.g. `:JType`, `:JCallable`, `J_CALLS`) so a Java graph can share a Neo4j
+database with the Python (`Py*`/`PY_*`) and TypeScript (`TS*`/`TS_*`) backends without colliding.
+`SCHEMA_VERSION` is stamped onto the `:JApplication` node of every emitted graph.
+
+### 4.1. Cypher snapshot (no database required)
+
+```sh
+codeanalyzer -i /path/to/project -a 2 --emit neo4j -o ./out
+# → writes ./out/graph.cypher  (a self-contained, re-runnable script)
+cypher-shell -u neo4j -p <password> < ./out/graph.cypher
+```
+
+The snapshot is **not** incremental: it constraints, scopes-wipes this application's prior subgraph,
+then `UNWIND … MERGE`-loads the full truth.
+
+### 4.2. Live incremental push over Bolt
+
+```sh
+codeanalyzer -i /path/to/project -a 2 --emit neo4j \
+  --neo4j-uri bolt://localhost:7687 --neo4j-user neo4j --neo4j-password <password>
+```
+
+The Bolt writer reads the database's current state and updates **only what changed**: it diffs each
+compilation unit's `content_hash`, replaces just the changed units' subgraphs (idempotent
+`MERGE` upserts), and — on a full run — prunes units whose source file vanished. Combine with
+`--target-files` for a targeted, partial re-push (orphan pruning is then skipped).
+
+### 4.3. Schema contract
+
+```sh
+codeanalyzer --emit schema -o ./out   # → ./out/schema.neo4j.json (no project analysis needed)
+codeanalyzer --emit schema            # → prints the contract to stdout
+```
+
+### 4.4. Verifying the writers
+
+A no-container conformance test (`Neo4jSchemaConformanceTest`) asserts the projector never emits a
+label/relationship/property the catalog doesn't declare, and that `schema.neo4j.json` is current. A
+Testcontainers-backed integration test (`Neo4jBoltWriterTest`) spins up a real Neo4j and exercises
+the Bolt writer (full push, idempotent re-push, orphan pruning). The container suite is **opt-in**
+(it needs Docker/Podman) and runs only when `RUN_CONTAINER_TESTS` is set:
+
+```sh
+RUN_CONTAINER_TESTS=1 ./gradlew test
+```
 
 ## FAQ
 

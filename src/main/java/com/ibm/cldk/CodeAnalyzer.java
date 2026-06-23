@@ -17,10 +17,13 @@ import com.google.common.reflect.TypeToken;
 import com.google.gson.FieldNamingPolicy;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.ibm.cldk.entities.JavaCompilationUnit;
+import com.ibm.cldk.neo4j.BoltConfig;
+import com.ibm.cldk.neo4j.Neo4jEmitter;
 import com.ibm.cldk.utils.BuildProject;
 import com.ibm.cldk.utils.Log;
 import java.io.File;
@@ -92,6 +95,27 @@ public class CodeAnalyzer implements Runnable {
     @Option(names = { "-v", "--verbose" }, description = "Print logs to console.")
     private static boolean verbose = false;
 
+    @Option(names = {
+            "--emit" }, description = "Output target: json (analysis.json, default) | neo4j (graph.cypher or live Bolt push) | schema (the Neo4j schema.neo4j.json contract).")
+    private static String emit = "json";
+
+    @Option(names = {
+            "--app-name" }, description = "Logical application name for the graph :JApplication anchor (default: input dir name).")
+    private static String appName;
+
+    @Option(names = {
+            "--neo4j-uri" }, description = "Push the graph to a live Neo4j over Bolt (incremental); omit to write graph.cypher. Falls back to the NEO4J_URI environment variable.")
+    private static String neo4jUri;
+
+    @Option(names = { "--neo4j-user" }, description = "Neo4j username (env: NEO4J_USERNAME, default: neo4j).")
+    private static String neo4jUser;
+
+    @Option(names = { "--neo4j-password" }, description = "Neo4j password (env: NEO4J_PASSWORD, default: neo4j).")
+    private static String neo4jPassword;
+
+    @Option(names = { "--neo4j-database" }, description = "Neo4j database name (env: NEO4J_DATABASE, default: server default).")
+    private static String neo4jDatabase;
+
     private static final String outputFileName = "analysis.json";
 
     public static Gson gson = new GsonBuilder()
@@ -111,6 +135,16 @@ public class CodeAnalyzer implements Runnable {
         System.exit(exitCode);
     }
 
+    /** First non-null, non-blank value among the candidates, or null if none qualify. */
+    private static String firstNonEmpty(String... candidates) {
+        for (String c : candidates) {
+            if (c != null && !c.trim().isEmpty()) {
+                return c;
+            }
+        }
+        return null;
+    }
+
     @Override
     public void run() {
         // Set log level based on quiet option
@@ -123,6 +157,12 @@ public class CodeAnalyzer implements Runnable {
     }
 
     private static void analyze() throws Exception {
+
+        // The Neo4j schema contract is a static artifact — no project analysis required.
+        if ("schema".equalsIgnoreCase(emit)) {
+            Neo4jEmitter.emitSchema(output);
+            return;
+        }
 
         JsonObject combinedJsonObject = new JsonObject();
         Map<String, JavaCompilationUnit> symbolTable;
@@ -211,6 +251,24 @@ public class CodeAnalyzer implements Runnable {
         }
         // Cleanup library dependencies directory
         BuildProject.cleanLibraryDependencies();
+
+        // Neo4j graph output: project the IR to a graph and either push it over Bolt or write a
+        // graph.cypher snapshot. The call graph (level 2) is included as CALLS edges when present.
+        if ("neo4j".equalsIgnoreCase(emit)) {
+            JsonArray callGraph = combinedJsonObject.has("call_graph")
+                    ? combinedJsonObject.getAsJsonArray("call_graph")
+                    : null;
+            // Connection options resolve with precedence: CLI flag > NEO4J_* env var > default.
+            String uri = firstNonEmpty(neo4jUri, System.getenv("NEO4J_URI"));
+            BoltConfig bolt = uri == null
+                    ? null
+                    : new BoltConfig(uri,
+                            firstNonEmpty(neo4jUser, System.getenv("NEO4J_USERNAME"), "neo4j"),
+                            firstNonEmpty(neo4jPassword, System.getenv("NEO4J_PASSWORD"), "neo4j"),
+                            firstNonEmpty(neo4jDatabase, System.getenv("NEO4J_DATABASE")));
+            Neo4jEmitter.emit(symbolTable, callGraph, appName, input, output, targetFiles != null, bolt);
+            return;
+        }
 
         // Convert the JavaCompilationUnit to JSON and add to consolidated json object
         String symbolTableJSONString = gson.toJson(symbolTable);
