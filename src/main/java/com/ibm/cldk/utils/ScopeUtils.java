@@ -105,8 +105,12 @@ public class ScopeUtils {
 
     List<Path> applicationClassFiles = BuildProject.buildProjectAndStreamClassFiles(projectPath, build);
     Log.debug("Application class files: " + String.valueOf(applicationClassFiles.size()));
-    if (applicationClassFiles == null) {
-      Log.error("No application classes found.");
+    // An empty list (not null) is what a failed build returns, so guard on emptiness too — otherwise
+    // analysis proceeds with zero application classes and fails later with a cryptic WALA entrypoint
+    // error instead of surfacing the real cause (the project build failed or produced no classes).
+    if (applicationClassFiles == null || applicationClassFiles.isEmpty()) {
+      Log.error("No application classes found — the project build may have failed or produced no "
+          + "compiled classes. Check the build output above and that the input path is correct.");
       throw new RuntimeException("No application classes found.");
     }
     Log.info("Adding application classes to scope.");
