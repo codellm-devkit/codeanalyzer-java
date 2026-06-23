@@ -19,9 +19,9 @@ export default defineConfig({
     }),
     starlight({
       title: "codeanalyzer-java",
-      tagline: "WALA + Javaparser static analysis for enterprise Java, as one JSON schema.",
+      tagline: "WALA + Javaparser static analysis for enterprise Java — one JSON artifact or a queryable Neo4j graph.",
       description:
-        "codeanalyzer-java is the JVM static-analysis backend behind CodeLLM-DevKit's Java support: a standalone JAR that turns a Java project into a symbol table and call graph, emitted as one versioned JSON schema.",
+        "codeanalyzer-java is the JVM static-analysis backend behind CodeLLM-DevKit's Java support: a standalone JAR that turns a Java project into a symbol table and call graph, emitted as one versioned analysis JSON artifact or projected into a queryable Neo4j property graph.",
       logo: {
         src: "./src/assets/logo.png",
         replacesTitle: true,
@@ -97,6 +97,7 @@ export default defineConfig({
             { label: "Analysis levels", slug: "guides/analysis-levels" },
             { label: "Build integration", slug: "guides/build-integration" },
             { label: "Incremental analysis", slug: "guides/incremental-analysis" },
+            { label: "Neo4j output", slug: "guides/neo4j-output" },
           ],
         },
         {
@@ -112,6 +113,7 @@ export default defineConfig({
             { label: "Overview", slug: "schema" },
             { label: "Symbol table", slug: "schema/symbol-table" },
             { label: "Call graph", slug: "schema/call-graph" },
+            { label: "Neo4j graph", slug: "schema/neo4j-graph" },
           ],
         },
         {

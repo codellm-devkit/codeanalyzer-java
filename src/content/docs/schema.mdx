@@ -1,13 +1,22 @@
 ---
 title: Output schema overview
-description: The top-level shape of analysis.json — symbol_table, call_graph, and version — how it's serialized, and how it's versioned.
+description: The two emit targets — the analysis.json document and the Neo4j property graph — the same IR serialized two ways, and how each is versioned.
 ---
 
 import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-Every codeanalyzer-java run produces one document: `analysis.json` (or the same JSON on stdout). This page describes its top-level shape; the sub-pages cover each section in detail.
+codeanalyzer-java extracts one symbol table and call graph per run, then emits that intermediate representation through one of two targets selected by `--emit`:
 
-## Top-level shape
+- **`--emit json`** (the default) — a single `analysis.json` document (or the same JSON on stdout). Self-contained, loaded whole by its consumer.
+- **`--emit neo4j`** — the same IR projected into a **Neo4j property graph**: a `graph.cypher` snapshot, or a live incremental push over Bolt. A queryable, persistent system of record that composes across many applications in one database.
+
+Both targets carry the same model — types, callables, fields, parameters, call sites, variables, enum constants, record components, initialization blocks, CRUD operations, comments, annotations, packages. The graph is a **lossless projection** of the IR, not a summary of it. This page describes the top-level shape of the JSON document and how it relates to the graph; the sub-pages cover each section in detail.
+
+<Aside type="note" title="Emit is a choice, not an addition">
+`--emit` selects an *alternative* output, not an additive one. `--emit neo4j` projects the IR to the graph and returns **without** writing `analysis.json`; `--emit schema` returns even earlier — it publishes the schema contract and runs no project analysis at all. The default remains `--emit json`.
+</Aside>
+
+## Top-level shape (`analysis.json`)
 
 ```json
 {
@@ -15,7 +24,7 @@ Every codeanalyzer-java run produces one document: `analysis.json` (or the same 
     "/absolute/path/to/File.java": { /* JavaCompilationUnit */ }
   },
   "call_graph": [ /* edges — present only at analysis level 2 */ ],
-  "version": "2.3.7"
+  "version": "2.4.1"
 }
 ```
 
@@ -23,7 +32,7 @@ Every codeanalyzer-java run produces one document: `analysis.json` (or the same 
 |-----|------|--------------|-------------|
 | `symbol_table` | object | always | Map of absolute file path → compilation unit. See [Symbol table](/codeanalyzer-java/schema/symbol-table/). |
 | `call_graph` | array | level 2 only | Caller→callee edges from WALA. See [Call graph](/codeanalyzer-java/schema/call-graph/). |
-| `version` | string | always | The analyzer version that produced this document, e.g. `"2.3.7"`. |
+| `version` | string | always | The analyzer version that produced this document, e.g. `"2.4.1"`. |
 
 ## Serialization conventions
 
@@ -37,17 +46,90 @@ The JSON is produced by Gson with a fixed configuration:
 Throughout these schema pages, field names are shown as they appear in the JSON (snake_case). The corresponding Java entity fields are camelCase — `Callable.cyclomaticComplexity` becomes `cyclomatic_complexity` in the output.
 </Aside>
 
-## Versioning and stability
+## The Neo4j projection
 
-Each document carries a `version`. The schema is a contract: the CLDK Python SDK's Pydantic models (`JApplication`, `JType`, `JCallable`, …) are locked to a compatible version, and your own consumers should treat the `version` field as the schema identifier.
+The same compilation units, types, and call edges become first-class nodes and relationships in a Neo4j property graph. Every node label is **J-prefixed** (`:JApplication`, `:JCompilationUnit`, `:JType`, `:JCallable`, …) and every relationship type **`J_`-prefixed** (`:J_HAS_UNIT`, `:J_DECLARES_TYPE`, `:J_CALLS`, …). The prefix is deliberate: a Java graph shares one Neo4j database with the Python (`Py*` / `PY_*`) and TypeScript (`TS*` / `TS_*`) backends without colliding, so a polyglot portfolio lives in a single store.
 
-When the schema changes incompatibly, the version bumps. One concrete example: imports changed from bare strings to structured objects (`{ path, is_static, is_wildcard }`) in 2.3.7. Tools reading an older `analysis.json` against newer code — or vice versa — should check the version. See the [legacy import schema guard](/codeanalyzer-java/guides/incremental-analysis/#schema-compatibility-guard).
+Each run is anchored at a `(:JApplication {name, schema_version})` node — the value of `--app-name` — and every analyzed file hangs off it via `(:JApplication)-[:J_HAS_UNIT]->(:JCompilationUnit)`. Because each application is rooted at its own anchor, many applications coexist side by side and you query across them with Cypher instead of parsing one giant JSON blob per project.
 
-<Aside type="tip">
-If you integrate codeanalyzer-java directly (not via the Python SDK), pin to a specific analyzer version and validate the `version` field before deserializing.
+```bash
+# Live incremental push over Bolt (fat jar) — app-scoped, content-hash diffed
+export NEO4J_PASSWORD=secret
+codeanalyzer -i /path/to/project -a 2 \
+  --emit neo4j --app-name daytrader8 \
+  --neo4j-uri bolt://localhost:7687 --neo4j-user neo4j --neo4j-database neo4j
+```
+
+The two `--emit neo4j` sub-modes are decided purely by whether a Bolt URI resolved (the `--neo4j-uri` flag or the `NEO4J_URI` env var):
+
+- **No URI → a `graph.cypher` snapshot.** Self-contained and re-runnable: constraints and indexes, a scoped wipe of *this* application's prior subgraph, then batched `UNWIND … MERGE` of nodes and edges. It expresses full truth, so it is not incremental. Load it with `cypher-shell < graph.cypher`.
+- **URI present → a live incremental Bolt push.** The driver reads the database's current state and updates **only what changed**: it diffs each compilation unit's `content_hash` (a SHA-256 over the unit), replaces only changed units' subgraphs via idempotent `MERGE` upserts, and on a full run prunes units whose source file vanished. Shared `:JPackage` / `:JAnnotation` nodes are upserted `MERGE`-only and left intact across apps.
+
+<Aside type="caution" title="Native-image caveat">
+The Bolt writer and the Neo4j driver are intentionally **not** bundled in the GraalVM native binary (they are loaded reflectively, so native-image can prune the driver and Netty). In the prebuilt native binary, `--neo4j-uri` therefore degrades gracefully to writing `graph.cypher` with a warning. The real live Bolt push happens from the fat jar (`java -jar codeanalyzer-<version>.jar …`).
 </Aside>
 
+For the full node-label and relationship topology — every property on every node, the gating rules, and the constraints and indexes shipped as DDL — see the dedicated reference:
+
+<LinkCard
+  title="Neo4j graph schema"
+  description="The complete property-graph contract: J-prefixed node labels, J_-prefixed relationships, properties, and the constraints + fulltext index that ship with it."
+  href="/codeanalyzer-java/schema/neo4j-graph/"
+/>
+
+## Versioning: two contracts, two version fields
+
+The JSON document and the graph each declare their own version, and the two are independent:
+
+| Field | Lives on | Identifies |
+|-------|----------|------------|
+| `version` | the root of `analysis.json` | the **analyzer** that produced the document, e.g. `"2.4.1"`. |
+| `schema_version` | the `:JApplication` node in the graph | the **graph schema contract**, currently `1.0.0`. |
+
+`schema_version` is stamped on the application anchor of every emitted graph, so any consumer can read it back and confirm the contract before traversing. The machine-readable form of that contract is `schema.neo4j.json`, which you can publish directly without analyzing a project:
+
+```bash
+# Print the property-graph schema contract to stdout (no project analysis)
+codeanalyzer --emit schema
+```
+
+Pass `-o <dir>` to write it to `<dir>/schema.neo4j.json` instead of stdout. The document enumerates every declared node label, relationship type, and property; the projector is tested to never emit an undeclared label, relationship, or property, so the contract and the graph stay in lockstep.
+
+For the JSON document, the `version` field is the schema identifier: the CLDK Python SDK's Pydantic models (`JApplication`, `JType`, `JCallable`, …) are locked to a compatible version, and your own consumers should treat `version` as the schema key.
+
+When the JSON schema changes incompatibly, `version` bumps. One concrete example: imports changed from bare strings to structured objects (`{ path, is_static, is_wildcard }`). Tools reading an older `analysis.json` against newer code — or vice versa — should check the version. See the [legacy import schema guard](/codeanalyzer-java/guides/incremental-analysis/#schema-compatibility-guard).
+
+<Aside type="tip">
+If you integrate codeanalyzer-java directly (not via the Python SDK), pin to a specific analyzer version and validate the `version` field before deserializing the JSON; for the graph, check `schema_version` on the `:JApplication` node before querying.
+</Aside>
+
+## Reading either output from the Python SDK
+
+The CLDK Python SDK reconstructs the **same typed model objects** — `JType`, `JCallable`, and a `networkx` call graph — from either output. Point it at a project directory to run the in-process analyzer, or at a Bolt URI to read a graph that was populated out of band. The graph path needs no JDK, no native binary, and no project source on the consumer — only read-only credentials and the `application_name` that matches the `--app-name` the graph was loaded with:
+
+```python
+from cldk import CLDK
+from cldk.analysis import AnalysisLevel
+from cldk.analysis.commons.backend_config import Neo4jConnectionConfig
+
+analysis = CLDK.java(
+    analysis_level=AnalysisLevel.call_graph,
+    backend=Neo4jConnectionConfig(
+        uri="bolt://localhost:7687",
+        username="neo4j",
+        password="neo4j",
+        application_name="daytrader8",  # == --app-name on the producing run
+    ),
+)
+symbol_table = analysis.get_symbol_table()  # Dict[str, JCompilationUnit]
+cg = analysis.get_call_graph()              # networkx.DiGraph
+```
+
+See [Python SDK (CLDK)](/codeanalyzer-java/integration/python-sdk/) for the full read-back API.
+
 ## The two sections
+
+These describe the JSON document; the same model is mirrored node-for-node in the graph.
 
 <CardGrid>
   <LinkCard title="Symbol table" description="Compilation units, types, callables, fields, comments, imports — the always-present structural model." href="/codeanalyzer-java/schema/symbol-table/" />

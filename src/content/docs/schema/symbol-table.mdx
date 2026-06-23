@@ -7,6 +7,10 @@ import { Aside } from "@astrojs/starlight/components";
 
 The `symbol_table` is the always-present structural model of the program. It is a map from **absolute file path** to a **compilation unit** (one `.java` file). Everything below is serialized in `snake_case` (see [serialization conventions](/codeanalyzer-java/schema/#serialization-conventions)); field types are shown in TypeScript-ish notation for clarity.
 
+<Aside type="tip" title="Same model, two outputs">
+This page documents the `symbol_table` as it appears in `analysis.json`. The same structure is projected losslessly into a Neo4j property graph with `--emit neo4j` — each entity below becomes a first-class node. See [Neo4j graph schema](/codeanalyzer-java/schema/neo4j-graph/) for the labels, relationships, and constraints, and the [property-graph output guide](/codeanalyzer-java/guides/neo4j-output/) for how to emit it.
+</Aside>
+
 ```json
 {
   "symbol_table": {
@@ -166,5 +170,34 @@ Records, enums, and initializer blocks have their own small entities referenced 
 - **`JParameter`** — a callable parameter: name, type, annotations.
 - **`JVariableDeclaration`** — a local variable declared in a method body.
 - **`JCallSite`** — a single call expression inside a body (receiver, method name, argument types, location).
+
+## Projection to the property graph
+
+When you emit with `--emit neo4j`, every entity above maps to a Neo4j node label. The mapping is direct — the graph is a lossless projection of the same IR, so nothing is dropped:
+
+| `symbol_table` entity | Node label | Node key |
+| --- | --- | --- |
+| Compilation unit | `:JCompilationUnit` | `file_key` (the absolute file path) |
+| `JType` | `:JType` (`:JSymbol`) | `id` = the type's `fqn` |
+| `JCallable` | `:JCallable` (`:JSymbol`) | `id` = `<fqn>#<signature>` |
+| `JField` | `:JField` | `id` = `<ownerFqn>#field#<joined var names>` |
+| `JParameter` | `:JParameter` | `id` |
+| `JVariableDeclaration` | `:JVariable` | `id` |
+| `JCallSite` | `:JCallSite` | `id` |
+| `JEnumConstant` | `:JEnumConstant` | `id` |
+| `JRecordComponent` | `:JRecordComponent` | `id` |
+| `JInitializationBlock` | `:JInitializationBlock` | `id` |
+| `JComment` | `:JComment` | `id` |
+
+`:JType` and `:JCallable` carry the shared `:JSymbol` merge label (one global `id` namespace), and `main(String[])` types and entry-point callables additionally get the `:JEntrypoint` marker.
+
+Containment is expressed as relationships: a compilation unit `J_DECLARES_TYPE` its top-level types, a type `J_HAS_CALLABLE` / `J_HAS_FIELD` / `J_HAS_ENUM_CONSTANT` / `J_HAS_RECORD_COMPONENT` / `J_HAS_INIT_BLOCK` its members, and a callable `J_HAS_PARAMETER` / `J_HAS_CALLSITE` / `J_DECLARES_VAR` its parts. Two things from `analysis.json` are promoted from inline values to shared, deduplicated nodes:
+
+- **Imports.** Each `JImport` becomes a `J_IMPORTS` relationship carrying `path`, `is_static`, and `is_wildcard`. A single-type import links to the imported `:JType`; a wildcard or static import links to a `:JPackage`. Multiple imports from one package stay distinct edges.
+- **Comments and annotations.** Comments become first-class `:JComment` nodes (via `J_HAS_COMMENT`) in addition to a convenience docstring property; annotation strings become shared `:JAnnotation` nodes (via `J_ANNOTATED_BY`) alongside the `annotations` string array.
+
+<Aside type="note" title="Neo4j-specific encodings">
+Neo4j property values are scalars or arrays — there is no map type. So a field's per-variable initializer map is serialized to a single `variable_initializers_json` string property on `:JField`. Every project-owned node also carries a `_module` property recording its provenance. These encodings exist only in the graph; `analysis.json` keeps the structured shapes documented above.
+</Aside>
 
 For the semantic call graph that resolves these call sites across the whole program, continue to the [call graph schema](/codeanalyzer-java/schema/call-graph/).

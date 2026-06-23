@@ -79,15 +79,42 @@ These come from `EntityManager.createQuery(String)` and `EntityManager.createNam
 CRUD data is part of the symbol table, so it's available at [analysis level 1](/codeanalyzer-java/guides/analysis-levels/) — you don't need a call graph to enumerate persistence operations across the app.
 </Aside>
 
+## In the Neo4j graph
+
+When you project the analysis with `--emit neo4j`, CRUD detection is not flattened into the callable — it becomes **first-class graph structure**. Each detected operation is a `:JCrudOperation` node and each query a `:JCrudQuery` node, hung off its owning `:JCallable` or `:JCallSite`:
+
+```cypher
+(:JCallable | :JCallSite)-[:J_HAS_CRUD_OPERATION]->(:JCrudOperation)
+(:JCallable | :JCallSite)-[:J_HAS_CRUD_QUERY]->(:JCrudQuery)
+```
+
+That turns "where does this application write to persistent storage?" into a Cypher traversal across the whole graph — and, once many applications share one database, across the entire portfolio. For example, every method that issues a write:
+
+```cypher
+MATCH (c:JCallable)-[:J_HAS_CRUD_OPERATION]->(op:JCrudOperation)
+WHERE op.operation_type IN ['CREATE', 'UPDATE', 'DELETE']
+RETURN c.signature, op.operation_type
+```
+
+`JCrudOperation` exposes `operation_type` along with the `target_table`, `involved_columns`, `condition`, and `joined_tables` properties — keep in mind those last four are reserved (see above), so today you filter on `operation_type`. See the [Neo4j graph-schema reference](/codeanalyzer-java/schema/neo4j-graph/) for the full node and relationship inventory.
+
 ## Using it downstream
 
 ```python
-analysis = CLDK(language="java").analysis(project_path="my-app")
+from cldk import CLDK
+from cldk.analysis import AnalysisLevel
+
+analysis = CLDK.java(
+    project_path="my-app",
+    analysis_level=AnalysisLevel.symbol_table,
+)
 
 for cls in analysis.get_classes():
     for sig, m in analysis.get_methods_in_class(cls).items():
         for op in m.crud_operations:
             print(f"{op.operation_type} at {cls}:{op.line_number}")
 ```
+
+The same query works unchanged against a graph that was produced out of band: pass a `Neo4jConnectionConfig` instead of `project_path` and the read-only Neo4j backend reconstructs the identical models — no JDK, native binary, or project source required. Set `application_name` to the `--app-name` the graph was loaded with. See the [Neo4j graph output guide](/codeanalyzer-java/guides/neo4j-output/) for the full read-back flow.
 
 Combine with [entry-point](/codeanalyzer-java/frameworks/entry-points/) and call-graph data to answer questions like "which externally-reachable methods perform writes?"

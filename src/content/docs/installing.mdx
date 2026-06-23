@@ -8,10 +8,14 @@ import { Steps, Tabs, TabItem, Aside, CardGrid, LinkCard } from "@astrojs/starli
 There are three ways to get codeanalyzer-java, depending on what you're doing.
 
 <CardGrid>
-  <LinkCard title="Fat JAR" description="The standard distribution. Requires a JVM. Best for direct use and scripting." href="#option-1-fat-jar-recommended" />
+  <LinkCard title="Fat JAR" description="The standard distribution. Requires a JVM. The only build that can push live to Neo4j over Bolt." href="#option-1-fat-jar-recommended" />
   <LinkCard title="Native binary" description="A GraalVM-compiled executable. No JVM needed at runtime." href="#option-2-native-binary-graalvm" />
   <LinkCard title="Via the Python SDK" description="pip install cldk bundles a compatible JAR — no build needed." href="#option-3-via-the-python-sdk" />
 </CardGrid>
+
+<Aside type="tip" title="Just reading a Neo4j graph?">
+If your goal is to *read* a graph that some other job already populated with `--emit neo4j`, you don't need any of this. The CLDK Python SDK's Neo4j backend is a pure read-only Cypher client — **no JDK, no analyzer binary, no project source** on the consumer. Jump to [reading a graph from Python](#reading-a-neo4j-graph-from-python), or see the [Neo4j output guide](/codeanalyzer-java/guides/neo4j-output/).
+</Aside>
 
 ## Prerequisites
 
@@ -27,7 +31,7 @@ source "$HOME/.sdkman/bin/sdkman-init.sh"
 
 ## Option 1: Fat JAR (recommended)
 
-The fat JAR is the standard distribution — the CLDK SDK expects a JVM, and this is the simplest path.
+The fat JAR is the standard distribution — the CLDK SDK expects a JVM, and this is the simplest path. It is also the **only** build that can push live to Neo4j over Bolt (see the [native-image caveat](#native-image-and-the-neo4j-driver) below).
 
 <Steps>
 
@@ -54,6 +58,21 @@ The fat JAR is the standard distribution — the CLDK SDK expects a JVM, and thi
    ```
 
 </Steps>
+
+The fat JAR is what you run as the **producer** in a Neo4j deployment — a CI or Kubernetes Job that projects analysis into the graph with `--emit neo4j` and pushes incrementally over Bolt. Prefer the `NEO4J_PASSWORD` environment variable over `--neo4j-password` so the secret never lands in shell history or process listings:
+
+```bash
+export NEO4J_URI=bolt://localhost:7687
+export NEO4J_USERNAME=neo4j
+export NEO4J_PASSWORD=secret        # keep credentials out of argv
+
+java -jar build/libs/codeanalyzer-2.3.7.jar \
+  -i /path/to/project -a 2 \
+  --emit neo4j \
+  --app-name daytrader8
+```
+
+See the [Neo4j output guide](/codeanalyzer-java/guides/neo4j-output/) for the snapshot-vs-Bolt distinction, multi-tenancy, and the producer/consumer deployment model.
 
 ## Option 2: Native binary (GraalVM)
 
@@ -83,6 +102,20 @@ A native image needs no JVM at runtime. This is heavier to build but gives a sta
 
 </Steps>
 
+<Aside type="caution" title="Native image and the Neo4j driver">
+The Neo4j driver is **deliberately not bundled** into the GraalVM native binary. `BoltWriter` and the official `neo4j-java-driver` are loaded reflectively (via a `Class.forName` name assembled at runtime), so native-image prunes the driver and Netty and keeps the binary small.
+
+The consequence: the prebuilt `codeanalyzer` native binary **cannot open a Bolt connection**. When you pass `--neo4j-uri`, it **degrades gracefully to writing a `graph.cypher` snapshot** and logs a warning — it does not error out. The live, incremental Bolt push happens only from the fat JAR (`java -jar`).
+
+What *does* work identically in both builds:
+
+- `--emit neo4j` **without** a URI → the re-runnable `graph.cypher` snapshot.
+- `--emit schema` → the `schema.neo4j.json` contract (it runs no analysis at all).
+- `--emit json` (the default) → `analysis.json`.
+
+So use the native binary freely for `analysis.json`, snapshots, and the schema contract; reach for the **fat JAR wherever you push live over Bolt**.
+</Aside>
+
 <Aside type="caution" title="Native image and reflection">
 If a native binary throws unexpected exceptions that the JAR doesn't, the bundled `reflect-config.json` is likely stale. Regenerate it with the native-image agent, then rebuild:
 
@@ -104,12 +137,49 @@ pip install cldk
 
 ```python
 from cldk import CLDK
+from cldk.analysis import AnalysisLevel
 
-analysis = CLDK(language="java").analysis(project_path="commons-cli")
+analysis = CLDK.java(
+    project_path="commons-cli",
+    analysis_level=AnalysisLevel.call_graph,
+)
 print(len(analysis.get_classes()), "classes")
 ```
 
-To point the SDK at a JAR you built yourself, pass `analysis_backend_path`. See [Python SDK integration](/codeanalyzer-java/integration/python-sdk/).
+This is the **in-process** backend: the SDK runs the bundled `codeanalyzer` over your project, parses the resulting `analysis.json`, and builds the model in process. To point it at a JAR you built yourself, pass `analysis_backend_path`. See [Python SDK integration](/codeanalyzer-java/integration/python-sdk/).
+
+### Reading a Neo4j graph from Python
+
+There's a second SDK path that builds nothing on the read side. When analysis has already been projected into a Neo4j property graph — by a separate `codeanalyzer --emit neo4j` job — the SDK can become a **read-only Cypher client** that reconstructs the **same typed model objects and the same `networkx` call graph** as the in-process analyzer, with **no JDK, no analyzer binary, and no project source** required. It needs only a Bolt URI and read-only credentials.
+
+Install the optional driver extra:
+
+```bash
+pip install "cldk[neo4j]"   # or: pip install neo4j
+```
+
+Select this backend by passing a `Neo4jConnectionConfig` to the `CLDK.java(...)` factory. The `application_name` must match the `--app-name` the graph was loaded with — that's how the SDK scopes every query to the right `:JApplication`:
+
+```python
+from cldk import CLDK
+from cldk.analysis import AnalysisLevel
+from cldk.analysis.commons.backend_config import Neo4jConnectionConfig
+
+analysis = CLDK.java(
+    analysis_level=AnalysisLevel.call_graph,
+    backend=Neo4jConnectionConfig(
+        uri="bolt://localhost:7687",
+        username="neo4j",
+        password="neo4j",            # read-only credentials are sufficient
+        application_name="daytrader8",  # == the CLI --app-name
+    ),
+)
+
+symbol_table = analysis.get_symbol_table()   # Dict[str, JCompilationUnit]
+cg = analysis.get_call_graph()               # networkx.DiGraph
+```
+
+Because the graph is external, `project_path` is **optional** for this backend — there is no source tree to point at. The Neo4j read-back expects an emitter at **2.4.0 or newer** (with projection fixes landed in **2.4.1**). For the full deployment story, see the [Python SDK integration](/codeanalyzer-java/integration/python-sdk/) and the [Neo4j output guide](/codeanalyzer-java/guides/neo4j-output/).
 
 ## Verify your install
 

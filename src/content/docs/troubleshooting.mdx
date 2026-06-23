@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Common codeanalyzer-java problems and fixes — missing JDK, unresolved types, empty call graphs, legacy import schema, and native-image quirks.
+description: Common codeanalyzer-java problems and fixes — missing JDK, unresolved types, empty call graphs, legacy import schema, native-image quirks, and Neo4j graph output.
 ---
 
 import { Aside } from "@astrojs/starlight/components";
@@ -18,6 +18,11 @@ Quick fixes for the issues you're most likely to hit. Run with `-v` first — mo
 | Build fails during level-2 analysis | Project doesn't build with the default command | Pass a working `-b "<cmd>"`, or pre-build and use `--no-build`. |
 | Native binary throws, JAR doesn't | Stale `reflect-config.json` | Regenerate native-image config (see below). |
 | `analysis.json` truncated / corrupt | Process killed or out of disk | Check disk space and re-run; ensure the run completes. |
+| `--neo4j-uri` ignored, `graph.cypher` written instead | Running the native binary (no bundled driver) | Push over Bolt from the fat JAR, `java -jar` (see below). |
+| Graph empty / wrong app when reading from CLDK | `application_name` doesn't match the `--app-name` the graph was loaded with | Pass the same name in `Neo4jConnectionConfig` (see below). |
+| Stale or duplicate nodes after a rename | Snapshot wipe / Bolt prune are scoped per app; deletes only pruned on a full run | Re-run without `-t`, or re-load the snapshot (see below). |
+| Bolt push: `authentication failure` / wrong database | Default `neo4j`/`neo4j` credentials or unset `NEO4J_*` env | Set `NEO4J_PASSWORD` / `--neo4j-database` (see below). |
+| `J_CALLS` edges missing from the graph | Ran at level 1, or callee is an external library symbol | Run `-a 2` on a full (non-`-t`) analysis (see below). |
 
 ## Empty call graph
 
@@ -53,6 +58,118 @@ java -agentlib:native-image-agent=config-output-dir=src/main/resources/META-INF/
   -jar build/libs/codeanalyzer-2.3.7.jar -i <sample-project> -a 2 -v
 ./gradlew nativeCompile
 ```
+
+## Neo4j graph output
+
+These cover the [`--emit neo4j`](/codeanalyzer-java/guides/neo4j-output/) projection — the live Bolt push, the `graph.cypher` snapshot, and reading the graph back from the [CLDK Python SDK](/codeanalyzer-java/integration/python-sdk/).
+
+### `--neo4j-uri` is ignored and a `graph.cypher` file is written instead
+
+The Neo4j driver is deliberately **not** bundled into the GraalVM native binary — it's loaded reflectively so native-image can prune the driver and Netty. The prebuilt `codeanalyzer` native binary therefore cannot open a Bolt connection: when you pass `--neo4j-uri` it **degrades gracefully to writing `graph.cypher`** and logs a warning, rather than pushing anything live.
+
+If you actually wanted the live, incremental push, run it from the fat JAR instead:
+
+```bash
+NEO4J_PASSWORD=secret java -jar codeanalyzer-2.3.7.jar \
+  -i /path/to/project -a 2 \
+  --emit neo4j --app-name daytrader8 \
+  --neo4j-uri bolt://localhost:7687 --neo4j-user neo4j
+```
+
+This is the producer side of the [producer/consumer split](/codeanalyzer-java/guides/architecture/): the JAR runs out-of-band (a CI step, or a Kubernetes Job / CronJob) and pushes app-scoped subgraphs to a shared Neo4j over Bolt. If you only need the snapshot — for review, version control, or an air-gapped load — the native binary's degraded behaviour is fine; just load the file afterwards with `cypher-shell < graph.cypher`.
+
+<Aside type="note" title="How to tell which mode ran">
+The choice is made purely by whether a Bolt URI resolved (the `--neo4j-uri` flag or the `NEO4J_URI` env var). No URI → a `graph.cypher` snapshot. URI present **and running from the JAR** → a live Bolt push. URI present **but running the native binary** → the warning above and a `graph.cypher` snapshot.
+</Aside>
+
+### Graph is empty, or you get the wrong app, when reading from CLDK
+
+The Neo4j-backed SDK is a pure read-only client — it never builds the graph, it only queries one that a `codeanalyzer --emit neo4j` job has already populated. Every query is scoped to a single application by `application_name`, which **must equal the `--app-name` the graph was loaded with**. A mismatch silently returns nothing, because the query anchors on a `:JApplication` node that doesn't exist.
+
+```python
+from cldk import CLDK
+from cldk.analysis import AnalysisLevel
+from cldk.analysis.commons.backend_config import Neo4jConnectionConfig
+
+analysis = CLDK.java(
+    analysis_level=AnalysisLevel.call_graph,
+    backend=Neo4jConnectionConfig(
+        uri="bolt://localhost:7687",
+        username="neo4j",
+        password="neo4j",
+        application_name="daytrader8",  # == the CLI --app-name
+    ),
+)
+symbol_table = analysis.get_symbol_table()  # Dict[str, JCompilationUnit]
+cg = analysis.get_call_graph()              # networkx.DiGraph
+```
+
+Checklist:
+
+- **Match the name exactly.** Remember the default: when you populated the graph without `--app-name`, the anchor took the base name of the `-i` input directory (or the literal `application` if there was no input). Confirm what's actually in the database:
+
+  ```cypher
+  MATCH (a:JApplication) RETURN a.name, a.schema_version
+  ```
+
+- **Confirm the graph was populated at all.** If the producer ran the native binary with `--neo4j-uri`, it may have written `graph.cypher` instead of pushing (see above) — nothing reached the database.
+- **Install the driver.** Constructing the backend without it raises `CodeanalyzerExecutionException` with an install hint. Run `pip install cldk[neo4j]` (or `pip install neo4j`).
+- **Check the schema version.** The read-back expects an emitter at **2.4.0 or newer** (projection fixes landed in **2.4.1**). The `schema_version` stamped on the `:JApplication` node is `1.0.0`; keep the analyzer that writes the graph and the SDK that reads it on compatible versions.
+
+<Aside type="tip">
+`project_path` is optional for the Neo4j backend — the SDK needs only the Bolt URI and read-only credentials, no JDK, binary, or source. But if you do pass `project_path` and omit `application_name`, the backend falls back to `Path(project_path).name`; if it still can't resolve a name it raises `application_name is required to scope queries to an application.`
+</Aside>
+
+### Stale or duplicate nodes after a rename or delete
+
+Both emit modes are **scoped per application**, and they handle vanished files differently:
+
+- The **`graph.cypher` snapshot** opens with a wipe that deletes *only this app's* prior subgraph — `MATCH (a:JApplication {name: <app-name>})` then detaches its units and descendants — before re-loading the full truth. Shared `:JPackage` / `:JAnnotation` nodes are intentionally left in place so other apps that reference them aren't disturbed. Re-loading the snapshot is therefore always a clean slate for that one app.
+- The **live Bolt push** is incremental. It diffs each compilation unit's `content_hash` and replaces only changed units' subgraphs. Orphan pruning — deleting units whose source file has vanished — runs **only on a full analysis**. A **targeted run (`-t`) skips pruning** so it can touch just the files you named, which means a deleted or renamed file's old nodes can linger.
+
+So if you renamed or deleted a class and its old nodes are still in the graph:
+
+- Re-run a **full** analysis (no `-t`) over Bolt so orphan pruning removes the vanished unit:
+
+  ```bash
+  NEO4J_PASSWORD=secret java -jar codeanalyzer-2.3.7.jar \
+    -i /path/to/project -a 2 \
+    --emit neo4j --app-name daytrader8 \
+    --neo4j-uri bolt://localhost:7687 --neo4j-user neo4j
+  ```
+
+- Or regenerate and re-load the `graph.cypher` snapshot, whose scoped wipe clears this app's subgraph wholesale before reloading.
+
+Renames produce *duplicates* (not just staleness) precisely because the old FQN and the new one are distinct node keys — the upsert can't know they're the same logical unit. A full run reconciles them.
+
+### Bolt connection or authentication failures
+
+Credentials and target database resolve from a flag first, then the matching environment variable, then a built-in default. Prefer the `NEO4J_*` environment variables — especially `NEO4J_PASSWORD` — so secrets stay off the command line and out of shell history.
+
+| Setting | Flag | Env var | Default |
+|---------|------|---------|---------|
+| URI | `--neo4j-uri` | `NEO4J_URI` | *(none — without it, no live push)* |
+| User | `--neo4j-user` | `NEO4J_USERNAME` | `neo4j` |
+| Password | `--neo4j-password` | `NEO4J_PASSWORD` | `neo4j` |
+| Database | `--neo4j-database` | `NEO4J_DATABASE` | *(server default)* |
+
+- An `authentication failure` usually means the run fell back to the `neo4j`/`neo4j` defaults against a server with real credentials. Export `NEO4J_PASSWORD` (and `NEO4J_USERNAME` if it isn't `neo4j`) before running.
+- A "database not found" error means `--neo4j-database` / `NEO4J_DATABASE` names a database that doesn't exist on the server. Leave it unset to use the server default, or create the database first.
+- The analyzer only needs write access. The SDK consumers that read the graph can — and in production should — use separate **read-only** credentials, which is the point of the producer/consumer split.
+
+### `J_CALLS` edges are missing
+
+`J_CALLS` is the level-2 call-graph edge between two application callables. If your queries find types and methods but no `J_CALLS` relationships:
+
+- **Run at `-a 2`.** Level 1 emits the lossless symbol-table subgraph with no `J_CALLS`. Only level 2 adds the WALA call-graph edges.
+- **Don't combine `-t` with `-a 2`.** A targeted run downgrades to level 1, so it refreshes the symbol-table subgraph but recomputes no call edges. Run a full `-a 2` analysis to (re)build `J_CALLS`.
+- **Expect gaps at the boundary.** `J_CALLS` is gated to both endpoints being emitted application callables. Calls into external/library targets that were never emitted as `:JCallable` nodes have no edge — this is documented projection-lossy behaviour, not a bug. Verify with:
+
+  ```cypher
+  MATCH (a:JApplication {name: "daytrader8"})-[:J_HAS_UNIT]->(:JCompilationUnit)
+        -[:J_DECLARES_TYPE]->(:JType)-[:J_HAS_CALLABLE]->(c:JCallable)
+  RETURN count { (c)-[:J_CALLS]->() } AS outgoing_calls
+  ```
 
 <Aside type="tip">
 Still stuck? Re-run with `-v` and open an [issue](https://github.com/codellm-devkit/codeanalyzer-java/issues) with the command you ran, the verbose output, and the project's build system (Maven/Gradle).

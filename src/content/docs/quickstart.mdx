@@ -1,6 +1,6 @@
 ---
 title: Quickstart
-description: Build the codeanalyzer-java JAR and run your first analysis — symbol table and call graph — in a couple of minutes.
+description: Build the codeanalyzer-java JAR and run your first analysis — symbol table and call graph, as analysis.json or a Neo4j graph — in a couple of minutes.
 ---
 
 import { Steps, Tabs, TabItem, Aside } from "@astrojs/starlight/components";
@@ -101,3 +101,43 @@ When `-o` is omitted, the consolidated JSON is printed to stdout instead of bein
 ```
 
 Continue to the [Output schema](/codeanalyzer-java/schema/) for the full structure, or the [CLI reference](/codeanalyzer-java/reference/cli/) for every flag.
+
+## Emit to Neo4j
+
+`analysis.json` is self-contained, but it doesn't compose: to ask a question across a portfolio you load every blob into memory and stitch it together yourself. `--emit neo4j` projects the *same* symbol table and call graph into a **Neo4j property graph** instead — a queryable system of record that many applications can share. `--emit` selects *one* output target, so `--emit neo4j` returns **without** writing `analysis.json`.
+
+The quickest path needs no running database. With no Bolt URI, codeanalyzer renders a self-contained, re-runnable `graph.cypher` snapshot:
+
+```bash
+java -jar build/libs/codeanalyzer-2.3.7.jar \
+  -i /path/to/your/project \
+  -a 2 \
+  --emit neo4j \
+  --app-name daytrader8 \
+  -o ./output
+# -> ./output/graph.cypher
+```
+
+`--app-name` is the tenancy key — it anchors this app's subgraph at a `:JApplication` node, so one database can host many apps side by side. Load the snapshot into any Neo4j whenever you're ready; the script declares its constraints and indexes, does a scoped wipe of just *this* app's prior subgraph, then `MERGE`-loads the graph:
+
+```bash
+cypher-shell -a bolt://localhost:7687 -u neo4j < ./output/graph.cypher
+```
+
+To push **live and incrementally** to a running cluster — only re-sending the compilation units whose `content_hash` changed — set a Bolt URI instead. Prefer the `NEO4J_PASSWORD` environment variable so the secret never lands in shell history:
+
+```bash
+export NEO4J_URI=bolt://localhost:7687
+export NEO4J_USERNAME=neo4j
+export NEO4J_PASSWORD=secret
+
+java -jar build/libs/codeanalyzer-2.3.7.jar \
+  -i /path/to/your/project -a 2 \
+  --emit neo4j --app-name daytrader8
+```
+
+<Aside type="caution" title="Native-image caveat">
+The Neo4j driver isn't bundled into the GraalVM native binary, so the prebuilt `codeanalyzer` native binary can't open a Bolt connection — passing `--neo4j-uri` makes it fall back to writing `graph.cypher` with a warning. The live Bolt push happens from the fat JAR (`java -jar`).
+</Aside>
+
+Once the graph is populated, the CLDK Python SDK reads it back with **no JDK, binary, or project source** — only read-only credentials. See the [Neo4j graph output guide](/codeanalyzer-java/guides/neo4j-output/) for the two emit modes, deployment as a Kubernetes Job, and the `--emit schema` contract, or [Python SDK integration](/codeanalyzer-java/integration/python-sdk/) to read the graph from Python.

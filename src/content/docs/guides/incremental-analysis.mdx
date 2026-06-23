@@ -5,7 +5,7 @@ description: Use target files to re-analyze only the files that changed and patc
 
 import { Aside, Steps } from "@astrojs/starlight/components";
 
-When only a handful of files change, re-analyzing the whole project is wasteful. The **`-t` / `--target-files`** flag re-runs symbol extraction for just the named files and merges the result into an existing `analysis.json`.
+When only a handful of files change, re-analyzing the whole project is wasteful. The **`-t` / `--target-files`** flag re-runs symbol extraction for just the named files and merges the result into an existing `analysis.json` — or, when you emit to Neo4j, replaces just those files' subgraphs in a live property graph.
 
 ## How it works
 
@@ -44,9 +44,68 @@ When merging into an existing `analysis.json`, codeanalyzer checks that the file
 
 The fix is to regenerate the base `analysis.json` with a current JAR (2.3.7+) before applying incremental updates. See [Troubleshooting](/codeanalyzer-java/troubleshooting/).
 
+## Incremental updates to a Neo4j graph
+
+`-t` patches an `analysis.json` in place. The Neo4j Bolt writer is the graph analogue of the same idea: instead of merging compilation units back into a JSON file, it replaces only the changed units' subgraphs in a live, persistent property graph that many applications and many consumers share. Where the JSON form lives in one file you load whole, the graph is a queryable system of record you push deltas into over time.
+
+To target a live database, add `--emit neo4j` and a Bolt URI:
+
+```bash
+NEO4J_PASSWORD=secret java -jar codeanalyzer-2.3.7.jar \
+  -i /path/to/project \
+  --emit neo4j \
+  --app-name daytrader8 \
+  --neo4j-uri bolt://localhost:7687 \
+  --neo4j-user neo4j \
+  --neo4j-database neo4j \
+  -t src/main/java/com/example/Service.java \
+  -t src/main/java/com/example/Repository.java
+```
+
+The push is scoped to one application by `--app-name` (the `:JApplication` anchor node, here `daytrader8`), so independent apps coexist in one database without clobbering each other.
+
+<Aside type="tip" title="Prefer the password env var">
+The examples set `NEO4J_PASSWORD` rather than `--neo4j-password` so the secret never lands in shell history or process listings. The same precedence applies to the other connection settings: an explicit flag wins, otherwise `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, and `NEO4J_DATABASE` are read from the environment.
+</Aside>
+
+### How the Bolt writer decides what changed
+
+The Bolt writer is incremental by construction — it does not rewrite the whole graph on every run. It reads the database's current state and updates only what actually moved:
+
+<Steps>
+
+1. It ensures the schema's constraints and indexes exist (idempotent — a no-op after the first run).
+2. For each compilation unit, it computes a `content_hash` (SHA-256 over the unit) and diffs it against the `content_hash` already stored on the unit in the live database.
+3. Units whose hash is **unchanged** are skipped entirely.
+4. Units whose hash **changed** have their subgraph replaced via idempotent `MERGE` upserts — types, callables, fields, call sites, and the rest are re-projected in batches.
+5. Shared `:JPackage` and `:JAnnotation` nodes are `MERGE`-only, so re-pushing one app never disturbs nodes another app depends on.
+
+</Steps>
+
+Because every write is a `MERGE`, re-running the same analysis is a no-op against the graph — the push is fully idempotent. This makes it safe to run on every commit from CI, where most units hash identically and only the touched files cost anything.
+
+### `-t` skips orphan pruning, just as it forces level 1
+
+`-t` changes the Bolt push the same way it changes a JSON run: it narrows the scope and disables a whole-project step.
+
+On a **full run** (no `-t`), the writer knows it is seeing every compilation unit, so after upserting it **prunes orphans** — compilation units whose source file has vanished are detached and deleted, keeping the graph honest about what still exists on disk.
+
+On a **targeted run** (`-t` present), the writer only sees the files you named. It cannot tell a deleted file apart from one you simply didn't pass this run, so it marks the run as targeted and **skips orphan pruning** — only the named units' subgraphs are replaced; nothing is deleted.
+
+<Aside type="caution" title="Deleted files are not removed by a targeted push">
+A `-t` Bolt push replaces only the subgraphs of the files you list. If a source file was **deleted**, its nodes remain in the graph until a full run (no `-t`) prunes them. After deletions, run a full analysis to garbage-collect vanished units — mirroring how a `-t` run also forgoes the level-2 call graph.
+</Aside>
+
+<Aside type="note" title="Native image vs. fat jar">
+The live Bolt push runs from the fat jar (`java -jar`), which bundles the Neo4j driver. The prebuilt GraalVM **native binary** does not bundle the driver, so passing `--neo4j-uri` there degrades to writing a `graph.cypher` snapshot with a warning instead of pushing over Bolt. Use the fat jar when you need the incremental live push.
+</Aside>
+
 ## When to use it
 
-- **CI / editor integrations** that re-analyze on save and want sub-second turnaround.
-- **Large codebases** where a full parse is expensive but most files are unchanged.
+- **CI / editor integrations** that re-analyze on save and want sub-second turnaround, patching either `analysis.json` or a shared graph.
+- **Large codebases** where a full parse is expensive but most files are unchanged — content-hash diffing means an unchanged unit costs nothing to re-push.
+- **A long-lived Neo4j graph** kept current commit-by-commit, where each run pushes only the delta rather than reloading the whole project.
 
-For call-graph-dependent work, or after large structural changes, prefer a full [level-2 analysis](/codeanalyzer-java/guides/analysis-levels/).
+For call-graph-dependent work, or after large structural changes (including file deletions you want pruned from the graph), prefer a full [level-2 analysis](/codeanalyzer-java/guides/analysis-levels/).
+
+For the full Neo4j story — snapshot vs. live Bolt modes, the scoped wipe, multi-tenancy, and reading the graph back from the [Python SDK](/codeanalyzer-java/integration/python-sdk/) — see [Neo4j graph output](/codeanalyzer-java/guides/neo4j-output/).

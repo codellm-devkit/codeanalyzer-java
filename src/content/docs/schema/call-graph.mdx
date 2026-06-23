@@ -1,6 +1,6 @@
 ---
 title: Call graph schema
-description: The call_graph section of analysis.json — WALA-derived caller→callee edges, their endpoints, and how to load them into a graph library.
+description: The call_graph section of analysis.json — WALA-derived caller→callee edges, their endpoints, and how to load them into a graph library or read them as J_CALLS edges from Neo4j.
 ---
 
 import { Aside } from "@astrojs/starlight/components";
@@ -59,9 +59,9 @@ from cldk import CLDK
 from cldk.analysis import AnalysisLevel
 import networkx as nx
 
-analysis = CLDK(language="java").analysis(
+analysis = CLDK.java(
     project_path="commons-cli",
-    analysis_level=AnalysisLevel.call_graph,
+    analysis_level=AnalysisLevel.call_graph,    # -> runs with -a 2
 )
 
 cg = analysis.get_call_graph()              # networkx.DiGraph
@@ -69,6 +69,57 @@ nx.has_path(cg, source_node, sink_node)     # reachability as a graph query
 ```
 
 If you consume the JSON directly, the same idea applies — build adjacency from `source` → `target` and run your traversal of choice.
+
+## The same edges in the Neo4j graph
+
+When you emit to Neo4j (`--emit neo4j`) instead of JSON, these edges are projected as a first-class relationship rather than a flat array. Each caller→callee pair becomes a typed `J_CALLS` edge between the two `:JCallable` nodes:
+
+```cypher
+(:JCallable)-[:J_CALLS {type, weight, source_kind, destination_kind}]->(:JCallable)
+```
+
+The edge properties carry the same `type` and `weight` you see in JSON, plus `source_kind` and `destination_kind` describing the endpoints. The endpoints are the same `:JCallable` nodes the symbol-table projection already created — so a call edge and the method bodies it connects live in one graph, queryable together. See the [Neo4j graph schema](/codeanalyzer-java/schema/neo4j-graph/) for the full node-and-relationship reference.
+
+Two projection rules are worth stating plainly, because they shape what you can and can't query:
+
+- **`J_CALLS` exists only at `-a 2`.** Level 1 emits the lossless symbol-table subgraph with types, methods, and fields but no call edges — exactly mirroring a level-1 `analysis.json`. Combining `-t/--target-files` with `-a 2` downgrades the run to level 1, so a targeted incremental push refreshes structure without recomputing `J_CALLS`.
+- **`J_CALLS` is gated to resolved application callables.** A call edge is kept only when *both* endpoints were emitted as `:JCallable` nodes. Calls into the JDK or third-party jars therefore do not appear as `J_CALLS` edges — the same boundary as the in-memory call graph. The projector keys vertices off `callable_declaration` (the raw declaration signature) rather than the display `signature`, which is what lets constructor edges resolve to their target nodes instead of dangling (fix [#158](https://github.com/codellm-devkit/codeanalyzer-java/issues/158)).
+
+### Reachability as a Cypher traversal
+
+The `networkx` `has_path` check above has a direct graph-database analogue. Scope to one application by its `:JApplication` anchor — the `--app-name` the graph was loaded with — and ask Cypher for a path along `J_CALLS`:
+
+```cypher
+MATCH (app:JApplication {name: $appName})
+MATCH (app)-[:J_HAS_UNIT]->(:JCompilationUnit)-[:J_DECLARES_TYPE]->(:JType)
+          -[:J_HAS_CALLABLE]->(src:JCallable {signature: $sourceSig})
+MATCH (dst:JCallable {signature: $sinkSig})
+RETURN exists((src)-[:J_CALLS*1..]->(dst)) AS reachable
+```
+
+Because the graph is persistent and multi-tenant — many applications anchored at their own `:JApplication` in one database — this traversal runs without re-analyzing anything. The CLDK SDK reads the same edges back as a `networkx.DiGraph` over a read-only Neo4j connection, so the Python example above is unchanged except for the backend:
+
+```python
+from cldk import CLDK
+from cldk.analysis import AnalysisLevel
+from cldk.analysis.commons.backend_config import Neo4jConnectionConfig
+import networkx as nx
+
+analysis = CLDK.java(
+    analysis_level=AnalysisLevel.call_graph,
+    backend=Neo4jConnectionConfig(
+        uri="bolt://localhost:7687",
+        username="neo4j",
+        password="neo4j",
+        application_name="daytrader8",          # == the --app-name the graph was loaded with
+    ),
+)
+
+cg = analysis.get_call_graph()              # networkx.DiGraph, rebuilt from J_CALLS
+nx.has_path(cg, source_node, sink_node)     # identical query, no JDK or project source
+```
+
+The analysis is produced once — out of band, by a job running `codeanalyzer -a 2 --emit neo4j` — and read cheaply everywhere after that. Read-only credentials are sufficient on the consumer.
 
 ## Why a build is required
 

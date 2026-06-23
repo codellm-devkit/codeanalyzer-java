@@ -1,9 +1,9 @@
 ---
 title: codeanalyzer-java
-description: The WALA + Javaparser static-analysis backend behind CodeLLM-DevKit's Java support — a standalone JAR that turns a Java project into a symbol table and call graph, emitted as one versioned JSON schema.
+description: The WALA + Javaparser static-analysis backend behind CodeLLM-DevKit's Java support — a standalone JAR that turns a Java project into a symbol table and call graph, emitted as a versioned JSON schema or a Neo4j property graph.
 template: doc
 hero:
-  tagline: One JAR turns an enterprise Java project into a symbol table and call graph — emitted as a single versioned JSON schema your tools can consume.
+  tagline: One JAR turns an enterprise Java project into a symbol table and call graph — emitted as a single versioned JSON document, or projected losslessly into a Neo4j property graph your tools can query.
   actions:
     - text: Quickstart
       link: /codeanalyzer-java/quickstart/
@@ -23,10 +23,12 @@ import { CardGrid, LinkCard } from "@astrojs/starlight/components";
 
 Point **codeanalyzer-java** at a Java project and get back `analysis.json` — a single document describing every class, method, field, and import in the codebase, plus an interprocedural call graph computed by WALA. The schema is the *same shape* the CLDK Python SDK deserializes into typed models, so whatever consumes it — an agent, a script, or the SDK — works against structured analysis instead of raw source.
 
+The same symbol table and call graph can also be projected, losslessly, into a **Neo4j property graph** with `--emit neo4j` — a re-runnable `graph.cypher` snapshot, or a live, incremental push over Bolt. One database can hold many applications side by side, each anchored at its own `:JApplication` node, so cross-service questions become a Cypher traversal instead of a memory problem. The SDK can then read straight from the graph — no JDK, native binary, or project source on the consumer.
+
 ## Start here
 
 <CardGrid>
-  <LinkCard title="What is codeanalyzer-java?" description="The mental model: project → JAR → analysis.json → typed consumers." href="/codeanalyzer-java/what-is-codeanalyzer/" />
+  <LinkCard title="What is codeanalyzer-java?" description="The mental model: project → JAR → analysis.json or Neo4j graph → typed consumers." href="/codeanalyzer-java/what-is-codeanalyzer/" />
   <LinkCard title="Quickstart" description="Build the JAR and run your first analysis in a couple of minutes." href="/codeanalyzer-java/quickstart/" />
   <LinkCard title="Installation" description="Run as a fat JAR, or compile a native binary with GraalVM." href="/codeanalyzer-java/installing/" />
   <LinkCard title="Architecture" description="The pipeline: Javaparser symbol extraction + WALA call-graph construction." href="/codeanalyzer-java/guides/architecture/" />
@@ -35,8 +37,9 @@ Point **codeanalyzer-java** at a Java project and get back `analysis.json` — a
 ## Go deeper
 
 <CardGrid>
-  <LinkCard title="CLI reference" description="Every flag: input, analysis level, build command, target files." href="/codeanalyzer-java/reference/cli/" />
+  <LinkCard title="CLI reference" description="Every flag: input, analysis level, emit target, Neo4j connection, target files." href="/codeanalyzer-java/reference/cli/" />
   <LinkCard title="Output schema" description="The full shape of analysis.json — symbol table and call graph." href="/codeanalyzer-java/schema/" />
+  <LinkCard title="Neo4j graph output" description="Project the analysis into a shared Neo4j property graph with --emit neo4j, and read it back from the SDK." href="/codeanalyzer-java/guides/neo4j-output/" />
   <LinkCard title="Analysis levels" description="Level 1 (symbol table) vs. level 2 (+ call graph), and what each costs." href="/codeanalyzer-java/guides/analysis-levels/" />
-  <LinkCard title="Python SDK integration" description="How CLDK shells out to this JAR and wraps the output as JavaAnalysis." href="/codeanalyzer-java/integration/python-sdk/" />
+  <LinkCard title="Python SDK integration" description="How CLDK consumes this JAR — shelling out to it, or reading the graph as JavaAnalysis." href="/codeanalyzer-java/integration/python-sdk/" />
 </CardGrid>

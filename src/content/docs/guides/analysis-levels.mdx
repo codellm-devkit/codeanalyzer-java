@@ -45,6 +45,12 @@ See [Build integration](/codeanalyzer-java/guides/build-integration/) for how th
 WALA needs entry points to anchor the graph. If a project has no `main(String[])` and no recognized framework entry points, the call graph can come back empty. See [Entry points](/codeanalyzer-java/frameworks/entry-points/) and [Troubleshooting](/codeanalyzer-java/troubleshooting/).
 </Aside>
 
+## The level also shapes the Neo4j graph
+
+The analysis level governs the [Neo4j projection](/codeanalyzer-java/guides/neo4j-output/) the same way it governs `analysis.json`. Level 1 emits the lossless symbol-table subgraph — compilation units, types, callables, fields, and the rest — with **no `J_CALLS` edges**. Level 2 adds the call graph as `(:JCallable)-[:J_CALLS]->(:JCallable)` relationships on top of it.
+
+This carries through the `-t` downgrade: because passing `-t` with `-a 2` forces level 1, a targeted incremental Bolt push (`--emit neo4j -t ...`) replaces only the changed units' symbol-table subgraphs and **carries no call edges**. Refresh `J_CALLS` with a full level-2 run.
+
 ## Choosing a level
 
 - **Use level 1** when you need the program's *structure*: listing classes and methods, reading method bodies, finding fields, extracting Javadoc, surveying imports, or doing incremental per-file updates.
@@ -57,4 +63,5 @@ WALA needs entry points to anchor the graph. If a project has no `main(String[])
   <LinkCard title="Symbol table schema" description="Everything level 1 produces." href="/codeanalyzer-java/schema/symbol-table/" />
   <LinkCard title="Call graph schema" description="The edge shape level 2 adds." href="/codeanalyzer-java/schema/call-graph/" />
   <LinkCard title="Incremental analysis" description="Level-1 target-file updates to an existing analysis.json." href="/codeanalyzer-java/guides/incremental-analysis/" />
+  <LinkCard title="Neo4j graph output" description="How each level projects into the property graph — and why level 2 adds J_CALLS." href="/codeanalyzer-java/guides/neo4j-output/" />
 </CardGrid>

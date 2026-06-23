@@ -59,7 +59,7 @@ WALA builds the call graph by traversing outward from entry points. If a project
 
 ## Using entry points downstream
 
-Once analyzed, you can filter on the flags to drive reachability. Via the Python SDK:
+Once analyzed, you can filter on the flags to drive reachability. Via the Python SDK, against an in-process analysis:
 
 ```python
 analysis = CLDK(language="java").analysis(
@@ -77,3 +77,38 @@ entrypoints = [
 ```
 
 Seed a `networkx` reachability query from these to ask whether a sink is reachable from any externally-invocable method.
+
+## Entry points in the Neo4j projection
+
+When you project to a Neo4j property graph with [`--emit neo4j`](/codeanalyzer-java/guides/neo4j-output/), the `is_entrypoint` / `is_entrypoint_class` properties are still carried on the `:JCallable` and `:JType` nodes — but the projection *also* layers a marker label, `:JEntrypoint`, onto the owning callable (and entry-point class). That turns reachability seeding into a one-line `MATCH` instead of a property filter:
+
+```cypher
+// Every entry-point method in one application — the reachability seeds
+MATCH (a:JApplication {name: 'daytrader8'})-[:J_HAS_UNIT]->(:JCompilationUnit)
+      -[:J_DECLARES_TYPE]->(:JType)-[:J_HAS_CALLABLE]->(c:JCallable:JEntrypoint)
+RETURN c.signature
+```
+
+From there you traverse `J_CALLS` edges (present once you analyze at [level 2](/codeanalyzer-java/guides/analysis-levels/)) to ask the same reachability question entirely in Cypher, across every application in the database. Reading the seeds back through the SDK is identical to the in-process path above — point the facade at the graph and the same typed `JCallable` objects come back, with no JDK, native binary, or project source on the consumer:
+
+```python
+from cldk import CLDK
+from cldk.analysis import AnalysisLevel
+from cldk.analysis.commons.backend_config import Neo4jConnectionConfig
+
+analysis = CLDK.java(
+    analysis_level=AnalysisLevel.call_graph,
+    backend=Neo4jConnectionConfig(
+        uri="bolt://localhost:7687",
+        username="neo4j",
+        password="neo4j",              # or set NEO4J_PASSWORD
+        application_name="daytrader8",  # must match the --app-name the graph was loaded with
+    ),
+)
+
+entrypoints = analysis.get_entry_point_methods()
+```
+
+<Aside type="note" title="Where the labels and properties are defined">
+`:JEntrypoint` and the `is_entrypoint` / `is_entrypoint_class` properties are part of the versioned graph contract. For the full node-label and relationship inventory, see the [Neo4j graph schema](/codeanalyzer-java/schema/neo4j-graph/).
+</Aside>

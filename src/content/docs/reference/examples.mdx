@@ -1,7 +1,9 @@
 ---
 title: Examples
-description: Worked codeanalyzer-java invocations — symbol-table runs, full call-graph analysis, single-source mode, incremental updates, and pre-built projects.
+description: Worked codeanalyzer-java invocations — symbol-table runs, full call-graph analysis, single-source mode, incremental updates, Neo4j property-graph output, and reading the graph back from the Python SDK.
 ---
+
+import { Aside } from "@astrojs/starlight/components";
 
 A collection of complete, copy-pasteable invocations. Replace `codeanalyzer-2.3.7.jar` with your built JAR path (or `codeanalyzer` if you compiled a native binary).
 
@@ -100,7 +102,109 @@ java -jar codeanalyzer-2.3.7.jar -i /path/to/project -a 1 \
 # prints the number of analyzed source files
 ```
 
-## From Python via CLDK
+## Emit a Neo4j property graph (snapshot)
+
+`--emit neo4j` projects the same IR as `analysis.json` — losslessly — into a Neo4j property graph. With **no Bolt URI present**, the analyzer writes a self-contained, re-runnable `graph.cypher` snapshot to the output directory:
+
+```bash
+java -jar codeanalyzer-2.3.7.jar \
+  -i /path/to/daytrader8 \
+  -a 2 \
+  --emit neo4j \
+  --app-name daytrader8 \
+  -o ./out
+# -> ./out/graph.cypher
+```
+
+The snapshot is constraints + indexes, a **scoped wipe** of this application's prior subgraph, then batched `UNWIND ... MERGE` for every node and edge. It expresses the full truth of the application — it is *not* incremental. Load it into a running Neo4j with `cypher-shell`:
+
+```bash
+cypher-shell -u neo4j -p "$NEO4J_PASSWORD" < ./out/graph.cypher
+```
+
+<Aside type="note">
+`--emit` is an alternative to the default JSON output, not additive: when `--emit neo4j` is set the analyzer projects the graph and returns without writing `analysis.json`. At `-a 2` the projection includes `J_CALLS` call-graph edges; at `-a 1` you get the lossless symbol-table subgraph with no `J_CALLS`.
+</Aside>
+
+## Push a live graph over Bolt (incremental)
+
+When a Bolt URI resolves — from `--neo4j-uri` or the `NEO4J_URI` env var — `--emit neo4j` pushes **incrementally** to a running Neo4j instead of writing a file. Prefer the `NEO4J_*` environment variables for credentials so secrets stay off the command line:
+
+```bash
+export NEO4J_URI=bolt://localhost:7687
+export NEO4J_USERNAME=neo4j
+export NEO4J_PASSWORD=secret
+
+java -jar codeanalyzer-2.3.7.jar \
+  -i /path/to/daytrader8 \
+  -a 2 \
+  --emit neo4j \
+  --app-name daytrader8
+# -> pushes the daytrader8 subgraph to bolt://localhost:7687
+```
+
+The Bolt writer ensures constraints/indexes, diffs each compilation unit's `content_hash` (SHA-256) against the live database, and replaces **only changed units' subgraphs** with idempotent `MERGE` upserts. Shared `:JPackage` / `:JAnnotation` nodes are `MERGE`d in place. On a **full run** (no `-t`), units whose source file vanished are pruned.
+
+<Aside type="caution">
+The live Bolt push runs from the **fat JAR** (`java -jar`). In the prebuilt **GraalVM native binary**, the Neo4j driver is deliberately not bundled, so `--neo4j-uri` degrades gracefully — `codeanalyzer` falls back to writing `graph.cypher` and prints a warning. Use `java -jar` when you want the real Bolt push.
+</Aside>
+
+You can also pass the flags explicitly instead of the env vars; a flag wins when both are set:
+
+```bash
+java -jar codeanalyzer-2.3.7.jar \
+  -i /path/to/daytrader8 \
+  -a 2 \
+  --emit neo4j \
+  --app-name daytrader8 \
+  --neo4j-uri bolt://localhost:7687 \
+  --neo4j-user neo4j \
+  --neo4j-database neo4j
+# password comes from NEO4J_PASSWORD; --neo4j-password also works
+```
+
+`--app-name` is the tenancy key: it sets the `name` of the single `:JApplication` anchor (`(:JApplication {name})-[:J_HAS_UNIT]->(:JCompilationUnit)`). Many applications coexist in one database, each rooted at its own anchor, so a wipe or re-push of `daytrader8` never touches another app's subgraph. If you omit `--app-name`, it defaults to the base name of the `-i` directory.
+
+## Targeted incremental re-push
+
+Combine `-t` with a live Bolt push to update only the units you changed. A targeted run replaces just those changed-unit subgraphs and **skips orphan pruning** — units for files that vanished are left alone, because a targeted run does not claim to know about the whole application:
+
+```bash
+export NEO4J_URI=bolt://localhost:7687
+export NEO4J_PASSWORD=secret
+
+java -jar codeanalyzer-2.3.7.jar \
+  -i /path/to/daytrader8 \
+  --emit neo4j \
+  --app-name daytrader8 \
+  -t src/main/java/com/ibm/websphere/samples/daytrader/TradeAction.java
+# replaces only TradeAction's subgraph; vanished units are NOT pruned
+```
+
+<Aside type="note">
+`-t` forces level 1, so a targeted run does not refresh `J_CALLS` edges. Run a full `-a 2` push when you need the call graph rebuilt across the application.
+</Aside>
+
+## Emit the schema contract
+
+`--emit schema` publishes the versioned schema contract — every node label, relationship type, and property the projector can produce — with **no project analysis required**. It short-circuits before any analysis runs. Write it to a file:
+
+```bash
+java -jar codeanalyzer-2.3.7.jar --emit schema -o ./out
+# -> ./out/schema.neo4j.json
+```
+
+Or print it to stdout when `-o` is omitted — handy for diffing against a checked-in copy in CI:
+
+```bash
+java -jar codeanalyzer-2.3.7.jar --emit schema \
+  | jq '.schema_version'
+# "1.0.0"
+```
+
+The `schema_version` (`1.0.0`) printed here is the same value stamped on the `:JApplication` node of every graph you emit, so consumers can assert they are reading a contract they understand. See the [Neo4j graph schema](/codeanalyzer-java/schema/neo4j-graph/) for the full label and relationship catalog.
+
+## From Python via CLDK (local analysis)
 
 If you'd rather not manage the JAR yourself, the CLDK SDK invokes it for you:
 
@@ -117,3 +221,35 @@ print(analysis.get_call_graph())   # -> networkx.DiGraph
 ```
 
 See [Python SDK integration](/codeanalyzer-java/integration/python-sdk/) for details.
+
+## Read the graph back from Python (no JAR, no JDK)
+
+Once an application is in Neo4j, the SDK can read it directly — no JDK, no native binary, and no project source on the consumer. It only needs the Bolt URI and read-only credentials. Install the driver extra (`pip install cldk[neo4j]`), then point CLDK at the same `application_name` the graph was loaded with:
+
+```python
+# Java application — read-only Neo4j backend
+from cldk import CLDK
+from cldk.analysis import AnalysisLevel
+from cldk.analysis.commons.backend_config import Neo4jConnectionConfig
+
+analysis = CLDK.java(
+    analysis_level=AnalysisLevel.call_graph,
+    backend=Neo4jConnectionConfig(
+        uri="bolt://localhost:7687",
+        username="neo4j",
+        password="neo4j",
+        application_name="daytrader8",   # == --app-name from the push
+    ),
+)
+
+symbol_table = analysis.get_symbol_table()        # Dict[str, JCompilationUnit]
+cg = analysis.get_call_graph()                     # networkx.DiGraph
+klass = analysis.get_class("com.example.MyService")
+methods = analysis.get_methods_in_class("com.example.MyService")
+```
+
+The backend bulk-fetches nodes and relationships in a handful of Cypher queries and rebuilds the **same canonical model objects** the in-process analyzer produces — the same `JType` / `JCallable` symbol table and the same `networkx` call graph. Analysis is produced once, centrally, by a `codeanalyzer --emit neo4j` job; every consumer reads it cheaply.
+
+<Aside type="note">
+`application_name` must equal the `--app-name` the graph was loaded with — it scopes every query to that application's `:JApplication` anchor. Pass read-only credentials; the backend never writes. It is a context manager, so use `with` (or call `.close()`) to release the driver.
+</Aside>

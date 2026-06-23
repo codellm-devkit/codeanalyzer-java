@@ -7,6 +7,8 @@ import { Aside } from "@astrojs/starlight/components";
 
 codeanalyzer-java is a Picocli command. Invoke it as a fat JAR (`java -jar codeanalyzer-2.3.7.jar ...`) or, if you built a native image, as `codeanalyzer ...`.
 
+By default the analyzer writes one `analysis.json` per project. Pass `--emit neo4j` to project that same model into a [Neo4j property graph](/codeanalyzer-java/guides/neo4j-output/) instead — either a self-contained `graph.cypher` snapshot or a live, incremental push over Bolt. The Neo4j-specific flags below all hang off that mode.
+
 ## Usage
 
 ```
@@ -14,6 +16,9 @@ Usage: codeanalyzer [-hvV] [--no-build] [--no-clean-dependencies]
                     [--include-test-classes] [-a=<analysisLevel>] [-b=<build>]
                     [-f=<projectRootPom>] [-i=<input>] [-o=<output>]
                     [-s=<sourceAnalysis>] [-t=<targetFiles>]...
+                    [--emit=<emit>] [--app-name=<appName>]
+                    [--neo4j-uri=<uri>] [--neo4j-user=<user>]
+                    [--neo4j-password=<password>] [--neo4j-database=<db>]
 
 Analyze java application.
 ```
@@ -24,7 +29,7 @@ Analyze java application.
 |------|----------|-------------|---------|
 | `-i`, `--input` | path | Path to the project root directory to analyze. | — |
 | `-s`, `--source-analysis` | string | Analyze a single string of Java source instead of a project. No build required. | — |
-| `-o`, `--output` | path | Directory to write `analysis.json`. If omitted, JSON is printed to stdout. | stdout |
+| `-o`, `--output` | path | Destination directory. Holds `analysis.json` for the default emit, `graph.cypher` for `--emit neo4j` without a URI, or `schema.neo4j.json` for `--emit schema`. If omitted, output goes to stdout. | stdout / cwd |
 | `-a`, `--analysis-level` | `1` \| `2` | `1` = symbol table only; `2` = symbol table + call graph. | `1` |
 | `-b`, `--build-cmd` | string | Custom build command. When omitted at level 2, an auto build is used. | auto |
 | `--no-build` | flag | Do not build the application; use already-compiled output. | off |
@@ -32,12 +37,18 @@ Analyze java application.
 | `-f`, `--project-root-path` | path | Path to the root `pom.xml` / `build.gradle` (for multi-module projects). | value of `-i` |
 | `-t`, `--target-files` | path | A file to (re)analyze incrementally; repeatable. Forces level 1. | — |
 | `--include-test-classes` | flag | Also compile/analyze test sources. (Hidden option.) | off |
+| `--emit` | `json` \| `neo4j` \| `schema` | Output target. `json` writes `analysis.json`; `neo4j` projects the model into a Neo4j property graph; `schema` prints the graph schema contract. Matched case-insensitively. | `json` |
+| `--app-name` | string | Logical application name used as the `:JApplication` anchor that scopes the graph. (Neo4j emit only.) | input dir base name |
+| `--neo4j-uri` | uri | Bolt URI of a live Neo4j, e.g. `bolt://localhost:7687`. Its presence is what switches `--emit neo4j` from a snapshot to a live push. Falls back to `NEO4J_URI`. | — |
+| `--neo4j-user` | string | Neo4j username for the Bolt push. Falls back to `NEO4J_USERNAME`. | `neo4j` |
+| `--neo4j-password` | string | Neo4j password for the Bolt push. Falls back to `NEO4J_PASSWORD`. Prefer the env var. | `neo4j` |
+| `--neo4j-database` | string | Target Neo4j database. Falls back to `NEO4J_DATABASE`; when unset, the server default database is used. | server default |
 | `-v`, `--verbose` | flag | Print logs to the console. | off |
 | `-h`, `--help` | flag | Show help and exit. | — |
 | `-V`, `--version` | flag | Print version information and exit. | — |
 
 <Aside type="note">
-Options are mutually informing, not all combinable. `-s` (single source) bypasses the project/build path entirely. `-t` (target files) forces level 1 even if `-a 2` is given. See the linked guides for the semantics behind each flag.
+Options are mutually informing, not all combinable. `-s` (single source) bypasses the project/build path entirely. `-t` (target files) forces level 1 even if `-a 2` is given. `--emit` is an *alternative* output target, not additive: `--emit neo4j` and `--emit schema` short-circuit the JSON write. See the linked guides for the semantics behind each flag.
 </Aside>
 
 ## Notes on key flags
@@ -51,18 +62,99 @@ Exactly one of these is the analysis subject. `-s` takes precedence when both ar
 
 ### `-o` (output)
 
-With `-o`, the analyzer writes `<output>/analysis.json` (creating the directory if needed). Without `-o`, the consolidated JSON goes to stdout — convenient for piping, and how the [Python SDK](/codeanalyzer-java/integration/python-sdk/) can capture output without a temp file.
+What lands in `-o` depends on `--emit`:
+
+- **`json`** (default) — writes `<output>/analysis.json`, creating the directory if needed. Without `-o`, the consolidated JSON goes to stdout — convenient for piping, and how the [Python SDK](/codeanalyzer-java/integration/python-sdk/) can capture output without a temp file.
+- **`neo4j` without a URI** — writes `<output>/graph.cypher` (defaults to the current working directory if `-o` is omitted).
+- **`schema`** — writes `<output>/schema.neo4j.json`, or prints it to stdout when `-o` is omitted.
 
 ### `-a` (analysis level)
 
-See [Analysis levels](/codeanalyzer-java/guides/analysis-levels/). Level 2 implies a build unless you pass `--no-build` or a custom `-b`.
+See [Analysis levels](/codeanalyzer-java/guides/analysis-levels/). Level 2 implies a build unless you pass `--no-build` or a custom `-b`. In the Neo4j projection, level 2 is also what adds `J_CALLS` edges (the WALA call graph) to the graph; level 1 emits the lossless symbol-table subgraph with no `J_CALLS`.
 
 ### `-t` (target files)
 
 See [Incremental analysis](/codeanalyzer-java/guides/incremental-analysis/). Repeat the flag for multiple files. Forces level 1; merges into an existing `analysis.json` when one is present in the output directory.
 
+On a **live Bolt push** (`--emit neo4j` with a URI), `-t` marks the run as *targeted*: only the changed compilation units' subgraphs are replaced, and orphan pruning of vanished units is **skipped**. A full run (no `-t`) prunes units whose source file has disappeared. See [Neo4j output](#neo4j-output) below.
+
+## Neo4j output
+
+The four `--emit neo4j` modifiers (`--app-name`, `--neo4j-uri`, `--neo4j-user`, `--neo4j-password`, `--neo4j-database`) follow the same resolution order:
+
+> **flag > environment variable > default**
+
+A flag wins when set; otherwise the matching env var is used; otherwise the built-in default.
+
+| Flag | Environment variable | Default |
+|------|----------------------|---------|
+| `--neo4j-uri` | `NEO4J_URI` | — (no URI → `graph.cypher` snapshot) |
+| `--neo4j-user` | `NEO4J_USERNAME` | `neo4j` |
+| `--neo4j-password` | `NEO4J_PASSWORD` | `neo4j` |
+| `--neo4j-database` | `NEO4J_DATABASE` | server default |
+
+Keep credentials off the command line — prefer the `NEO4J_PASSWORD` environment variable to `--neo4j-password`, which would otherwise show up in shell history and process listings.
+
+### Two emit modes
+
+Whether `--emit neo4j` writes a file or talks to a server is decided **purely by whether a Bolt URI resolved** (from `--neo4j-uri` or `NEO4J_URI`):
+
+- **No URI → `graph.cypher` snapshot.** A self-contained, re-runnable Cypher script: constraints and indexes, a scoped wipe of *this* application's prior subgraph, then batched `UNWIND ... MERGE` for nodes and edges. It expresses the full truth (it is **not** incremental). Load it with `cypher-shell < graph.cypher`.
+- **URI present → live incremental Bolt push.** The Bolt writer ensures constraints and indexes, diffs each compilation unit's `content_hash` against the live database, and replaces **only changed units' subgraphs** via idempotent `MERGE` upserts. Shared `:JPackage` / `:JAnnotation` nodes are upserted once. On a full run it prunes units whose source file has vanished; a `-t` targeted run skips that pruning.
+
+`--app-name` is the tenancy key in both modes: it sets the `name` of the single `:JApplication` anchor, the wipe deletes only that application's subgraph, and many applications can share one Neo4j database side by side, each rooted at its own `:JApplication`. When omitted, it defaults to the base name of the `-i` input directory. The `:JApplication` node also carries `schema_version` (`1.0.0`), the versioned schema contract the graph conforms to.
+
+<Aside type="caution">
+**Native-image caveat.** The Neo4j driver is deliberately *not* bundled in the GraalVM native binary. So in the prebuilt `codeanalyzer` native image, `--neo4j-uri` cannot open a Bolt connection — it degrades gracefully to writing `graph.cypher` and logs a warning. The **live Bolt push only happens from the fat JAR** (`java -jar codeanalyzer-2.3.7.jar ...`). Use the JAR wherever you actually push to a server.
+</Aside>
+
+### `--emit schema`
+
+`--emit schema` prints the machine-readable schema contract — every node label, relationship type, and property the projection can emit — and **requires no project**: it short-circuits before any analysis, so `-i` / `-s` are unnecessary. Writes `schema.neo4j.json` to `-o` if given, otherwise stdout.
+
+```bash
+java -jar codeanalyzer-2.3.7.jar --emit schema -o ./out   # ./out/schema.neo4j.json
+java -jar codeanalyzer-2.3.7.jar --emit schema            # prints to stdout
+```
+
+### Examples
+
+Write a re-runnable snapshot for one application:
+
+```bash
+java -jar codeanalyzer-2.3.7.jar \
+  -i /path/to/daytrader8 -a 2 \
+  --emit neo4j --app-name daytrader8 \
+  -o ./out
+cypher-shell -u neo4j -p "$NEO4J_PASSWORD" < ./out/graph.cypher
+```
+
+Push live and incrementally over Bolt (credentials from the environment):
+
+```bash
+export NEO4J_PASSWORD=secret
+java -jar codeanalyzer-2.3.7.jar \
+  -i /path/to/daytrader8 -a 2 \
+  --emit neo4j --app-name daytrader8 \
+  --neo4j-uri bolt://localhost:7687 \
+  --neo4j-user neo4j \
+  --neo4j-database neo4j
+```
+
+Re-push only the files that changed (targeted — no orphan pruning):
+
+```bash
+java -jar codeanalyzer-2.3.7.jar \
+  -i /path/to/daytrader8 -a 2 \
+  --emit neo4j --app-name daytrader8 \
+  --neo4j-uri bolt://localhost:7687 \
+  -t src/main/java/com/example/AccountService.java
+```
+
+The `--app-name` you load with is the same value a reader scopes to. In the [Python SDK](/codeanalyzer-java/integration/python-sdk/), `Neo4jConnectionConfig(application_name="daytrader8")` reads back exactly the graph produced by `--app-name daytrader8` — no JDK, no JAR, no project sources, just the Bolt URI and read-only credentials. See the [Neo4j guide](/codeanalyzer-java/guides/neo4j-output/) for the producer/consumer split and the full schema.
+
 ## Exit behavior
 
-The command exits non-zero on failure. Run with `-v` to see the underlying logs (build invocation, dependency download, parse problems, WALA progress) when diagnosing a failed run.
+The command exits non-zero on failure. Run with `-v` to see the underlying logs (build invocation, dependency download, parse problems, WALA progress, and — for a live push — the Bolt connection and per-unit upserts) when diagnosing a failed run.
 
 See worked invocations in [Examples](/codeanalyzer-java/reference/examples/).
