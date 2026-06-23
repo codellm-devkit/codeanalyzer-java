@@ -107,7 +107,7 @@ dependencies {
     implementation("org.eclipse.platform:org.eclipse.core.expressions:3.7.100")
     implementation("org.eclipse.platform:org.eclipse.core.filesystem:1.9.0")
     implementation("org.eclipse.platform:org.eclipse.core.jobs:3.11.0")
-    implementation('org.eclipse.platform:org.eclipse.core.resources:3.20.0')
+    implementation('org.eclipse.platform:org.eclipse.core.resources:3.24.0')
     implementation("org.eclipse.platform:org.eclipse.core.runtime:3.17.100")
     implementation("org.eclipse.platform:org.eclipse.equinox.app:1.5.100")
     implementation("org.eclipse.platform:org.eclipse.equinox.common:3.14.100")
