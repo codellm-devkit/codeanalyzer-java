@@ -129,27 +129,36 @@ public final class GraphProjector {
             projectTypeBody(b, fileKey, fqn, typeRef, type);
         }
 
-        // Imports: resolve to a known Type (gated) or to a Package node.
+        // Imports: resolve single-type imports to a JType (project or external), wildcards to a Package.
         if (cu.getImports() != null) {
             for (Import im : cu.getImports()) {
-                projectImport(b, cuRef, im, typeKeys);
+                projectImport(b, cuRef, im);
             }
         }
 
         projectComments(b, cuRef, cu.getComments(), fileKey);
     }
 
-    private static void projectImport(RowBuilder b, NodeRef cuRef, Import im, Set<String> typeKeys) {
+    private static void projectImport(RowBuilder b, NodeRef cuRef, Import im) {
         String path = im.getPath();
         if (path == null || path.isEmpty()) {
             return;
         }
-        Map<String, Object> props = map("is_static", im.isStatic(), "is_wildcard", im.isWildcard());
-        if (!im.isWildcard() && typeKeys.contains(path)) {
-            b.edgeToSymbol("J_IMPORTS", cuRef, path, props);
+        // The full import path always rides on the edge so it round-trips regardless of target kind.
+        Map<String, Object> props = map("path", path, "is_static", im.isStatic(), "is_wildcard", im.isWildcard());
+
+        // A single-type (non-wildcard, non-static) import names a type: link to that JType so the full
+        // type name round-trips and multiple imports from the same package stay distinct nodes (a
+        // package node would collapse them — issue #157). The type may already be a project JType, or
+        // it may be library/external — in which case materialize a bodyless JType keyed by its FQN
+        // (re-seeing the same id merges, so a real declaration later fills in the remaining props).
+        if (!im.isWildcard() && !im.isStatic()) {
+            NodeRef typeRef = b.node(symbolLabels("JType", false), "id", path,
+                    map("id", path, "name", simpleName(path), "fqn", path));
+            b.edge("J_IMPORTS", cuRef, typeRef, props);
             return;
         }
-        // Otherwise model the imported package: the path's package portion (strip the trailing class).
+        // Wildcard (java.util.*) or static-member import: model the package portion of the path.
         String pkg = im.isWildcard() ? path : packageOf(path);
         if (pkg != null && !pkg.isEmpty()) {
             NodeRef pkgRef = b.node(Collections.singletonList("JPackage"), "name", pkg, map("name", pkg));
@@ -177,8 +186,11 @@ public final class GraphProjector {
                 projectCallable(b, fileKey, fqn, typeRef, ce.getValue(), ce.getKey());
             }
         }
-        for (Field f : safe(type.getFieldDeclarations())) {
-            projectField(b, fileKey, fqn, typeRef, f);
+        List<Field> fields = type.getFieldDeclarations();
+        if (fields != null) {
+            for (int i = 0; i < fields.size(); i++) {
+                projectField(b, fileKey, fqn, typeRef, fields.get(i), i);
+            }
         }
         for (EnumConstant ec : safe(type.getEnumConstants())) {
             projectEnumConstant(b, fileKey, fqn, typeRef, ec);
@@ -281,8 +293,14 @@ public final class GraphProjector {
         projectComment(b, ref, v.getComment(), fileKey);
     }
 
-    private static void projectField(RowBuilder b, String fileKey, String ownerFqn, NodeRef owner, Field f) {
-        String id = ownerFqn + "#field#" + f.getName();
+    private static void projectField(RowBuilder b, String fileKey, String ownerFqn, NodeRef owner, Field f, int index) {
+        // A Java field declaration is keyed by its `variables` list, not a single `name` (which the IR
+        // leaves null for multi-declarator fields). Key the node id by the joined variable names so each
+        // declaration is a distinct node; fall back to a positional index if no variables are present.
+        String key = (f.getVariables() != null && !f.getVariables().isEmpty())
+                ? String.join("+", f.getVariables())
+                : String.valueOf(index);
+        String id = ownerFqn + "#field#" + key;
         NodeRef ref = b.node(Collections.singletonList("JField"), "id", id, RowBuilder.prune(
                 map("id", id, "name", f.getName(), "type", f.getType(),
                         "modifiers", strList(f.getModifiers()), "annotations", strList(f.getAnnotations()),
@@ -432,7 +450,15 @@ public final class GraphProjector {
             return null;
         }
         String typeDecl = str(vertex, "type_declaration");
-        String signature = str(vertex, "signature");
+        // Key off `callable_declaration`, not `signature`: the call-graph `signature` rewrites
+        // <init>/<clinit> to the simple class name for readability (e.g. `Foo()` instead of
+        // `<init>()`), which never matches the JCallable node id — keyed by the symbol-table signature
+        // (`<init>(...)`). `callable_declaration` carries that raw signature verbatim, so constructor
+        // call edges resolve to their nodes instead of being gated out (issue #158).
+        String signature = str(vertex, "callable_declaration");
+        if (signature == null) {
+            signature = str(vertex, "signature");
+        }
         if (typeDecl == null || signature == null) {
             return null;
         }
