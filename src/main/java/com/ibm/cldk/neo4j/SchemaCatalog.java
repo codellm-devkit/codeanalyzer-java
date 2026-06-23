@@ -216,7 +216,7 @@ public final class SchemaCatalog {
         r.add(new RelType("J_IMPLEMENTS", Arrays.asList("JType"), Arrays.asList("JType"), none));
         r.add(new RelType("J_ANNOTATED_BY", Arrays.asList("JType", "JCallable", "JField"), Arrays.asList("JAnnotation"), none));
         r.add(new RelType("J_IMPORTS", Arrays.asList("JCompilationUnit"), Arrays.asList("JType", "JPackage"),
-                new P().put("is_static", "boolean").put("is_wildcard", "boolean").done()));
+                new P().put("path", "string").put("is_static", "boolean").put("is_wildcard", "boolean").done()));
         r.add(new RelType("J_RESOLVES_TO", Arrays.asList("JCallSite"), Arrays.asList("JCallable"), none));
         r.add(new RelType("J_CALLS", Arrays.asList("JCallable"), Arrays.asList("JCallable"),
                 new P().put("type", "string").put("weight", "integer")

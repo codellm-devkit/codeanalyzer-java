@@ -194,7 +194,11 @@ public class BuildProject {
      * @return true if the streaming was successful, false otherwise.
      */
     public static List<Path> buildProjectAndStreamClassFiles(String projectPath, String build) throws IOException {
-        return buildProject(projectPath, build) ? classFilesStream(projectPath) : new ArrayList<>();
+        // Normalize to an absolute path up front: the build runs with its working directory set to the
+        // project root, so a relative `-p`/`-f` would resolve against it and double the path (e.g.
+        // `<root>/<root>`), making the build fail and yielding zero application classes.
+        String absProjectPath = Paths.get(projectPath).toAbsolutePath().normalize().toString();
+        return buildProject(absProjectPath, build) ? classFilesStream(absProjectPath) : new ArrayList<>();
     }
 
     private static boolean mkLibDepDirs(String projectPath) {

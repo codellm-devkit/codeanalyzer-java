@@ -421,6 +421,7 @@
         "JPackage"
       ],
       "properties": {
+        "path": "string",
         "is_static": "boolean",
         "is_wildcard": "boolean"
       }
