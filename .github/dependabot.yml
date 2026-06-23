@@ -1,0 +1,22 @@
+# Dependabot configuration.
+#
+# Scope is deliberately limited to this project's own manifests: the analyzer's
+# Gradle build and the GitHub Actions workflows. The applications under
+# src/test/resources/test-applications/** are vendored third-party samples used
+# only as analysis fixtures — their dependencies are test-scoped, never executed
+# and never shipped, so we do not want Dependabot raising version-bump PRs
+# against them (e.g. daytrader8's Derby, which has no Java-8-compatible patched
+# release). Note: this controls Dependabot's automated update PRs; the repo-wide
+# vulnerability *alerts* from the dependency graph are not path-scoped here, so a
+# fixture alert may still surface and should be triaged/dismissed on its merits.
+version: 2
+updates:
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
