@@ -1,0 +1,110 @@
+# Keep the cldk python-sdk (codellm-devkit/python-sdk) in lockstep with this repo:
+# on every codeanalyzer-java release, record the new backend version in the SDK and
+# cut a matching SDK release.
+#
+# What it does, against the SDK's default branch:
+#   1. set [tool.backend-versions].codeanalyzer-java to the released version
+#   2. patch-bump the SDK's own [project].version  (e.g. 1.1.3 -> 1.1.4)
+#   3. commit both and push a v<sdk-version> tag
+#      -> the SDK's own release.yml (trigger: push tag v*.*.*) runs its tests,
+#         bundles the latest codeanalyzer jar, and publishes to PyPI. That workflow
+#         deletes the tag if its tests fail, so a broken bump never ships.
+#
+# Deliberately NOT touched: [project.dependencies] "codeanalyzer-java==X". That pin
+# resolves from real PyPI (which lags — only 2.3.7 is published there), whereas
+# releases are distributed as GitHub release assets + a Pages index. The SDK build
+# bundles the jar directly (its release.yml injects releases/latest), so
+# [tool.backend-versions] is the field that tracks the backend, and bumping the hard
+# dependency pin to a not-on-PyPI version would break `uv sync --frozen`.
+#
+# Requirements:
+#   secrets.CLDK_AUTH_TOKEN - org PAT with contents:write on codellm-devkit/python-sdk.
+#     Used to push the commit + tag; pushing the tag with a PAT (not GITHUB_TOKEN) is
+#     what triggers the SDK's release workflow. The SDK's own GITHUB_TOKEN / PYPI_API_TOKEN
+#     handle the publish on its side.
+name: sdk-lockstep
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "codeanalyzer-java release tag to propagate, e.g. v2.4.1"
+        required: true
+
+env:
+  SDK_REPO: codellm-devkit/python-sdk
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  lockstep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve backend version
+        run: |
+          test -n "${TAG}" || { echo "::error::no release tag resolved"; exit 1; }
+          echo "BACKEND_VERSION=${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Check out the SDK repo
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.SDK_REPO }}
+          token: ${{ secrets.CLDK_AUTH_TOKEN }}
+          ref: main
+          fetch-depth: 0
+
+      - name: Bump backend pin + SDK version
+        id: bump
+        run: |
+          python -m pip install --quiet tomlkit
+          python - "$BACKEND_VERSION" <<'PY'
+          import os, sys, tomlkit
+
+          backend = sys.argv[1]
+          path = "pyproject.toml"
+          doc = tomlkit.parse(open(path).read())
+          out = open(os.environ["GITHUB_OUTPUT"], "a")
+
+          bv = doc["tool"]["backend-versions"]
+          if str(bv.get("codeanalyzer-java")) == backend:
+              out.write("skip=true\n")
+              print(f"SDK already records codeanalyzer-java {backend}; nothing to do.")
+              raise SystemExit(0)
+
+          # patch-bump the SDK's own version (X.Y.Z -> X.Y.(Z+1))
+          cur = str(doc["project"]["version"])
+          parts = cur.split(".")
+          if len(parts) != 3 or not parts[-1].isdigit():
+              raise SystemExit(f"unexpected SDK version {cur!r}; expected numeric X.Y.Z")
+          parts[-1] = str(int(parts[-1]) + 1)
+          new = ".".join(parts)
+
+          bv["codeanalyzer-java"] = backend
+          doc["project"]["version"] = new
+          open(path, "w").write(tomlkit.dumps(doc))
+
+          out.write("skip=false\n")
+          out.write(f"sdk_version={new}\n")
+          print(f"codeanalyzer-java backend -> {backend}; SDK {cur} -> {new}")
+          PY
+
+      - name: Commit, tag, and push to the SDK
+        if: steps.bump.outputs.skip == 'false'
+        env:
+          BACKEND_VERSION: ${{ env.BACKEND_VERSION }}
+          SDK_VERSION: ${{ steps.bump.outputs.sdk_version }}
+        run: |
+          NEW_TAG="v${SDK_VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${NEW_TAG}" >/dev/null 2>&1; then
+            echo "::notice::tag ${NEW_TAG} already exists in the SDK; skipping."
+            exit 0
+          fi
+          git config user.name "cldk-bot"
+          git config user.email "cldk-bot@users.noreply.github.com"
+          git add pyproject.toml
+          git commit -m "chore: bump codeanalyzer-java backend to ${BACKEND_VERSION} (SDK ${SDK_VERSION})"
+          git tag -a "${NEW_TAG}" -m "cldk ${SDK_VERSION} (codeanalyzer-java ${BACKEND_VERSION})"
+          git push origin HEAD:refs/heads/main
+          git push origin "refs/tags/${NEW_TAG}"
+          echo "::notice::pushed SDK ${NEW_TAG} (codeanalyzer-java ${BACKEND_VERSION}) -> triggers the SDK release."
