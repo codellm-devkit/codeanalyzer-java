@@ -102,7 +102,7 @@ dependencies {
     implementation("commons-io:commons-io:2.15.1")
     implementation("org.ow2.asm:asm:9.6")
     implementation("org.eclipse.jdt:org.eclipse.jdt.core:3.21.0")
-    implementation("org.eclipse.platform:org.eclipse.core.commands:3.9.700")
+    implementation("org.eclipse.platform:org.eclipse.core.commands:3.12.500")
     implementation("org.eclipse.platform:org.eclipse.core.contenttype:3.7.1000")
     implementation("org.eclipse.platform:org.eclipse.core.expressions:3.7.100")
     implementation("org.eclipse.platform:org.eclipse.core.filesystem:1.9.0")
