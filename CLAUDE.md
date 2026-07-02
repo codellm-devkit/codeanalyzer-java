@@ -101,6 +101,9 @@ stdout is a clean JSON channel when `-o` is omitted; diagnostics go through `uti
   callable, cross-function CALL/PARAM_IN/PARAM_OUT edges). Data dependence defaults to
   no-heap; `--sdg-data-deps=full` widens it. Schema decisions: `.claude/SCHEMA_DECISIONS.md`.
   Levels 1/2 output and timings must never be affected by level-3 code.
+  The analyzer is a **pure graph provider**: client analyses (taint, slicing) live in the
+  frontend SDKs as reachability queries over this graph — never add them here. Graph
+  substrate (per-argument PARAM nodes, SUMMARY edges) does belong here.
 
 ## Tests
 
