@@ -34,8 +34,11 @@ import java.lang.reflect.Type;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.apache.commons.lang3.tuple.Pair;
 import picocli.CommandLine;
@@ -86,8 +89,19 @@ public class CodeAnalyzer implements Runnable {
     public static String projectRootPom;
 
     @Option(names = { "-a",
-            "--analysis-level" }, description = "Level of analysis to perform. Options: 1 (for just symbol table); 2 (for call graph). Default: 1")
+            "--analysis-level" }, description = "Level of analysis to perform. Options: 1 (for just symbol table); 2 (for call graph); 3 (for the full system dependency graph). Default: 1, or 3 when --emit neo4j.")
+    private static Integer analysisLevelOption;
+
+    /** Resolved analysis level: an explicit -a wins; --emit neo4j defaults to the full SDG (3); else 1. */
     public static int analysisLevel = 1;
+
+    @Option(names = {
+            "--graphs" }, description = "Comma-separated program_graphs sections to emit at analysis level 3: cfg, pdg, sdg. Default: all.")
+    private static String graphs;
+
+    @Option(names = {
+            "--sdg-data-deps" }, description = "Depth of the slicer's data dependence at analysis level 3: no-heap (fast, default) | full (heap-carried dependence; much slower).")
+    private static String sdgDataDeps = "no-heap";
 
     @Option(names = { "--include-test-classes" }, hidden = true, description = "Print logs to console.")
     public static boolean includeTestClasses = false;
@@ -156,7 +170,43 @@ public class CodeAnalyzer implements Runnable {
         }
     }
 
+    /** Fails flag validation: the message must reach the user regardless of verbosity. */
+    private static void invalidFlag(String message) {
+        System.err.println("ERROR: " + message);
+        System.exit(2);
+    }
+
+    /** Validates flag values per the CLI contract: unknown values exit non-zero, never fall back. */
+    private static Set<String> validateFlags() {
+        if (analysisLevel < 1 || analysisLevel > 3) {
+            invalidFlag("Invalid --analysis-level: " + analysisLevel + ". Valid values: 1, 2, 3.");
+        }
+        if (!"no-heap".equals(sdgDataDeps) && !"full".equals(sdgDataDeps)) {
+            invalidFlag("Invalid --sdg-data-deps: " + sdgDataDeps + ". Valid values: no-heap, full.");
+        }
+        Set<String> validSections = new LinkedHashSet<>(Arrays.asList("cfg", "pdg", "sdg"));
+        if (graphs == null) {
+            return validSections;
+        }
+        if (analysisLevel < 3) {
+            invalidFlag("--graphs requires --analysis-level 3.");
+        }
+        Set<String> requested = new LinkedHashSet<>();
+        for (String section : graphs.split(",")) {
+            String trimmed = section.trim().toLowerCase();
+            if (!validSections.contains(trimmed)) {
+                invalidFlag("Invalid --graphs section: '" + trimmed + "'. Valid values: cfg, pdg, sdg.");
+            }
+            requested.add(trimmed);
+        }
+        return requested;
+    }
+
     private static void analyze() throws Exception {
+
+        analysisLevel = analysisLevelOption != null ? analysisLevelOption
+                : ("neo4j".equalsIgnoreCase(emit) ? 3 : 1);
+        Set<String> graphSections = validateFlags();
 
         // The Neo4j schema contract is a static artifact — no project analysis required.
         if ("schema".equalsIgnoreCase(emit)) {
@@ -245,8 +295,13 @@ public class CodeAnalyzer implements Runnable {
                 build = build == null ? "auto" : build;
                 // Is noBuild is true, we will not build the project
                 build = noBuild ? null : build;
-                List<Dependency> sdgEdges = SystemDependencyGraph.construct(input, dependencies, build);
-                combinedJsonObject.add("call_graph", gson.toJsonTree(sdgEdges));
+                SystemDependencyGraph.Result walaResult = SystemDependencyGraph.construct(
+                        input, dependencies, build, analysisLevel >= 3, sdgDataDeps, graphSections);
+                combinedJsonObject.add("call_graph", gson.toJsonTree(walaResult.getCallEdges()));
+                if (analysisLevel >= 3) {
+                    combinedJsonObject.add("system_dependency_graph", gson.toJsonTree(walaResult.getSdgEdges()));
+                    combinedJsonObject.add("program_graphs", gson.toJsonTree(walaResult.getProgramGraphs()));
+                }
             }
         }
         // Cleanup library dependencies directory
@@ -258,6 +313,9 @@ public class CodeAnalyzer implements Runnable {
             JsonArray callGraph = combinedJsonObject.has("call_graph")
                     ? combinedJsonObject.getAsJsonArray("call_graph")
                     : null;
+            JsonArray systemDependencyGraph = combinedJsonObject.has("system_dependency_graph")
+                    ? combinedJsonObject.getAsJsonArray("system_dependency_graph")
+                    : null;
             // Connection options resolve with precedence: CLI flag > NEO4J_* env var > default.
             String uri = firstNonEmpty(neo4jUri, System.getenv("NEO4J_URI"));
             BoltConfig bolt = uri == null
@@ -266,7 +324,8 @@ public class CodeAnalyzer implements Runnable {
                             firstNonEmpty(neo4jUser, System.getenv("NEO4J_USERNAME"), "neo4j"),
                             firstNonEmpty(neo4jPassword, System.getenv("NEO4J_PASSWORD"), "neo4j"),
                             firstNonEmpty(neo4jDatabase, System.getenv("NEO4J_DATABASE")));
-            Neo4jEmitter.emit(symbolTable, callGraph, appName, input, output, targetFiles != null, bolt);
+            Neo4jEmitter.emit(symbolTable, callGraph, systemDependencyGraph, appName, input, output,
+                    targetFiles != null, bolt);
             return;
         }
 

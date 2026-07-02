@@ -55,18 +55,20 @@ public final class Neo4jEmitter {
     /**
      * Project + emit the Neo4j graph.
      *
-     * @param symbolTable the {@code symbol_table} map.
-     * @param callGraph   the {@code call_graph} array (level 2), or {@code null}.
-     * @param appName     logical application name (null ⇒ derived from input dir).
-     * @param input       the analyzed project root (used to derive appName + the cypher output dir).
-     * @param output      output directory (null ⇒ cwd for the snapshot).
-     * @param targetFiles non-null when an incremental/targeted run was requested.
-     * @param bolt        non-null ⇒ push to a live DB over Bolt; null ⇒ write graph.cypher.
+     * @param symbolTable           the {@code symbol_table} map.
+     * @param callGraph             the {@code call_graph} array (level 2), or {@code null}.
+     * @param systemDependencyGraph the {@code system_dependency_graph} array (level 3), or {@code null}.
+     * @param appName               logical application name (null ⇒ derived from input dir).
+     * @param input                 the analyzed project root (used to derive appName + the cypher output dir).
+     * @param output                output directory (null ⇒ cwd for the snapshot).
+     * @param targetedRun           true when an incremental/targeted run was requested.
+     * @param bolt                  non-null ⇒ push to a live DB over Bolt; null ⇒ write graph.cypher.
      */
-    public static void emit(Map<String, JavaCompilationUnit> symbolTable, JsonArray callGraph, String appName,
+    public static void emit(Map<String, JavaCompilationUnit> symbolTable, JsonArray callGraph,
+            JsonArray systemDependencyGraph, String appName,
             String input, String output, boolean targetedRun, BoltConfig bolt) throws IOException {
         String name = appName != null ? appName : deriveAppName(input);
-        GraphRows rows = GraphProjector.project(symbolTable, callGraph, name);
+        GraphRows rows = GraphProjector.project(symbolTable, callGraph, systemDependencyGraph, name);
 
         if (bolt != null) {
             BoltSink sink = loadBoltSink();

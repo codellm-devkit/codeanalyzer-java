@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "generator": "codeanalyzer-java",
   "marker_labels": [
     "JEntrypoint"
@@ -446,6 +446,48 @@
       ],
       "properties": {
         "type": "string",
+        "weight": "integer",
+        "source_kind": "string",
+        "destination_kind": "string"
+      }
+    },
+    {
+      "type": "J_CONTROL_DEP",
+      "from": [
+        "JCallable"
+      ],
+      "to": [
+        "JCallable"
+      ],
+      "properties": {
+        "weight": "integer",
+        "source_kind": "string",
+        "destination_kind": "string"
+      }
+    },
+    {
+      "type": "J_DATA_DEP",
+      "from": [
+        "JCallable"
+      ],
+      "to": [
+        "JCallable"
+      ],
+      "properties": {
+        "weight": "integer",
+        "source_kind": "string",
+        "destination_kind": "string"
+      }
+    },
+    {
+      "type": "J_HEAP_DATA_DEP",
+      "from": [
+        "JCallable"
+      ],
+      "to": [
+        "JCallable"
+      ],
+      "properties": {
         "weight": "integer",
         "source_kind": "string",
         "destination_kind": "string"

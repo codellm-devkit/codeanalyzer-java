@@ -155,6 +155,140 @@ public class CodeAnalyzerIntegrationTest {
     }
 
     @Test
+    void analysisLevelTwoShouldNotEmitSdgSections() throws Exception {
+        var runCodeAnalyzer = container.execInContainer(
+                "bash", "-c",
+                String.format(
+                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --input=/test-applications/call-graph-test --analysis-level=2",
+                        javaHomePath, codeanalyzerVersion
+                )
+        );
+        Assertions.assertEquals(0, runCodeAnalyzer.getExitCode(), "Command should execute successfully");
+        JsonObject jsonObject = new Gson().fromJson(runCodeAnalyzer.getStdout(), JsonObject.class);
+        Assertions.assertTrue(jsonObject.has("call_graph"), "Level 2 must emit the call graph");
+        Assertions.assertFalse(jsonObject.has("system_dependency_graph"),
+                "Level 2 must not emit the system dependency graph");
+        Assertions.assertFalse(jsonObject.has("program_graphs"), "Level 2 must not emit program graphs");
+    }
+
+    @Test
+    void fullSystemDependencyGraphShouldBeEmittedAtAnalysisLevelThree() throws Exception {
+        var runCodeAnalyzer = container.execInContainer(
+                "bash", "-c",
+                String.format(
+                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --input=/test-applications/call-graph-test --analysis-level=3",
+                        javaHomePath, codeanalyzerVersion
+                )
+        );
+        Assertions.assertEquals(0, runCodeAnalyzer.getExitCode(), "Command should execute successfully");
+        JsonObject jsonObject = new Gson().fromJson(runCodeAnalyzer.getStdout(), JsonObject.class);
+
+        // --- Method-level SDG edges (the JGraphEdges shape the SDK models) ---
+        JsonArray systemDependencyGraph = jsonObject.getAsJsonArray("system_dependency_graph");
+        Assertions.assertNotNull(systemDependencyGraph, "Level 3 must emit the system dependency graph");
+        Assertions.assertTrue(StreamSupport.stream(systemDependencyGraph.spliterator(), false)
+                .map(JsonElement::getAsJsonObject)
+                .anyMatch(entry ->
+                        "CONTROL_DEP".equals(entry.get("type").getAsString()) &&
+                                entry.getAsJsonObject("source").get("signature").getAsString().equals("log()") &&
+                                entry.getAsJsonObject("target").get("signature").getAsString().equals("loglog()")
+                ), "Expected control dependence log() -> loglog() not found");
+        Assertions.assertTrue(StreamSupport.stream(systemDependencyGraph.spliterator(), false)
+                .map(JsonElement::getAsJsonObject)
+                .anyMatch(entry ->
+                        "DATA_DEP".equals(entry.get("type").getAsString()) &&
+                                "PARAM_CALLER".equals(entry.get("source_kind").getAsString()) &&
+                                "PARAM_CALLEE".equals(entry.get("destination_kind").getAsString()) &&
+                                entry.getAsJsonObject("source").get("signature").getAsString().equals("helloString()") &&
+                                entry.getAsJsonObject("target").get("signature").getAsString().equals("getName()")
+                ), "Expected data dependence helloString() -> getName() not found");
+
+        // --- Statement-level program graphs ---
+        JsonObject programGraphs = jsonObject.getAsJsonObject("program_graphs");
+        Assertions.assertNotNull(programGraphs, "Level 3 must emit program graphs");
+        JsonObject functions = programGraphs.getAsJsonObject("functions");
+        JsonObject helloString = functions.getAsJsonObject("org.example.User.helloString()");
+        Assertions.assertNotNull(helloString, "helloString() must have program graphs");
+
+        // CFG gate: exactly one synthetic ENTRY (id 0) and one synthetic EXIT (the max id).
+        JsonArray cfgNodes = helloString.getAsJsonObject("cfg").getAsJsonArray("nodes");
+        long entryCount = countNodesOfKind(cfgNodes, "entry");
+        long exitCount = countNodesOfKind(cfgNodes, "exit");
+        Assertions.assertEquals(1, entryCount, "CFG must have exactly one ENTRY node");
+        Assertions.assertEquals(1, exitCount, "CFG must have exactly one EXIT node");
+
+        // PDG gate: ENTRY-anchored control dependence and at least one def-use edge.
+        JsonArray pdgEdges = helloString.getAsJsonObject("pdg").getAsJsonArray("edges");
+        Assertions.assertTrue(StreamSupport.stream(pdgEdges.spliterator(), false)
+                .map(JsonElement::getAsJsonObject)
+                .anyMatch(edge -> "CDG".equals(edge.get("type").getAsString())
+                        && edge.get("source").getAsInt() == 0),
+                "Expected a CDG edge from the ENTRY node");
+        Assertions.assertTrue(StreamSupport.stream(pdgEdges.spliterator(), false)
+                .map(JsonElement::getAsJsonObject)
+                .anyMatch(edge -> "DDG".equals(edge.get("type").getAsString())),
+                "Expected at least one DDG edge");
+
+        // SDG gate: known cross-function edges, anchored at the callee's ENTRY node.
+        JsonArray sdgEdges = programGraphs.getAsJsonArray("sdg_edges");
+        Assertions.assertTrue(StreamSupport.stream(sdgEdges.spliterator(), false)
+                .map(JsonElement::getAsJsonObject)
+                .anyMatch(edge -> "CALL".equals(edge.get("type").getAsString()) &&
+                        edge.getAsJsonObject("source").get("signature").getAsString()
+                                .equals("org.example.User.helloString()") &&
+                        edge.getAsJsonObject("target").get("signature").getAsString()
+                                .equals("org.example.User.log()") &&
+                        edge.getAsJsonObject("target").get("node").getAsInt() == 0),
+                "Expected CALL edge helloString() -> log()#0");
+        Assertions.assertTrue(StreamSupport.stream(sdgEdges.spliterator(), false)
+                .map(JsonElement::getAsJsonObject)
+                .anyMatch(edge -> "PARAM_OUT".equals(edge.get("type").getAsString()) &&
+                        edge.getAsJsonObject("source").get("signature").getAsString()
+                                .equals("org.example.User.getName()") &&
+                        edge.getAsJsonObject("target").get("signature").getAsString()
+                                .equals("org.example.User.helloString()")),
+                "Expected PARAM_OUT edge getName() -> helloString()");
+
+        // No-dangling gate: every cross-function endpoint resolves to an emitted function graph
+        // and a node id within that function's CFG node range.
+        for (JsonElement element : sdgEdges) {
+            for (String end : new String[] { "source", "target" }) {
+                JsonObject endpoint = element.getAsJsonObject().getAsJsonObject(end);
+                String signature = endpoint.get("signature").getAsString();
+                int node = endpoint.get("node").getAsInt();
+                JsonObject function = functions.getAsJsonObject(signature);
+                Assertions.assertNotNull(function, "Dangling endpoint signature: " + signature);
+                int maxNodeId = StreamSupport
+                        .stream(function.getAsJsonObject("cfg").getAsJsonArray("nodes").spliterator(), false)
+                        .mapToInt(n -> n.getAsJsonObject().get("id").getAsInt()).max().orElse(-1);
+                Assertions.assertTrue(node >= 0 && node <= maxNodeId,
+                        "Dangling endpoint node " + signature + "#" + node);
+            }
+        }
+    }
+
+    @Test
+    void invalidGraphSelectorShouldFailFast() throws Exception {
+        var runCodeAnalyzer = container.execInContainer(
+                "bash", "-c",
+                String.format(
+                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --input=/test-applications/call-graph-test --analysis-level=3 --graphs=bogus",
+                        javaHomePath, codeanalyzerVersion
+                )
+        );
+        Assertions.assertNotEquals(0, runCodeAnalyzer.getExitCode(), "Unknown --graphs value must exit non-zero");
+        Assertions.assertTrue(runCodeAnalyzer.getStderr().contains("Invalid --graphs"),
+                "Unknown --graphs value must print a clear error");
+    }
+
+    private static long countNodesOfKind(JsonArray nodes, String kind) {
+        return StreamSupport.stream(nodes.spliterator(), false)
+                .map(JsonElement::getAsJsonObject)
+                .filter(node -> kind.equals(node.get("kind").getAsString()))
+                .count();
+    }
+
+    @Test
     void corruptMavenShouldNotBuildWithWrapper() throws IOException, InterruptedException {
         // Make executable
         mavenContainer.execInContainer("chmod", "+x", "/test-applications/mvnw-corrupt-test/mvnw");
