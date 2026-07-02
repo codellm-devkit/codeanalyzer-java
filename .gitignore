@@ -196,3 +196,10 @@ gradle-app.setting
 bin/
 etc/
 /src/test/resources/sample_apps/daytrader8/output/
+
+# Un-ignore the agent guide + schema decision record past a global gitignore that excludes these
+!CLAUDE.md
+!AGENTS.md
+!.claude/
+.claude/*
+!.claude/SCHEMA_DECISIONS.md

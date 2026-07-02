@@ -75,6 +75,17 @@ public final class GraphProjector {
      * @param appName     logical application name for the {@code :JApplication} anchor.
      */
     public static GraphRows project(Map<String, JavaCompilationUnit> symbolTable, JsonArray callGraph, String appName) {
+        return project(symbolTable, callGraph, null, appName);
+    }
+
+    /**
+     * @param symbolTable           file path → {@link JavaCompilationUnit} (the {@code symbol_table} map).
+     * @param callGraph             the {@code call_graph} array (level 2), or {@code null} at level 1.
+     * @param systemDependencyGraph the {@code system_dependency_graph} array (level 3), or {@code null}.
+     * @param appName               logical application name for the {@code :JApplication} anchor.
+     */
+    public static GraphRows project(Map<String, JavaCompilationUnit> symbolTable, JsonArray callGraph,
+            JsonArray systemDependencyGraph, String appName) {
         RowBuilder b = new RowBuilder();
 
         NodeRef app = b.node(Collections.singletonList("JApplication"), "name", appName,
@@ -91,6 +102,9 @@ public final class GraphProjector {
 
         if (callGraph != null) {
             projectCallGraph(b, callGraph);
+        }
+        if (systemDependencyGraph != null) {
+            projectSystemDependencyGraph(b, systemDependencyGraph);
         }
 
         return b.finish();
@@ -443,6 +457,48 @@ public final class GraphProjector {
             b.edgeIfBothResolved("J_CALLS",
                     new NodeRef("JSymbol", "id", from), new NodeRef("JSymbol", "id", to), props);
         }
+    }
+
+    // ----------------------------------------------------------------------------------------------
+    // System dependency graph (level 3)
+    // ----------------------------------------------------------------------------------------------
+
+    /**
+     * Method-level SDG edges (level 3) project between the same {@code :JCallable} nodes the call
+     * graph resolves to. The dependence kind rides in the relationship <em>type</em> — WALA's
+     * closed {@code Dependency} vocabulary maps to {@code J_CONTROL_DEP} / {@code J_DATA_DEP} /
+     * {@code J_HEAP_DATA_DEP} — because the writers MERGE one relationship per (type, source,
+     * target): a pair with both a control and a data dependence must keep both edges.
+     */
+    private static void projectSystemDependencyGraph(RowBuilder b, JsonArray systemDependencyGraph) {
+        for (JsonElement el : systemDependencyGraph) {
+            if (!el.isJsonObject()) {
+                continue;
+            }
+            JsonObject edge = el.getAsJsonObject();
+            String relType = sdgRelType(str(edge, "type"));
+            String from = vertexId(edge.getAsJsonObject("source"));
+            String to = vertexId(edge.getAsJsonObject("target"));
+            if (relType == null || from == null || to == null) {
+                continue;
+            }
+            Map<String, Object> props = RowBuilder.prune(map(
+                    "weight", asLong(parseIntOrNull(str(edge, "weight"))),
+                    "source_kind", str(edge, "source_kind"),
+                    "destination_kind", str(edge, "destination_kind")));
+            // Same resolved-gating as J_CALLS: kept only if both callables were emitted as nodes.
+            b.edgeIfBothResolved(relType,
+                    new NodeRef("JSymbol", "id", from), new NodeRef("JSymbol", "id", to), props);
+        }
+    }
+
+    /** WALA's closed dependence vocabulary → relationship type; null (skip) for anything else. */
+    private static String sdgRelType(String dependenceType) {
+        if ("CONTROL_DEP".equals(dependenceType) || "DATA_DEP".equals(dependenceType)
+                || "HEAP_DATA_DEP".equals(dependenceType)) {
+            return "J_" + dependenceType;
+        }
+        return null;
     }
 
     private static String vertexId(JsonObject vertex) {

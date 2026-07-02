@@ -35,7 +35,7 @@ public final class SchemaCatalog {
 
     private SchemaCatalog() {}
 
-    public static final String SCHEMA_VERSION = "1.0.0";
+    public static final String SCHEMA_VERSION = "1.1.0";
 
     /** Labels layered onto a node in addition to its primary/specific label. */
     public static final List<String> MARKER_LABELS = Arrays.asList("JEntrypoint");
@@ -221,6 +221,11 @@ public final class SchemaCatalog {
         r.add(new RelType("J_CALLS", Arrays.asList("JCallable"), Arrays.asList("JCallable"),
                 new P().put("type", "string").put("weight", "integer")
                         .put("source_kind", "string").put("destination_kind", "string").done()));
+        for (String dep : Arrays.asList("J_CONTROL_DEP", "J_DATA_DEP", "J_HEAP_DATA_DEP")) {
+            r.add(new RelType(dep, Arrays.asList("JCallable"), Arrays.asList("JCallable"),
+                    new P().put("weight", "integer")
+                            .put("source_kind", "string").put("destination_kind", "string").done()));
+        }
         r.add(new RelType("J_HAS_CRUD_OPERATION", Arrays.asList("JCallable", "JCallSite"),
                 Arrays.asList("JCrudOperation"), none));
         r.add(new RelType("J_HAS_CRUD_QUERY", Arrays.asList("JCallable", "JCallSite"),
