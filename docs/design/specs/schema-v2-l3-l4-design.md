@@ -1,5 +1,7 @@
 # Design Spec — codeanalyzer-java: canonical schema v2 migration + L3/L4 dataflow
 
+> **Status:** Accepted — point-in-time provenance, not a living doc. Live plan & status: [Epic codellm-devkit/.github#42](https://github.com/codellm-devkit/.github/issues/42). Decisions ledger: [`.claude/SCHEMA_DECISIONS.md`](../../../.claude/SCHEMA_DECISIONS.md).
+
 ## 1. Summary
 
 Migrate `codeanalyzer-java` from the legacy v1 output (`{symbol_table, call_graph, version}`, rich `JGraphEdges`, per-callable `code`, `is_*` boolean type flags) to the **canonical schema v2** — one additive Code Property Graph (a tree of `application → module → type → callable → body` nodes with typed edge overlays) — and grow it to **analysis level 4**, in **both projections** (`analysis.json` and Neo4j). Concretely this adds:
@@ -65,7 +67,7 @@ One structure — a CPG — in two projections that must agree.
 
 ## 6. Design decisions (schema-design-loop outcomes)
 
-Recorded for `.claude/SCHEMA_DECISIONS.md`. Each was decided with the user against the keystone and the Python pilot.
+Recorded in [`.claude/SCHEMA_DECISIONS.md`](../../../.claude/SCHEMA_DECISIONS.md); divergences from the canonical keystone and the Python pilot are noted per decision.
 
 | # | Decision | Choice | Rationale / divergence |
 | --- | --- | --- | --- |
@@ -192,26 +194,16 @@ Slice/taint gates are **frontend** gates (SDK), not analyzer gates.
 
 ## 15. Decomposition & release plan
 
-**Shape:** Epic + a sub-issue stack (tracking granularity follows PR granularity). Epic lives in `codellm-devkit/.github`; children filed **just-in-time** on the repo they change and attached as cross-repo sub-issues; the committed spec is the record — link it, don't paste it.
+**Live tracking is the epic, not this spec.** Filed as an **Epic + 8-child sub-issue stack** in [codellm-devkit/.github#42](https://github.com/codellm-devkit/.github/issues/42) — one PR per child across `codeanalyzer-java` and `python-sdk`. The epic is the single source of truth for scope and status; the shape below is a snapshot for orientation only.
 
-| # | Sub-issue (PR) | Repo | Gate |
-| --- | --- | --- | --- |
-| 1 | L1 v2 tree emission (envelope, module/type/callable, `source`, byte spans, `can://` ids, structured decorators, nested metrics/refs, `body` call nodes `callee:null`); v1 emitter behind a flag as superset oracle | codeanalyzer-java | L1 gate; monotonicity |
-| 2 | L2 v2 call_graph (identity-only edges, `callee` backfill, `external_symbols`) | codeanalyzer-java | L2 gate; L1 ⊆ L2 |
-| 3 | Neo4j v2 base relabel (SchemaCatalog major bump; L1/L2 families; `--emit` rules) | codeanalyzer-java | cross-projection gate |
-| 4 | L3 intraprocedural — CFG (WALA→source-statement) + CDG + syntactic DDG (+ Neo4j overlay); Java lowering fixtures | codeanalyzer-java | L3 gate (CFG/dominance/PDG-slice) |
-| 5 | L4 SDG — synthetic vertices + `param_in`/`param_out` + semantic DDG (+ Neo4j overlay) | codeanalyzer-java | L4 param/semantic-ddg gates |
-| 6 | L4 summary pass — hammock regions + SCC fixpoint (k-limited); `summary` edges | codeanalyzer-java | summary-edge gate |
-| 7 | python-sdk Java v2 views (public API frozen; new `get_program_dependency_graph`) | python-sdk | SDK gates (mocked + E2E, slice/taint queries) |
+Shape (snapshot): L1 tree → L2 `call_graph` → Neo4j base → L3 (`cfg`/`cdg`/`ddg`) → L4 SDG (`param_in`/`param_out` + semantic `ddg`) → L4 summary pass → python-sdk v2 views → SDK slice/taint queries. Each level emits **both** projections (L3/L4 carry their Neo4j overlay in-PR); L3 can ship/tag before L4; the summary pass lands after the rest of L4.
 
-Each level still emits **both** projections: #4/#5 carry their own Neo4j overlay in-PR; #3 covers only the L1/L2 base relabel. L3 (#4) ships and can be tagged before L4; the summary pass (#6) lands after the rest of L4 (#5).
-
-**Release / lockstep:**
-- Analyzer is a **major** release (breaking output change; note in CHANGELOG *Changed/Breaking*). L1–L4 are each independently shippable behind `-a`, so the analyzer can cut a major once L1/L2 v2 (± L3) are green and grow L4 in a follow-up minor.
-- The SDK is a **major** SDK release that **pins the analyzer only after the analyzer's v2 release is cut** (until then old SDK models won't parse v2). This ordering is a first-class epic checklist item.
+**Release / lockstep (enduring):**
+- Analyzer = **major** release (breaking output; CHANGELOG *Changed/Breaking*). L1–L4 are independently shippable behind `-a`, so cut the major once L1/L2 v2 (± L3) are green and grow L4 in a follow-up minor.
+- SDK = **major** release; pins the analyzer **only after** the analyzer's v2 release is cut (until then old SDK models won't parse v2).
 - Neo4j `schema.neo4j.json` and the JSON schema move in lockstep.
 
-**HARD-GATE:** no implementation rung starts until this spec is committed **and** the tracking record exists. Per the decomposition decision, the tracking record is the epic + (just-in-time) sub-issues. Issue bodies are drafted for review here; nothing is filed on GitHub without explicit go-ahead.
+**Gate:** implementation rungs start only after the spec is committed **and** the tracking record exists — both satisfied (this spec; epic #42 + 8 children).
 
 ---
 
