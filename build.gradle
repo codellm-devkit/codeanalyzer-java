@@ -156,7 +156,10 @@ test {
 
 spotless {
     java {
-        target 'src/**/*.java'
+        // Format only the analyzer's own sources. Test-application fixtures under
+        // src/test/resources (vendored apps and git submodules) are third-party inputs and must
+        // not be reformatted — doing so mutates test inputs and dirties submodule working trees.
+        target 'src/main/java/**/*.java', 'src/test/java/**/*.java'
         trimTrailingWhitespace()
         endWithNewline()
         importOrder()
