@@ -24,6 +24,16 @@ public class JCallable {
     private List<String> errorChannel = new ArrayList<>();
     private List<String> modifiers = new ArrayList<>();
     private List<JDecorator> decorators = new ArrayList<>();
+    /** Signature-with-parameter-names text (not recoverable from span.bytes, which covers the body). */
+    private String declaration;
+
+    /** First line of the body block, or -1 when there is no body (abstract/interface method). */
+    private int codeStartLine = -1;
+
+    /** True for compiler-generated members the source does not declare (e.g. a default constructor). */
+    private boolean isImplicit;
+
+    private List<JComment> comments = new ArrayList<>();
     private JMetrics metrics;
     private JRefs refs;
 

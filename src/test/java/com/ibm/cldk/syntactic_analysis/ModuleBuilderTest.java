@@ -78,6 +78,13 @@ class ModuleBuilderTest {
     }
 
     @Test
+    void build_capturesFileLevelComments() {
+        JModule m = build("/*\n * Copyright ACME.\n */\npackage p;\nclass Foo {}\n");
+        assertTrue(m.getComments().stream().anyMatch(c -> c.getContent().contains("Copyright ACME.")),
+                "the file header comment belongs to the module");
+    }
+
+    @Test
     void build_capturesImports() {
         String source = "package p;\nimport java.util.List;\nimport static java.util.Arrays.asList;\n"
                 + "import java.io.*;\nclass Foo {}\n";

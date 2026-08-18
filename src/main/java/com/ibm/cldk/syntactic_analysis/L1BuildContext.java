@@ -2,12 +2,16 @@ package com.ibm.cldk.syntactic_analysis;
 
 import com.github.javaparser.Range;
 import com.github.javaparser.ast.Node;
+import com.github.javaparser.ast.comments.Comment;
 import com.ibm.cldk.schema.CanId;
+import com.ibm.cldk.schema.JComment;
 import com.ibm.cldk.schema.Span;
 import com.ibm.cldk.schema.Spans;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.List;
 import lombok.Getter;
 
 /**
@@ -31,6 +35,26 @@ public final class L1BuildContext {
     /** The {@code can://java/<app>/<file>} id for this module. */
     public String moduleId() {
         return CanId.moduleId(applicationId, fileKey);
+    }
+
+    /**
+     * The comment attached to a declaration — its javadoc, or the leading line/block comment. Returns
+     * an empty list when the node has none. Deliberately the node's <em>own</em> comment rather than
+     * every comment contained within it (v1's behaviour, which duplicated member comments onto types).
+     */
+    public List<JComment> commentsOf(Node node) {
+        List<JComment> comments = new ArrayList<>();
+        node.getComment().ifPresent(c -> comments.add(comment(c)));
+        return comments;
+    }
+
+    /** Convert a JavaParser comment into the v2 model. */
+    public JComment comment(Comment c) {
+        JComment out = new JComment();
+        out.setContent(c.getContent());
+        out.setSpan(spanOf(c));
+        out.setJavadoc(c.isJavadocComment());
+        return out;
     }
 
     /**

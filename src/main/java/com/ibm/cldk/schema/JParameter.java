@@ -14,6 +14,7 @@ public class JParameter {
     private String name;
     private String type;
     private Span span;
+    private List<String> modifiers = new ArrayList<>();
     private List<JDecorator> decorators = new ArrayList<>();
 
     /** True for a varargs parameter ({@code String... names}); {@code type} stays the element type. */

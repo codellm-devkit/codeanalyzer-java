@@ -16,6 +16,8 @@ public class JType {
     private String id;
     private String kind;
     private Span span;
+    private List<JComment> comments = new ArrayList<>();
+    private List<String> modifiers = new ArrayList<>();
     private List<String> baseTypes = new ArrayList<>();
     private List<String> interfaces = new ArrayList<>();
     private List<JDecorator> decorators = new ArrayList<>();

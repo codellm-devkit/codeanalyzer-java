@@ -67,6 +67,34 @@ class CallableBuilderTest {
     }
 
     @Test
+    void build_capturesJavadocComment() {
+        JCallable c = build("/** Adds two numbers. */\n  int add(int a, int b) { return a + b; }");
+        assertEquals(1, c.getComments().size());
+        assertTrue(c.getComments().get(0).getContent().contains("Adds two numbers."));
+        assertTrue(c.getComments().get(0).isJavadoc());
+    }
+
+    @Test
+    void build_capturesDeclarationString() {
+        // The signature-with-names text v1 exposed as `declaration` (useful verbatim in LLM prompts);
+        // it is not recoverable from span.bytes, which covers the body too.
+        JCallable c = build("public int add(int a, int b) { return a + b; }");
+        assertEquals("public int add(int a, int b)", c.getDeclaration());
+    }
+
+    @Test
+    void build_capturesCodeStartLineOfTheBody() {
+        // "class Foo {" is line 4 of the wrapper, so the member starts on line 5.
+        JCallable c = build("void m() {\n    x();\n  }");
+        assertEquals(5, c.getCodeStartLine());
+    }
+
+    @Test
+    void build_abstractMethodHasNoCodeStartLine() {
+        assertEquals(-1, build("abstract void m();").getCodeStartLine());
+    }
+
+    @Test
     void build_capturesErrorChannelFromThrows() {
         JCallable c = build("void read() throws IOException, RuntimeException {}");
         assertEquals(List.of("IOException", "RuntimeException"), c.getErrorChannel());

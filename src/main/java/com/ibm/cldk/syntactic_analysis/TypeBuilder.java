@@ -46,6 +46,9 @@ public final class TypeBuilder {
         type.setId(CanId.childId(parentId, td.getNameAsString()));
         type.setKind(kindOf(td));
         type.setSpan(ctx.spanOf(td));
+        type.setComments(ctx.commentsOf(td));
+        type.setModifiers(
+                td.getModifiers().stream().map(m -> m.getKeyword().asString()).collect(Collectors.toList()));
         type.setDecorators(
                 td.getAnnotations().stream().map(decoratorBuilder::build).collect(Collectors.toList()));
 

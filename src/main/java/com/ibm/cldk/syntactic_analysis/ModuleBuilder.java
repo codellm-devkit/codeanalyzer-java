@@ -3,6 +3,7 @@ package com.ibm.cldk.syntactic_analysis;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.ImportDeclaration;
 import com.github.javaparser.ast.body.TypeDeclaration;
+import com.ibm.cldk.schema.JComment;
 import com.ibm.cldk.schema.JImport;
 import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.schema.JType;
@@ -32,6 +33,14 @@ public final class ModuleBuilder {
         module.setPackageName(cu.getPackageDeclaration().map(pd -> pd.getNameAsString()).orElse(""));
         module.setSource(ctx.getSource());
         module.setContentHash(ctx.contentHash());
+
+        // File-level comments: the unit's own comment plus orphans (e.g. a licence header that is not
+        // attached to any declaration). Declaration comments live on their own nodes.
+        List<JComment> comments = new ArrayList<>(ctx.commentsOf(cu));
+        cu.getAllComments().stream()
+                .filter(c -> c.getCommentedNode().isEmpty())
+                .forEach(c -> comments.add(ctx.comment(c)));
+        module.setComments(comments);
 
         List<JImport> imports = new ArrayList<>();
         for (ImportDeclaration id : cu.getImports()) {

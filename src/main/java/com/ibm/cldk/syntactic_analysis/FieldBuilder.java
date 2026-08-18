@@ -3,6 +3,7 @@ package com.ibm.cldk.syntactic_analysis;
 import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
 import com.ibm.cldk.schema.CanId;
+import com.ibm.cldk.schema.JComment;
 import com.ibm.cldk.schema.JDecorator;
 import com.ibm.cldk.schema.JField;
 import com.ibm.cldk.schema.Span;
@@ -37,6 +38,7 @@ public final class FieldBuilder {
         List<JDecorator> decorators =
                 fd.getAnnotations().stream().map(decoratorBuilder::build).collect(Collectors.toList());
         Span span = ctx.spanOf(fd);
+        List<JComment> comments = ctx.commentsOf(fd);
 
         List<JField> fields = new ArrayList<>();
         for (VariableDeclarator var : fd.getVariables()) {
@@ -47,6 +49,8 @@ public final class FieldBuilder {
             field.setModifiers(modifiers);
             field.setDecorators(decorators);
             field.setSpan(span);
+            field.setComments(comments);
+            var.getInitializer().ifPresent(init -> field.setInitializer(init.toString()));
             fields.add(field);
         }
         return fields;

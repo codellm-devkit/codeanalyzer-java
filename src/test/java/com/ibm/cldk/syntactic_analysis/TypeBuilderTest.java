@@ -52,6 +52,31 @@ class TypeBuilderTest {
     }
 
     @Test
+    void build_capturesJavadocAsOwnComment() {
+        JType t = buildFirstType("package p;\n/** A widget. */\nclass Foo {}\n");
+        assertEquals(1, t.getComments().size());
+        assertTrue(t.getComments().get(0).getContent().contains("A widget."));
+        assertTrue(t.getComments().get(0).isJavadoc());
+        assertNotNull(t.getComments().get(0).getSpan());
+    }
+
+    @Test
+    void build_commentsAreOwnNotAllContained() {
+        // v1 used getAllContainedComments(), so a type listed every comment inside every member.
+        // v2 gives each node only its OWN attached comment.
+        JType t = buildFirstType("package p;\n/** Type doc. */\nclass Foo {\n  /** Method doc. */\n  void m() {}\n}\n");
+        assertEquals(1, t.getComments().size(), "the method's javadoc belongs to the method, not the type");
+        assertTrue(t.getComments().get(0).getContent().contains("Type doc."));
+    }
+
+    @Test
+    void build_capturesModifiers() {
+        // Keystone's type node lists modifiers[] — v1 had them and v2 must not drop them.
+        assertEquals(List.of("public", "abstract"),
+                buildFirstType("package p;\npublic abstract class Foo {}\n").getModifiers());
+    }
+
+    @Test
     void build_capturesInheritance() {
         JType t = buildFirstType("package p;\nclass Foo extends Base implements Runnable {}\n");
         assertEquals(List.of("Base"), t.getBaseTypes());

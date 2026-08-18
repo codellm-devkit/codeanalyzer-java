@@ -17,5 +17,9 @@ public class JField {
     private String type;
     private Span span;
     private List<String> modifiers = new ArrayList<>();
+    private List<JComment> comments = new ArrayList<>();
     private List<JDecorator> decorators = new ArrayList<>();
+
+    /** The declarator's initializer expression text, if any (absent when uninitialized). */
+    private String initializer;
 }

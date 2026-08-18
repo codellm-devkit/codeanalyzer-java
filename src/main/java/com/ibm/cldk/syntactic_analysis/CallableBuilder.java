@@ -75,14 +75,19 @@ public final class CallableBuilder {
                 cd.getThrownExceptions().stream().map(t -> t.asString()).collect(Collectors.toList()));
         callable.setModifiers(
                 cd.getModifiers().stream().map(m -> m.getKeyword().asString()).collect(Collectors.toList()));
+        callable.setComments(ctx.commentsOf(cd));
         callable.setDecorators(
                 cd.getAnnotations().stream().map(decoratorBuilder::build).collect(Collectors.toList()));
+
+        // `declaration` mirrors v1: modifiers + return type + name + parameter names, no body.
+        callable.setDeclaration(cd.getDeclarationAsString(true, true, true).strip());
 
         JMetrics metrics = new JMetrics();
         metrics.setCyclomatic(cyclomaticComplexity(cd));
         callable.setMetrics(metrics);
 
         Optional<BlockStmt> body = bodyOf(cd);
+        body.flatMap(b -> b.getRange().map(r -> r.begin.line)).ifPresent(callable::setCodeStartLine);
         callable.setRefs(refs(body, classFieldNames));
         body.ifPresent(b -> callable.setBody(callSiteBuilder.build(b)));
         body.ifPresent(b -> callable.setTypes(localClasses(b, callable.getId())));

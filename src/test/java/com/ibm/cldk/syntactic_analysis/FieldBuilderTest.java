@@ -1,7 +1,9 @@
 package com.ibm.cldk.syntactic_analysis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.javaparser.JavaParser;
@@ -61,6 +63,24 @@ class FieldBuilderTest {
         assertTrue(fields.stream().allMatch(f -> f.getType().equals("int")));
         assertEquals(TYPE_ID + "/a", fields.get(0).getId());
         assertEquals(TYPE_ID + "/b", fields.get(1).getId());
+    }
+
+    @Test
+    void build_capturesFieldComment() {
+        JField f = build("// how many\n  private int count;").get(0);
+        assertEquals(1, f.getComments().size());
+        assertTrue(f.getComments().get(0).getContent().contains("how many"));
+        assertFalse(f.getComments().get(0).isJavadoc(), "a line comment is not javadoc");
+    }
+
+    @Test
+    void build_capturesPerVariableInitializer() {
+        // v1 kept variable_initializers keyed per declarator; v2 keeps one field per variable, each
+        // carrying its own initializer expression text.
+        List<JField> fields = build("int a = 1, b = 2;");
+        assertEquals("1", fields.get(0).getInitializer());
+        assertEquals("2", fields.get(1).getInitializer());
+        assertNull(build("int c;").get(0).getInitializer(), "no initializer -> absent, not empty string");
     }
 
     @Test

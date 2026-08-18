@@ -23,6 +23,7 @@ public class JModule {
 
     private String source;
 
+    private List<JComment> comments = new ArrayList<>();
     private List<JImport> imports = new ArrayList<>();
 
     /** Top-level types declared in this file, keyed by simple name (nested types hang under them). */

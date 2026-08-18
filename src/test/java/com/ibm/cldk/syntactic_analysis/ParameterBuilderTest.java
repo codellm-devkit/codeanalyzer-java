@@ -42,6 +42,12 @@ class ParameterBuilderTest {
     }
 
     @Test
+    void build_capturesParameterModifiers() {
+        JParameter p = build("package p;\nclass Foo {\n  void m(final String name) {}\n}\n");
+        assertEquals(List.of("final"), p.getModifiers());
+    }
+
+    @Test
     void build_capturesGenericAndArrayTypesSyntactically() {
         assertEquals("List<String>", build("package p;\nclass Foo {\n  void m(List<String> xs) {}\n}\n").getType());
         assertEquals("int[]", build("package p;\nclass Foo {\n  void m(int[] xs) {}\n}\n").getType());

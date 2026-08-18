@@ -27,6 +27,8 @@ public final class ParameterBuilder {
         parameter.setType(param.getType().asString());
         parameter.setVariadic(param.isVarArgs());
         parameter.setSpan(ctx.spanOf(param));
+        parameter.setModifiers(
+                param.getModifiers().stream().map(m -> m.getKeyword().asString()).collect(Collectors.toList()));
         parameter.setDecorators(
                 param.getAnnotations().stream().map(decoratorBuilder::build).collect(Collectors.toList()));
         return parameter;
