@@ -68,6 +68,24 @@ L4 unit; lands last.
 Java analog of the pilot's `can://python/…`; built from the existing `signatureOf()`.
 Ordinal ids `…@<line>:<col>` (real) / `…@<tag>` (synthetic) within a callable.
 
+**L1 refinements (2026-08, during CallableBuilder):**
+- **Signature is shared, not duplicated.** The v1 type-erasure logic moved to
+  `syntactic_analysis.Signatures.typeErasure(CallableDeclaration)`; both the v1
+  symbol table and the v2 `CallableBuilder` call it, so ids match. It falls back to
+  the plain AST signature when no symbol solver is configured (pure syntactic parse),
+  so it never throws.
+- **Ordinal-id anchor = invoked-name position.** A `call` body node's tag (and the
+  local-ids in its `arguments`) use the *method-name* `line:col`, not the whole
+  expression's begin — so chained calls `a.b().c()` get distinct ids instead of
+  colliding on the shared expression start.
+- **`refs` at L1 are syntactic names, not resolved ids.** Cross-module resolution is
+  L2+; at L1 `refs.types` are the AST spellings of referenced/instantiated types and
+  `refs.fields` are the simple names of enclosing-type fields accessed. Refined to
+  `can://` ids once resolution is available. Keystone shows `[id]`; L1 emits best-effort.
+- **`callable.kind ∈ {method, constructor}`.** Direct members only (via
+  `getMethods()`/`getConstructors()`); nested-type methods hang under their own type,
+  local (method-body) classes under `callable.types` (D4 containment).
+
 ### D9 — Neo4j namespace: keep the `J_` relationship prefix
 Existing convention (`J_CALLS`, …); dual-label `JSymbol` merge pattern retained.
 `SchemaCatalog` takes a major bump (families rename v1→v2).

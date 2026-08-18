@@ -599,29 +599,7 @@ public class SymbolTable {
      * @return String representing type erasure or regular signature
      */
     private static String getTypeErasureSignature(CallableDeclaration callableDecl) {
-        try {
-            StringBuilder signature = new StringBuilder(
-                    (callableDecl instanceof MethodDeclaration) ? callableDecl.getNameAsString() : "<init>"
-            );
-            List<String> erasureParameterTypes = new ArrayList<>();
-            for (Object param : callableDecl.getParameters()) {
-                Parameter parameter = (Parameter) param;
-                ResolvedType resolvedType = parameter.getType().resolve();
-                if (parameter.isVarArgs()) {
-                    erasureParameterTypes.add(resolvedType.erasure().describe() + "[]");
-                } else {
-                    erasureParameterTypes.add(resolvedType.erasure().describe());
-                }
-            }
-            signature.append("(");
-            signature.append(String.join(", ", erasureParameterTypes));
-            signature.append(")");
-            return signature.toString();
-        } catch (Throwable e) {
-            Log.warn("Could not compute type erasure signature for "+callableDecl.getSignature().asString()+
-                    "; computing regular signature");
-            return callableDecl.getSignature().asString();
-        }
+        return com.ibm.cldk.syntactic_analysis.Signatures.typeErasure(callableDecl);
     }
 
     /**

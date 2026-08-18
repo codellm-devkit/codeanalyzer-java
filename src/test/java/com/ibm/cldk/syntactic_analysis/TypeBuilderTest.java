@@ -9,6 +9,7 @@ import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.TypeDeclaration;
 import com.ibm.cldk.schema.CanId;
+import com.ibm.cldk.schema.JCallable;
 import com.ibm.cldk.schema.JDecorator;
 import com.ibm.cldk.schema.JType;
 import java.util.List;
@@ -80,6 +81,30 @@ class TypeBuilderTest {
         JType inner = outer.getTypes().get("Inner");
         assertEquals(outer.getId() + "/Inner", inner.getId());
         assertEquals("class", inner.getKind());
+    }
+
+    @Test
+    void build_populatesFieldsKeyedBySimpleName() {
+        JType t = buildFirstType("package p;\nclass Foo {\n  private int count;\n  String name;\n}\n");
+        assertEquals(Set.of("count", "name"), t.getFields().keySet());
+        assertEquals("int", t.getFields().get("count").getType());
+        assertEquals(t.getId() + "/count", t.getFields().get("count").getId());
+    }
+
+    @Test
+    void build_populatesCallablesKeyedBySignature() {
+        JType t = buildFirstType("package p;\nclass Foo {\n  Foo() {}\n  void inc() {}\n}\n");
+        assertTrue(t.getCallables().containsKey("inc()"));
+        assertEquals(2, t.getCallables().size(), "constructor + method");
+        assertEquals("method", t.getCallables().get("inc()").getKind());
+    }
+
+    @Test
+    void build_callableRefsSeeEnclosingTypeFields() {
+        // TypeBuilder must hand its field names to the callable builder so refs.fields resolves.
+        JType t = buildFirstType("package p;\nclass Foo {\n  int count;\n  void inc() { count = count + 1; }\n}\n");
+        JCallable inc = t.getCallables().get("inc()");
+        assertEquals(List.of("count"), inc.getRefs().getFields());
     }
 
     @Test

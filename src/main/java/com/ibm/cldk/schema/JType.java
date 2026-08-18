@@ -20,6 +20,12 @@ public class JType {
     private List<String> interfaces = new ArrayList<>();
     private List<JDecorator> decorators = new ArrayList<>();
 
+    /** Fields declared in this type, keyed by simple name (one entry per declared variable). */
+    private Map<String, JField> fields = new LinkedHashMap<>();
+
+    /** Methods and constructors, keyed by type-erasure signature (keystone containment name). */
+    private Map<String, JCallable> callables = new LinkedHashMap<>();
+
     /**
      * Member/inner types declared directly inside this one, keyed by simple name. Nesting and
      * parent are encoded by this containment position (and the {@code can://…/Outer/Inner} id path);

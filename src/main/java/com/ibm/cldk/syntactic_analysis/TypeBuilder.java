@@ -1,11 +1,15 @@
 package com.ibm.cldk.syntactic_analysis;
 
 import com.github.javaparser.ast.body.AnnotationDeclaration;
+import com.github.javaparser.ast.body.CallableDeclaration;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.EnumDeclaration;
+import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.RecordDeclaration;
 import com.github.javaparser.ast.body.TypeDeclaration;
 import com.ibm.cldk.schema.CanId;
+import com.ibm.cldk.schema.JCallable;
+import com.ibm.cldk.schema.JField;
 import com.ibm.cldk.schema.JType;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -23,10 +27,14 @@ public final class TypeBuilder {
 
     private final L1BuildContext ctx;
     private final DecoratorBuilder decoratorBuilder;
+    private final FieldBuilder fieldBuilder;
+    private final CallableBuilder callableBuilder;
 
     public TypeBuilder(L1BuildContext ctx) {
         this.ctx = ctx;
         this.decoratorBuilder = new DecoratorBuilder(ctx);
+        this.fieldBuilder = new FieldBuilder(ctx);
+        this.callableBuilder = new CallableBuilder(ctx);
     }
 
     /**
@@ -54,6 +62,28 @@ public final class TypeBuilder {
         }
         type.setBaseTypes(baseTypes);
         type.setInterfaces(interfaces);
+
+        // Fields, keyed by simple name — one entry per declared variable (int a, b; -> a, b).
+        Map<String, JField> fields = new LinkedHashMap<>();
+        for (FieldDeclaration fd : td.getFields()) {
+            fieldBuilder.build(fd, type.getId()).forEach(f -> fields.put(f.getName(), f));
+        }
+        type.setFields(fields);
+
+        // Callables (methods + constructors) declared directly in this type — getMethods()/
+        // getConstructors() return only direct members, so nested-type methods are not swept in.
+        // Keyed by type-erasure signature. Field names are handed down so each callable's
+        // refs.fields can recognize accesses to this type's fields.
+        List<String> fieldNames = new ArrayList<>(fields.keySet());
+        List<CallableDeclaration<?>> declared = new ArrayList<>();
+        declared.addAll(td.getConstructors());
+        declared.addAll(td.getMethods());
+        Map<String, JCallable> callables = new TreeMap<>();
+        for (CallableDeclaration<?> cd : declared) {
+            JCallable callable = callableBuilder.build(cd, type.getId(), fieldNames);
+            callables.put(callable.getSignature(), callable);
+        }
+        type.setCallables(new LinkedHashMap<>(callables));
 
         // Recurse into member (inner) types; nesting/parent are encoded by this containment (and the
         // id path). Local classes in method bodies are handled later by the callable builder.
