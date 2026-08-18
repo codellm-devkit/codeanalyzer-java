@@ -37,6 +37,8 @@ public class JCallable {
     private JMetrics metrics;
     private JRefs refs;
 
+    private List<JVariableDeclaration> localVariables = new ArrayList<>();
+
     /** L1 emits only {@code call} nodes here, keyed by ordinal id; the rest of the body arrives at L3. */
     private Map<String, JBodyNode> body = new LinkedHashMap<>();
 

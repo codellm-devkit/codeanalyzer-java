@@ -11,6 +11,7 @@ import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.CallableDeclaration;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JCallable;
+import com.ibm.cldk.schema.JVariableDeclaration;
 import java.util.List;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
@@ -64,6 +65,24 @@ class CallableBuilderTest {
         assertEquals("String", c.getReturnType());
         assertEquals(List.of("public"), c.getModifiers());
         assertEquals("Override", c.getDecorators().get(0).getName());
+    }
+
+    @Test
+    void build_capturesLocalVariables() {
+        JCallable c = build("void m() { int total = 0; String name; }");
+        assertEquals(List.of("total", "name"),
+                c.getLocalVariables().stream().map(JVariableDeclaration::getName).collect(Collectors.toList()));
+        assertEquals("int", c.getLocalVariables().get(0).getType());
+        assertEquals("0", c.getLocalVariables().get(0).getInitializer());
+        assertNull(c.getLocalVariables().get(1).getInitializer(), "uninitialized -> absent");
+        assertNotNull(c.getLocalVariables().get(0).getSpan());
+    }
+
+    @Test
+    void build_localVariablesExcludeThoseInNestedLocalClasses() {
+        JCallable c = build("void m() { int mine = 1; class Local { void inner() { int theirs = 2; } } }");
+        assertEquals(List.of("mine"),
+                c.getLocalVariables().stream().map(JVariableDeclaration::getName).collect(Collectors.toList()));
     }
 
     @Test

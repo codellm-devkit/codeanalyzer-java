@@ -22,6 +22,7 @@ import com.ibm.cldk.schema.JCallable;
 import com.ibm.cldk.schema.JMetrics;
 import com.ibm.cldk.schema.JRefs;
 import com.ibm.cldk.schema.JType;
+import com.ibm.cldk.schema.JVariableDeclaration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -89,6 +90,7 @@ public final class CallableBuilder {
         Optional<BlockStmt> body = bodyOf(cd);
         body.flatMap(b -> b.getRange().map(r -> r.begin.line)).ifPresent(callable::setCodeStartLine);
         callable.setRefs(refs(body, classFieldNames));
+        body.ifPresent(b -> callable.setLocalVariables(localVariables(b)));
         body.ifPresent(b -> callable.setBody(callSiteBuilder.build(b)));
         body.ifPresent(b -> callable.setTypes(localClasses(b, callable.getId())));
         return callable;
@@ -99,6 +101,24 @@ public final class CallableBuilder {
             return ((MethodDeclaration) cd).getBody();
         }
         return Optional.of(((ConstructorDeclaration) cd).getBody());
+    }
+
+    /** Locals declared directly in this body, in source order (nested classes' locals are theirs). */
+    private List<JVariableDeclaration> localVariables(BlockStmt body) {
+        List<JVariableDeclaration> locals = new ArrayList<>();
+        for (VariableDeclarator vd : body.findAll(VariableDeclarator.class)) {
+            if (!CallSiteBuilder.belongsDirectlyTo(vd, body)) {
+                continue;
+            }
+            JVariableDeclaration local = new JVariableDeclaration();
+            local.setName(vd.getNameAsString());
+            local.setType(vd.getType().asString());
+            vd.getInitializer().ifPresent(init -> local.setInitializer(init.toString()));
+            local.setSpan(ctx.spanOf(vd));
+            local.setComments(ctx.commentsOf(vd));
+            locals.add(local);
+        }
+        return locals;
     }
 
     /** Local (method-body) classes declared directly in the body, keyed by simple name (sorted). */
