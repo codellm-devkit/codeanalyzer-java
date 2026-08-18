@@ -1,0 +1,20 @@
+package com.ibm.cldk.schema;
+
+import java.util.ArrayList;
+import java.util.List;
+import lombok.Data;
+
+/**
+ * A v2 {@code type} node. The specific flavor is the {@code kind} value
+ * ({@code class}|{@code interface}|{@code enum}|{@code record}|{@code annotation}) rather than a
+ * pile of {@code is_*} booleans (design decision D4).
+ */
+@Data
+public class JType {
+    private String id;
+    private String kind;
+    private Span span;
+    private List<String> baseTypes = new ArrayList<>();
+    private List<String> interfaces = new ArrayList<>();
+    private List<JDecorator> decorators = new ArrayList<>();
+}
