@@ -1,7 +1,9 @@
 package com.ibm.cldk.schema;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import lombok.Data;
 
 /**
@@ -17,4 +19,11 @@ public class JType {
     private List<String> baseTypes = new ArrayList<>();
     private List<String> interfaces = new ArrayList<>();
     private List<JDecorator> decorators = new ArrayList<>();
+
+    /**
+     * Member/inner types declared directly inside this one, keyed by simple name. Nesting and
+     * parent are encoded by this containment position (and the {@code can://…/Outer/Inner} id path);
+     * local classes declared in method bodies live under the enclosing callable, not here.
+     */
+    private Map<String, JType> types = new LinkedHashMap<>();
 }

@@ -8,7 +8,10 @@ import com.github.javaparser.ast.body.TypeDeclaration;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JType;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.stream.Collectors;
 
 /**
@@ -51,6 +54,16 @@ public final class TypeBuilder {
         }
         type.setBaseTypes(baseTypes);
         type.setInterfaces(interfaces);
+
+        // Recurse into member (inner) types; nesting/parent are encoded by this containment (and the
+        // id path). Local classes in method bodies are handled later by the callable builder.
+        Map<String, JType> nested = new TreeMap<>();
+        td.getMembers().stream()
+                .filter(m -> m instanceof TypeDeclaration)
+                .map(m -> (TypeDeclaration<?>) m)
+                .forEach(member -> nested.put(member.getNameAsString(), build(member, type.getId())));
+        type.setTypes(new LinkedHashMap<>(nested));
+
         return type;
     }
 

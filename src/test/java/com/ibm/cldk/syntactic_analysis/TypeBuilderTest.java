@@ -12,6 +12,7 @@ import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JDecorator;
 import com.ibm.cldk.schema.JType;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 /** Tests the v2 {@link TypeBuilder} — kind, byte-offset span, structured decorators, inheritance. */
@@ -64,6 +65,21 @@ class TypeBuilderTest {
         int[] bytes = t.getSpan().getBytes();
         assertTrue(source.substring(bytes[0], bytes[1]).contains("class Foo"),
                 "span.bytes should slice module source to the type's declaration text");
+    }
+
+    @Test
+    void build_recursesIntoMemberTypesViaContainment() {
+        // Nesting is encoded by containment (member types under the parent's `types`) and the id
+        // path — no separate nesting/is_local field.
+        String source = "package p;\nclass Outer {\n  class Inner {}\n  enum E { A }\n}\n";
+        JType outer = buildFirstType(source);
+
+        assertEquals(Set.of("Inner", "E"), outer.getTypes().keySet());
+        assertEquals("enum", outer.getTypes().get("E").getKind());
+
+        JType inner = outer.getTypes().get("Inner");
+        assertEquals(outer.getId() + "/Inner", inner.getId());
+        assertEquals("class", inner.getKind());
     }
 
     @Test

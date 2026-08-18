@@ -31,10 +31,18 @@ extensible. **Divergence:** the Python pilot and current Java keep these flat
 (`cyclomatic_complexity`, `referenced_types`, `accessed_fields`); SDK views expose
 the old flat names.
 
-### D4 — Type kinds: single `kind` + `nesting`
-`type.kind ∈ {class, interface, enum, record, annotation}` plus
-`nesting:{parent?, is_local?}`, replacing the v1 `is_interface`/`is_enum`/
-`is_record`/`is_nested`/… boolean pile.
+### D4 — Type kinds: single `kind`; nesting via containment
+`type.kind ∈ {class, interface, enum, record, annotation}` replaces the v1
+`is_interface`/`is_enum`/`is_record`/`is_nested`/… boolean pile.
+
+**Nesting/locality is encoded by containment, not a `nesting` field** (refined
+2026-08 after checking the Python pilot): member/inner types live under the
+enclosing type's `types{}`; local classes under the enclosing callable's
+`types{}`; and the `can://…/Outer/Inner` id path records the parent. Parent and
+is-local are therefore derivable from tree position — no `nesting` object is
+emitted. The keystone lists a `nesting:{parent?,is_local?}` field, but full
+containment subsumes it, matching how `codeanalyzer-python` models it
+(`PyClass.types` for inner classes, `PyCallable.types` for local classes).
 
 ### D5 — L3 CFG engine & granularity: WALA engine → source-statement nodes
 Use WALA as the analysis engine (`SSACFG` + dominance + SSA def-use — heap-ready for
