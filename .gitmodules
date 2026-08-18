@@ -1,0 +1,27 @@
+[submodule "src/test/resources/test-applications/spring-petclinic"]
+	path = src/test/resources/test-applications/spring-petclinic
+	url = https://github.com/spring-projects/spring-petclinic.git
+[submodule "src/test/resources/test-applications/cargotracker"]
+	path = src/test/resources/test-applications/cargotracker
+	url = https://github.com/eclipse-ee4j/cargotracker.git
+[submodule "src/test/resources/test-applications/commons-lang"]
+	path = src/test/resources/test-applications/commons-lang
+	url = https://github.com/apache/commons-lang.git
+[submodule "src/test/resources/test-applications/daytrader-microservices"]
+	path = src/test/resources/test-applications/daytrader-microservices
+	url = https://github.com/sample-daytrader/sample.daytrader.microservices.git
+[submodule "src/test/resources/test-applications/quarkuscoffeeshop-counter"]
+	path = src/test/resources/test-applications/quarkuscoffeeshop-counter
+	url = https://github.com/quarkuscoffeeshop/quarkuscoffeeshop-counter.git
+[submodule "src/test/resources/test-applications/quarkuscoffeeshop-barista"]
+	path = src/test/resources/test-applications/quarkuscoffeeshop-barista
+	url = https://github.com/quarkuscoffeeshop/quarkuscoffeeshop-barista.git
+[submodule "src/test/resources/test-applications/quarkuscoffeeshop-kitchen"]
+	path = src/test/resources/test-applications/quarkuscoffeeshop-kitchen
+	url = https://github.com/quarkuscoffeeshop/quarkuscoffeeshop-kitchen.git
+[submodule "src/test/resources/test-applications/quarkuscoffeeshop-inventory"]
+	path = src/test/resources/test-applications/quarkuscoffeeshop-inventory
+	url = https://github.com/quarkuscoffeeshop/quarkuscoffeeshop-inventory.git
+[submodule "src/test/resources/test-applications/quarkuscoffeeshop-domain"]
+	path = src/test/resources/test-applications/quarkuscoffeeshop-domain
+	url = https://github.com/quarkuscoffeeshop/quarkuscoffeeshop-domain.git
