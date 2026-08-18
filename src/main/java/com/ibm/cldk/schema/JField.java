@@ -12,6 +12,7 @@ import lombok.Data;
 @Data
 public class JField {
     private String id;
+    private String kind = "field";
     private String name;
     private String type;
     private Span span;

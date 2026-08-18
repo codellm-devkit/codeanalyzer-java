@@ -86,6 +86,40 @@ Ordinal ids `…@<line>:<col>` (real) / `…@<tag>` (synthetic) within a callabl
   `getMethods()`/`getConstructors()`); nested-type methods hang under their own type,
   local (method-body) classes under `callable.types` (D4 containment).
 
+### D10 — L1 emission: body keys, null policy, call sites, spans
+
+Refinements settled while building L1 (2026-08), each checked against the keystone **and**
+`codeanalyzer-python`:
+
+- **`body` is keyed by the bare local id** (`line:col`), not the full `<callable-id>@line:col`.
+  The keystone keys `body` "by the node's local id" and its worked example shows `"15:2"` /
+  `"@entry"`; the pilot does `key = f"{cs.start_line}:{cs.start_column}"`. The full form is derived
+  only where cross-callable ids are needed (L4's application-scope `param_in`/`param_out`).
+- **L3 must not overwrite an L1 `call` node.** A bare call statement resolves to the same local id
+  as its `call` node; per the keystone's example the call node *is* that statement, so L3 adds the
+  remaining statements around it and never rewrites its `kind` (rewriting would break the additive
+  invariant). A call nested in a larger statement (`int y = bar(x);`) yields two distinct nodes.
+- **Call sites include constructors.** `new Foo()` and explicit `this(...)`/`super(...)` chaining are
+  emitted as `call` nodes alongside method invocations — L2 resolves all three into `call_graph`
+  edges, so omitting them would silently drop constructor edges. Anchor: the invoked name (method
+  name, or instantiated type name), which also keeps chained calls `a.b().c()` distinct.
+- **`arguments` are positional addresses, not node references.** They carry argument `line:col`
+  local ids for tooling, but no `body` node need exist at those positions: expression nodes are
+  optional in the keystone (`--materialize-expressions`, **not implemented here**) and L4's
+  `actual_in{of:"argN", parent}` is the canonical way arguments become real nodes. The no-dangling
+  invariant governs *edges*, which these are not.
+- **No nulls are emitted — absence encodes "no fact"** (`V2Json` deliberately omits
+  `serializeNulls()`). This includes the `callee` refinement slot: the key is absent at L1 and
+  appears once L2 resolves the site. The keystone's `callee: null` example is illustrative; the pilot
+  likewise drops it via `exclude_none`.
+- **Varargs: `type` keeps the element type + `is_variadic` flag** (keystone's `param.is_variadic?`),
+  so `String...` stays distinguishable from a real `String[]` parameter.
+- **`module.span` covers the whole file**, computed from the source rather than the compilation
+  unit's AST range (which ends inconsistently around trailing whitespace), so
+  `module.source[span.bytes] == module.source` always holds.
+- **`module.content_hash` is SHA-256 hex of the UTF-8 source** — for incremental caching and the
+  Neo4j writer's per-module diffing; never identity (the `id` is).
+
 ### D9 — Neo4j namespace: keep the `J_` relationship prefix
 Existing convention (`J_CALLS`, …); dual-label `JSymbol` merge pattern retained.
 `SchemaCatalog` takes a major bump (families rename v1→v2).

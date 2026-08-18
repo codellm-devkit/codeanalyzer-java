@@ -43,6 +43,12 @@ class FieldBuilderTest {
     }
 
     @Test
+    void build_carriesFieldKind() {
+        // Every v2 node carries a `kind` discriminator; the SDK models one Node keyed on it.
+        assertEquals("field", build("private int count;").get(0).getKind());
+    }
+
+    @Test
     void build_capturesModifiers() {
         JField f = build("private static final String NAME = \"x\";").get(0);
         assertEquals(List.of("private", "static", "final"), f.getModifiers());

@@ -1,10 +1,14 @@
 package com.ibm.cldk.syntactic_analysis;
 
 import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.ImportDeclaration;
 import com.github.javaparser.ast.body.TypeDeclaration;
+import com.ibm.cldk.schema.JImport;
 import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.schema.JType;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -24,8 +28,23 @@ public final class ModuleBuilder {
     public JModule build(CompilationUnit cu) {
         JModule module = new JModule();
         module.setId(ctx.moduleId());
+        module.setSpan(ctx.wholeFileSpan());
         module.setPackageName(cu.getPackageDeclaration().map(pd -> pd.getNameAsString()).orElse(""));
         module.setSource(ctx.getSource());
+        module.setContentHash(ctx.contentHash());
+
+        List<JImport> imports = new ArrayList<>();
+        for (ImportDeclaration id : cu.getImports()) {
+            JImport imp = new JImport();
+            String path = id.getNameAsString();
+            imp.setPath(path);
+            imp.setName(path.contains(".") ? path.substring(path.lastIndexOf('.') + 1) : path);
+            imp.setStatic(id.isStatic());
+            imp.setWildcard(id.isAsterisk());
+            imp.setSpan(ctx.spanOf(id));
+            imports.add(imp);
+        }
+        module.setImports(imports);
 
         // Top-level types, keyed by simple name and sorted for deterministic output (the -j gate).
         TypeBuilder typeBuilder = new TypeBuilder(ctx);

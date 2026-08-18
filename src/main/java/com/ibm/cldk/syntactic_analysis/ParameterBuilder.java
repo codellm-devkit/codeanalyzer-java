@@ -22,8 +22,10 @@ public final class ParameterBuilder {
     public JParameter build(Parameter param) {
         JParameter parameter = new JParameter();
         parameter.setName(param.getNameAsString());
-        // Varargs (`String...`) spell as the element type + "[]" so the type reads as a real Java type.
-        parameter.setType(param.isVarArgs() ? param.getType().asString() + "[]" : param.getType().asString());
+        // Varargs keep the declared ELEMENT type; the `is_variadic` flag carries the `...` instead, so
+        // `String...` stays distinguishable from a real `String[]` parameter.
+        parameter.setType(param.getType().asString());
+        parameter.setVariadic(param.isVarArgs());
         parameter.setSpan(ctx.spanOf(param));
         parameter.setDecorators(
                 param.getAnnotations().stream().map(decoratorBuilder::build).collect(Collectors.toList()));

@@ -5,6 +5,9 @@ import com.github.javaparser.ast.Node;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.Span;
 import com.ibm.cldk.schema.Spans;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import lombok.Getter;
 
 /**
@@ -28,6 +31,41 @@ public final class L1BuildContext {
     /** The {@code can://java/<app>/<file>} id for this module. */
     public String moduleId() {
         return CanId.moduleId(applicationId, fileKey);
+    }
+
+    /**
+     * The span covering the whole file — the module's own span. Computed from the source rather than
+     * the compilation unit's AST range (which ends inconsistently around trailing whitespace), so the
+     * invariant {@code module.source[span.bytes] == module.source} always holds.
+     */
+    public Span wholeFileSpan() {
+        String[] lines = source.split("\n", -1);
+        int lastLine = Math.max(1, lines.length);
+        int lastCol = lines[lines.length - 1].length() + 1;
+        Span span = new Span();
+        span.setStart(new int[] {1, 1});
+        span.setEnd(new int[] {lastLine, lastCol});
+        span.setBytes(new int[] {0, source.getBytes(StandardCharsets.UTF_8).length});
+        return span;
+    }
+
+    /**
+     * SHA-256 hex of the file's UTF-8 source — the module's {@code content_hash}, used for
+     * incremental caching and the Neo4j writer's per-module diffing (never for identity).
+     */
+    public String contentHash() {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(source.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(digest.length * 2);
+            for (byte b : digest) {
+                hex.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            // SHA-256 is required of every JVM; treat absence as unrecoverable rather than silently
+            // emitting a hash that would break cache/diff correctness.
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
     }
 
     /**

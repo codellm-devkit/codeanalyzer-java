@@ -1,6 +1,7 @@
 package com.ibm.cldk.syntactic_analysis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -53,6 +54,20 @@ class ParameterBuilderTest {
         assertNotNull(p.getSpan());
         int[] bytes = p.getSpan().getBytes();
         assertEquals("String name", source.substring(bytes[0], bytes[1]));
+    }
+
+    @Test
+    void build_marksVariadicParameterAndKeepsElementType() {
+        JParameter p = build("package p;\nclass Foo {\n  void m(String... names) {}\n}\n");
+        assertTrue(p.isVariadic(), "String... must set is_variadic");
+        assertEquals("String", p.getType(), "type stays the element type; the flag carries the ...");
+    }
+
+    @Test
+    void build_plainArrayParameterIsNotVariadic() {
+        JParameter p = build("package p;\nclass Foo {\n  void m(String[] names) {}\n}\n");
+        assertFalse(p.isVariadic(), "String[] is an array, not varargs");
+        assertEquals("String[]", p.getType());
     }
 
     @Test
