@@ -24,7 +24,7 @@ public final class ParameterBuilder {
         parameter.setName(param.getNameAsString());
         // Varargs keep the declared ELEMENT type; the `is_variadic` flag carries the `...` instead, so
         // `String...` stays distinguishable from a real `String[]` parameter.
-        parameter.setType(param.getType().asString());
+        parameter.setType(ctx.resolveType(param.getType()));
         parameter.setVariadic(param.isVarArgs());
         parameter.setSpan(ctx.spanOf(param));
         parameter.setModifiers(

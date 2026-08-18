@@ -22,11 +22,7 @@ import org.junit.jupiter.api.Test;
 class ModuleBuilderTest {
 
     private static CompilationUnit parse(String source) {
-        return new JavaParser(
-                        new ParserConfiguration().setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21))
-                .parse(source)
-                .getResult()
-                .orElseThrow();
+        return TestParsers.parseResolved(source);
     }
 
     /** Build a module from source using a fixed file key. */

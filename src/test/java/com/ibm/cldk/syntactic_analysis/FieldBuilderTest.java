@@ -24,11 +24,7 @@ class FieldBuilderTest {
 
     private static List<JField> build(String memberSource) {
         String source = "package com.example;\nclass Foo {\n  " + memberSource + "\n}\n";
-        CompilationUnit cu = new JavaParser(
-                        new ParserConfiguration().setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21))
-                .parse(source)
-                .getResult()
-                .orElseThrow();
+        CompilationUnit cu = TestParsers.parseResolved(source);
         FieldDeclaration fd = cu.getType(0).findFirst(FieldDeclaration.class).orElseThrow();
         L1BuildContext ctx = new L1BuildContext(CanId.applicationId("myapp"), FILE_KEY, source);
         return new FieldBuilder(ctx).build(fd, TYPE_ID);

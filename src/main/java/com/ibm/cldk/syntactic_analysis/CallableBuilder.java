@@ -71,9 +71,9 @@ public final class CallableBuilder {
         callable.setParameters(
                 cd.getParameters().stream().map(parameterBuilder::build).collect(Collectors.toList()));
         callable.setReturnType(
-                cd instanceof MethodDeclaration ? ((MethodDeclaration) cd).getType().asString() : null);
+                cd instanceof MethodDeclaration ? ctx.resolveType(((MethodDeclaration) cd).getType()) : null);
         callable.setErrorChannel(
-                cd.getThrownExceptions().stream().map(t -> t.asString()).collect(Collectors.toList()));
+                cd.getThrownExceptions().stream().map(ctx::resolveType).collect(Collectors.toList()));
         callable.setModifiers(
                 cd.getModifiers().stream().map(m -> m.getKeyword().asString()).collect(Collectors.toList()));
         callable.setComments(ctx.commentsOf(cd));
@@ -112,7 +112,7 @@ public final class CallableBuilder {
             }
             JVariableDeclaration local = new JVariableDeclaration();
             local.setName(vd.getNameAsString());
-            local.setType(vd.getType().asString());
+            local.setType(ctx.resolveType(vd.getType()));
             vd.getInitializer().ifPresent(init -> local.setInitializer(init.toString()));
             local.setSpan(ctx.spanOf(vd));
             local.setComments(ctx.commentsOf(vd));
@@ -132,7 +132,7 @@ public final class CallableBuilder {
     }
 
     /** Syntactic cross-refs: types referenced and enclosing-type fields accessed in the body. */
-    private static JRefs refs(Optional<BlockStmt> body, List<String> classFieldNames) {
+    private JRefs refs(Optional<BlockStmt> body, List<String> classFieldNames) {
         JRefs refs = new JRefs();
         if (body.isEmpty()) {
             return refs;
@@ -142,10 +142,10 @@ public final class CallableBuilder {
         TreeSet<String> types = new TreeSet<>();
         b.findAll(VariableDeclarator.class).stream()
                 .filter(vd -> CallSiteBuilder.belongsDirectlyTo(vd, b) && vd.getType().isClassOrInterfaceType())
-                .forEach(vd -> types.add(vd.getType().asString()));
+                .forEach(vd -> types.add(ctx.resolveType(vd.getType())));
         b.findAll(ObjectCreationExpr.class).stream()
                 .filter(oce -> CallSiteBuilder.belongsDirectlyTo(oce, b))
-                .forEach(oce -> types.add(oce.getType().asString()));
+                .forEach(oce -> types.add(ctx.resolveType(oce.getType())));
         refs.setTypes(new ArrayList<>(types));
 
         TreeSet<String> fields = new TreeSet<>();

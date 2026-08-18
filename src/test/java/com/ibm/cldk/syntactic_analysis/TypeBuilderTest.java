@@ -22,11 +22,7 @@ class TypeBuilderTest {
     private static final String FILE_KEY = "src/main/java/com/example/Foo.java";
 
     private static CompilationUnit parse(String source) {
-        return new JavaParser(
-                        new ParserConfiguration().setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21))
-                .parse(source)
-                .getResult()
-                .orElseThrow();
+        return TestParsers.parseResolved(source);
     }
 
     private static JType buildFirstType(String source) {
@@ -79,8 +75,8 @@ class TypeBuilderTest {
     @Test
     void build_capturesInheritance() {
         JType t = buildFirstType("package p;\nclass Foo extends Base implements Runnable {}\n");
-        assertEquals(List.of("Base"), t.getBaseTypes());
-        assertEquals(List.of("Runnable"), t.getInterfaces());
+        assertEquals(List.of("java.lang.Runnable"), t.getInterfaces(), "resolved to a qualified name");
+        assertEquals(List.of("Base"), t.getBaseTypes(), "unresolvable supertype degrades to its spelling");
     }
 
     @Test

@@ -29,11 +29,7 @@ class CallSiteBuilderTest {
     private static final String FILE_KEY = "src/main/java/com/example/Foo.java";
 
     private static Map<String, JBodyNode> build(String source) {
-        CompilationUnit cu = new JavaParser(
-                        new ParserConfiguration().setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21))
-                .parse(source)
-                .getResult()
-                .orElseThrow();
+        CompilationUnit cu = TestParsers.parseResolved(source);
         CallableDeclaration<?> cd = cu.getType(0).findFirst(CallableDeclaration.class).orElseThrow();
         BlockStmt body = (cd instanceof MethodDeclaration)
                 ? ((MethodDeclaration) cd).getBody().orElseThrow()

@@ -21,11 +21,7 @@ class ParameterBuilderTest {
     private static final String FILE_KEY = "src/main/java/com/example/Foo.java";
 
     private static Parameter firstParam(String source) {
-        CompilationUnit cu = new JavaParser(
-                        new ParserConfiguration().setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21))
-                .parse(source)
-                .getResult()
-                .orElseThrow();
+        CompilationUnit cu = TestParsers.parseResolved(source);
         return cu.getType(0).findFirst(MethodDeclaration.class).orElseThrow().getParameter(0);
     }
 
@@ -38,7 +34,7 @@ class ParameterBuilderTest {
     void build_capturesNameAndDeclaredType() {
         JParameter p = build("package p;\nclass Foo {\n  void m(final String name) {}\n}\n");
         assertEquals("name", p.getName());
-        assertEquals("String", p.getType());
+        assertEquals("java.lang.String", p.getType(), "types are resolved to qualified names via the symbol solver");
     }
 
     @Test
@@ -48,9 +44,16 @@ class ParameterBuilderTest {
     }
 
     @Test
-    void build_capturesGenericAndArrayTypesSyntactically() {
-        assertEquals("List<String>", build("package p;\nclass Foo {\n  void m(List<String> xs) {}\n}\n").getType());
+    void build_resolvesGenericTypeArguments() {
+        assertEquals("java.util.List<java.lang.String>",
+                build("package p;\nimport java.util.List;\nclass Foo {\n  void m(List<String> xs) {}\n}\n").getType());
         assertEquals("int[]", build("package p;\nclass Foo {\n  void m(int[] xs) {}\n}\n").getType());
+    }
+
+    @Test
+    void build_fallsBackToAstSpellingWhenTypeCannotBeResolved() {
+        // A missing dependency must degrade to the source spelling, never crash the build.
+        assertEquals("Mystery", build("package p;\nclass Foo {\n  void m(Mystery x) {}\n}\n").getType());
     }
 
     @Test
@@ -66,14 +69,14 @@ class ParameterBuilderTest {
     void build_marksVariadicParameterAndKeepsElementType() {
         JParameter p = build("package p;\nclass Foo {\n  void m(String... names) {}\n}\n");
         assertTrue(p.isVariadic(), "String... must set is_variadic");
-        assertEquals("String", p.getType(), "type stays the element type; the flag carries the ...");
+        assertEquals("java.lang.String", p.getType(), "type stays the element type; the flag carries the ...");
     }
 
     @Test
     void build_plainArrayParameterIsNotVariadic() {
         JParameter p = build("package p;\nclass Foo {\n  void m(String[] names) {}\n}\n");
         assertFalse(p.isVariadic(), "String[] is an array, not varargs");
-        assertEquals("String[]", p.getType());
+        assertEquals("java.lang.String[]", p.getType());
     }
 
     @Test

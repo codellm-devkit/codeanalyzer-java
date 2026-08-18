@@ -56,12 +56,12 @@ public final class TypeBuilder {
         List<String> interfaces = new ArrayList<>();
         if (td instanceof ClassOrInterfaceDeclaration) {
             ClassOrInterfaceDeclaration cls = (ClassOrInterfaceDeclaration) td;
-            cls.getExtendedTypes().forEach(t -> baseTypes.add(t.asString()));
-            cls.getImplementedTypes().forEach(t -> interfaces.add(t.asString()));
+            cls.getExtendedTypes().forEach(t -> baseTypes.add(ctx.resolveType(t)));
+            cls.getImplementedTypes().forEach(t -> interfaces.add(ctx.resolveType(t)));
         } else if (td instanceof EnumDeclaration) {
-            ((EnumDeclaration) td).getImplementedTypes().forEach(t -> interfaces.add(t.asString()));
+            ((EnumDeclaration) td).getImplementedTypes().forEach(t -> interfaces.add(ctx.resolveType(t)));
         } else if (td instanceof RecordDeclaration) {
-            ((RecordDeclaration) td).getImplementedTypes().forEach(t -> interfaces.add(t.asString()));
+            ((RecordDeclaration) td).getImplementedTypes().forEach(t -> interfaces.add(ctx.resolveType(t)));
         }
         type.setBaseTypes(baseTypes);
         type.setInterfaces(interfaces);

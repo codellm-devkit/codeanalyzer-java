@@ -25,11 +25,7 @@ class CallableBuilderTest {
     private static JCallable build(String memberSource, List<String> classFieldNames) {
         String source = "package com.example;\nimport java.io.IOException;\nimport java.util.*;\n"
                 + "class Foo {\n  " + memberSource + "\n}\n";
-        CompilationUnit cu = new JavaParser(
-                        new ParserConfiguration().setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21))
-                .parse(source)
-                .getResult()
-                .orElseThrow();
+        CompilationUnit cu = TestParsers.parseResolved(source);
         CallableDeclaration<?> cd = cu.getType(0).findFirst(CallableDeclaration.class).orElseThrow();
         L1BuildContext ctx = new L1BuildContext(CanId.applicationId("myapp"), FILE_KEY, source);
         return new CallableBuilder(ctx).build(cd, TYPE_ID, classFieldNames);
@@ -49,6 +45,20 @@ class CallableBuilderTest {
     }
 
     @Test
+    void build_signatureUsesTypeErasure() {
+        // The durable id's last segment: parameter types are RESOLVED and ERASED (type arguments
+        // dropped), which is why a symbol solver is required — a syntactic signature would differ.
+        JCallable c = build("void m(List<String> xs, String s) {}");
+        assertEquals("m(java.util.List, java.lang.String)", c.getSignature());
+        assertEquals(TYPE_ID + "/m(java.util.List, java.lang.String)", c.getId());
+    }
+
+    @Test
+    void build_signatureFallsBackToAstWhenParameterTypeUnresolvable() {
+        assertEquals("m(Mystery)", build("void m(Mystery x) {}").getSignature());
+    }
+
+    @Test
     void build_constructorKindHasNullReturnType() {
         JCallable c = build("Foo(int x) {}");
         assertEquals("constructor", c.getKind());
@@ -61,8 +71,8 @@ class CallableBuilderTest {
         JCallable c = build("@Override public String greet(String name) { return \"hi\"; }");
         assertEquals(List.of("name"), c.getParameters().stream()
                 .map(p -> p.getName()).collect(Collectors.toList()));
-        assertEquals("String", c.getParameters().get(0).getType());
-        assertEquals("String", c.getReturnType());
+        assertEquals("java.lang.String", c.getParameters().get(0).getType());
+        assertEquals("java.lang.String", c.getReturnType());
         assertEquals(List.of("public"), c.getModifiers());
         assertEquals("Override", c.getDecorators().get(0).getName());
     }
@@ -116,7 +126,7 @@ class CallableBuilderTest {
     @Test
     void build_capturesErrorChannelFromThrows() {
         JCallable c = build("void read() throws IOException, RuntimeException {}");
-        assertEquals(List.of("IOException", "RuntimeException"), c.getErrorChannel());
+        assertEquals(List.of("java.io.IOException", "java.lang.RuntimeException"), c.getErrorChannel());
     }
 
     @Test

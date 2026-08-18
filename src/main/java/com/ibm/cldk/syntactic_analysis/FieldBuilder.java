@@ -32,7 +32,7 @@ public final class FieldBuilder {
      * @param parentTypeId the containing type's id
      */
     public List<JField> build(FieldDeclaration fd, String parentTypeId) {
-        String type = fd.getCommonType().asString();
+        String type = ctx.resolveType(fd.getCommonType());
         List<String> modifiers =
                 fd.getModifiers().stream().map(m -> m.getKeyword().asString()).collect(Collectors.toList());
         List<JDecorator> decorators =

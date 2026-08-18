@@ -78,10 +78,15 @@ Ordinal ids `…@<line>:<col>` (real) / `…@<tag>` (synthetic) within a callabl
   local-ids in its `arguments`) use the *method-name* `line:col`, not the whole
   expression's begin — so chained calls `a.b().c()` get distinct ids instead of
   colliding on the shared expression start.
-- **`refs` at L1 are syntactic names, not resolved ids.** Cross-module resolution is
-  L2+; at L1 `refs.types` are the AST spellings of referenced/instantiated types and
-  `refs.fields` are the simple names of enclosing-type fields accessed. Refined to
-  `can://` ids once resolution is available. Keystone shows `[id]`; L1 emits best-effort.
+- **L1 resolves types with the JavaParser symbol solver** (corrected 2026-08 — an earlier note here
+  wrongly said L1 stayed syntactic). The keystone's L1 guide expects the resolver to populate type
+  fields when the structural tool resolves, and the v1 symbol table did exactly this, so v2 matches:
+  `base_types`/`interfaces`, field/parameter/return/local types, `error_channel`, and `refs.types`
+  are **resolved qualified names** (`java.lang.String`), and the callable `signature` uses
+  **erased** resolved parameter types (`m(java.util.List, java.lang.String)`) — which is why the
+  durable id depends on the solver being configured. Resolution failures degrade to the AST spelling
+  (never crash) and are memoized per spelling. `refs.fields` remain simple names for now; promoting
+  them to `can://` ids needs cross-module resolution (L2+).
 - **`callable.kind ∈ {method, constructor}`.** Direct members only (via
   `getMethods()`/`getConstructors()`); nested-type methods hang under their own type,
   local (method-body) classes under `callable.types` (D4 containment).
