@@ -2,6 +2,7 @@ package com.ibm.cldk.syntactic_analysis;
 
 import com.github.javaparser.ast.body.CallableDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
+import com.github.javaparser.ast.body.InitializerDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.TypeDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
@@ -96,6 +97,37 @@ public final class CallableBuilder {
         return callable;
     }
 
+    /**
+     * Build an initializer block as a {@code callable} with {@code kind:"initializer"}. It has no
+     * parameters, return type or declared throws; everything else (body call sites, locals, refs,
+     * metrics, local classes) works exactly as for a method.
+     */
+    public JCallable buildInitializer(
+            InitializerDeclaration id, String parentTypeId, List<String> classFieldNames, String signature) {
+        JCallable callable = new JCallable();
+        callable.setSignature(signature);
+        callable.setId(CanId.childId(parentTypeId, signature));
+        callable.setKind("initializer");
+        callable.setSpan(ctx.spanOf(id));
+        callable.setComments(ctx.commentsOf(id));
+        callable.setModifiers(
+                id.isStatic() ? List.of("static") : List.of());
+        callable.setDecorators(
+                id.getAnnotations().stream().map(decoratorBuilder::build).collect(Collectors.toList()));
+
+        JMetrics metrics = new JMetrics();
+        metrics.setCyclomatic(cyclomaticComplexity(id));
+        callable.setMetrics(metrics);
+
+        BlockStmt body = id.getBody();
+        body.getRange().map(r -> r.begin.line).ifPresent(callable::setCodeStartLine);
+        callable.setRefs(refs(Optional.of(body), classFieldNames));
+        callable.setLocalVariables(localVariables(body));
+        callable.setBody(callSiteBuilder.build(body));
+        callable.setTypes(localClasses(body, callable.getId()));
+        return callable;
+    }
+
     private static Optional<BlockStmt> bodyOf(CallableDeclaration<?> cd) {
         if (cd instanceof MethodDeclaration) {
             return ((MethodDeclaration) cd).getBody();
@@ -164,14 +196,23 @@ public final class CallableBuilder {
      * Cyclomatic complexity: one plus the number of branch points (if/loop/switch-case/ternary/catch)
      * in the callable (mirrors the v1 symbol-table metric).
      */
+    private static int cyclomaticComplexity(InitializerDeclaration id) {
+        return branchPoints(id) + 1;
+    }
+
     private static int cyclomaticComplexity(CallableDeclaration<?> cd) {
-        int ifCount = cd.findAll(IfStmt.class).size();
-        int loopCount = cd.findAll(DoStmt.class).size() + cd.findAll(ForStmt.class).size()
-                + cd.findAll(ForEachStmt.class).size() + cd.findAll(WhileStmt.class).size();
+        return branchPoints(cd) + 1;
+    }
+
+    /** Branch points (if / loop / switch-case / ternary / catch) inside any node. */
+    private static int branchPoints(com.github.javaparser.ast.Node node) {
+        int ifCount = node.findAll(IfStmt.class).size();
+        int loopCount = node.findAll(DoStmt.class).size() + node.findAll(ForStmt.class).size()
+                + node.findAll(ForEachStmt.class).size() + node.findAll(WhileStmt.class).size();
         int switchCaseCount =
-                cd.findAll(SwitchStmt.class).stream().mapToInt(s -> s.getEntries().size()).sum();
-        int ternaryCount = cd.findAll(ConditionalExpr.class).size();
-        int catchCount = cd.findAll(CatchClause.class).size();
-        return ifCount + loopCount + switchCaseCount + ternaryCount + catchCount + 1;
+                node.findAll(SwitchStmt.class).stream().mapToInt(s -> s.getEntries().size()).sum();
+        int ternaryCount = node.findAll(ConditionalExpr.class).size();
+        int catchCount = node.findAll(CatchClause.class).size();
+        return ifCount + loopCount + switchCaseCount + ternaryCount + catchCount;
     }
 }

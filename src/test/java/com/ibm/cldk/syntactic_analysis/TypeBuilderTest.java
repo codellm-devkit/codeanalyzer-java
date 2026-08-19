@@ -11,9 +11,12 @@ import com.github.javaparser.ast.body.TypeDeclaration;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JCallable;
 import com.ibm.cldk.schema.JDecorator;
+import com.ibm.cldk.schema.JEnumConstant;
+import com.ibm.cldk.schema.JRecordComponent;
 import com.ibm.cldk.schema.JType;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
 /** Tests the v2 {@link TypeBuilder} — kind, byte-offset span, structured decorators, inheritance. */
@@ -126,6 +129,56 @@ class TypeBuilderTest {
         JType t = buildFirstType("package p;\nclass Foo {\n  int count;\n  void inc() { count = count + 1; }\n}\n");
         JCallable inc = t.getCallables().get("inc()");
         assertEquals(List.of("count"), inc.getRefs().getFields());
+    }
+
+    @Test
+    void build_capturesEnumConstants() {
+        JType t = buildFirstType("package p;\nenum Color { RED, GREEN(\"g\"); Color() {} Color(String s) {} }\n");
+        assertEquals(List.of("RED", "GREEN"),
+                t.getEnumConstants().stream().map(JEnumConstant::getName).collect(Collectors.toList()));
+        assertEquals(List.of("\"g\""), t.getEnumConstants().get(1).getArguments());
+        assertNotNull(t.getEnumConstants().get(0).getSpan());
+    }
+
+    @Test
+    void build_capturesRecordComponents() {
+        JType t = buildFirstType("package p;\nrecord Point(int x, String label) {}\n");
+        assertEquals("record", t.getKind());
+        assertEquals(List.of("x", "label"),
+                t.getRecordComponents().stream().map(JRecordComponent::getName).collect(Collectors.toList()));
+        assertEquals("int", t.getRecordComponents().get(0).getType());
+        assertEquals("java.lang.String", t.getRecordComponents().get(1).getType(), "resolved like any other type");
+    }
+
+    @Test
+    void build_capturesVariadicRecordComponent() {
+        JType t = buildFirstType("package p;\nrecord Args(String... values) {}\n");
+        assertTrue(t.getRecordComponents().get(0).isVariadic());
+    }
+
+    @Test
+    void build_emitsStaticInitializerAsCallable() {
+        // The keystone's callable kinds include `initializer`; L3 needs these to get their own CFGs.
+        JType t = buildFirstType("package p;\nclass Foo {\n  static { setup(); }\n}\n");
+        JCallable init = t.getCallables().get("<clinit>$0()");
+        assertNotNull(init, "static initializer must appear among the type's callables");
+        assertEquals("initializer", init.getKind());
+        assertEquals(1, init.getBody().size(), "its call sites belong to it, not to any constructor");
+    }
+
+    @Test
+    void build_emitsInstanceInitializerAsCallable() {
+        JType t = buildFirstType("package p;\nclass Foo {\n  { prime(); }\n}\n");
+        JCallable init = t.getCallables().get("<instance-init>$0()");
+        assertNotNull(init);
+        assertEquals("initializer", init.getKind());
+    }
+
+    @Test
+    void build_numbersMultipleInitializersOfTheSameKind() {
+        JType t = buildFirstType("package p;\nclass Foo {\n  static { a(); }\n  static { b(); }\n}\n");
+        assertTrue(t.getCallables().containsKey("<clinit>$0()"));
+        assertTrue(t.getCallables().containsKey("<clinit>$1()"));
     }
 
     @Test

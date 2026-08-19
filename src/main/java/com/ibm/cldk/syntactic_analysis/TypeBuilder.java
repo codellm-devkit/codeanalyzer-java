@@ -3,13 +3,18 @@ package com.ibm.cldk.syntactic_analysis;
 import com.github.javaparser.ast.body.AnnotationDeclaration;
 import com.github.javaparser.ast.body.CallableDeclaration;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
+import com.github.javaparser.ast.body.EnumConstantDeclaration;
 import com.github.javaparser.ast.body.EnumDeclaration;
 import com.github.javaparser.ast.body.FieldDeclaration;
+import com.github.javaparser.ast.body.InitializerDeclaration;
+import com.github.javaparser.ast.body.Parameter;
 import com.github.javaparser.ast.body.RecordDeclaration;
 import com.github.javaparser.ast.body.TypeDeclaration;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JCallable;
+import com.ibm.cldk.schema.JEnumConstant;
 import com.ibm.cldk.schema.JField;
+import com.ibm.cldk.schema.JRecordComponent;
 import com.ibm.cldk.schema.JType;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -66,6 +71,38 @@ public final class TypeBuilder {
         type.setBaseTypes(baseTypes);
         type.setInterfaces(interfaces);
 
+        if (td instanceof EnumDeclaration) {
+            List<JEnumConstant> constants = new ArrayList<>();
+            for (EnumConstantDeclaration ecd : ((EnumDeclaration) td).getEntries()) {
+                JEnumConstant constant = new JEnumConstant();
+                constant.setName(ecd.getNameAsString());
+                constant.setArguments(
+                        ecd.getArguments().stream().map(Object::toString).collect(Collectors.toList()));
+                constant.setSpan(ctx.spanOf(ecd));
+                constant.setComments(ctx.commentsOf(ecd));
+                constants.add(constant);
+            }
+            type.setEnumConstants(constants);
+        }
+
+        if (td instanceof RecordDeclaration) {
+            List<JRecordComponent> components = new ArrayList<>();
+            for (Parameter p : ((RecordDeclaration) td).getParameters()) {
+                JRecordComponent component = new JRecordComponent();
+                component.setName(p.getNameAsString());
+                component.setType(ctx.resolveType(p.getType()));
+                component.setSpan(ctx.spanOf(p));
+                component.setModifiers(
+                        p.getModifiers().stream().map(m -> m.getKeyword().asString()).collect(Collectors.toList()));
+                component.setDecorators(
+                        p.getAnnotations().stream().map(decoratorBuilder::build).collect(Collectors.toList()));
+                component.setComments(ctx.commentsOf(p));
+                component.setVariadic(p.isVarArgs());
+                components.add(component);
+            }
+            type.setRecordComponents(components);
+        }
+
         // Fields, keyed by simple name — one entry per declared variable (int a, b; -> a, b).
         Map<String, JField> fields = new LinkedHashMap<>();
         for (FieldDeclaration fd : td.getFields()) {
@@ -85,6 +122,19 @@ public final class TypeBuilder {
         for (CallableDeclaration<?> cd : declared) {
             JCallable callable = callableBuilder.build(cd, type.getId(), fieldNames);
             callables.put(callable.getSignature(), callable);
+        }
+        // Initializer blocks are callables too (keystone kind `initializer`) — L3 gives them their own
+        // CFGs. Numbered per kind so the id survives line edits; `$` marks the synthetic member.
+        int staticIndex = 0;
+        int instanceIndex = 0;
+        for (InitializerDeclaration id : td.getMembers().stream()
+                .filter(m -> m instanceof InitializerDeclaration)
+                .map(m -> (InitializerDeclaration) m)
+                .collect(Collectors.toList())) {
+            String signature = id.isStatic()
+                    ? "<clinit>$" + staticIndex++ + "()"
+                    : "<instance-init>$" + instanceIndex++ + "()";
+            callables.put(signature, callableBuilder.buildInitializer(id, type.getId(), fieldNames, signature));
         }
         type.setCallables(new LinkedHashMap<>(callables));
 

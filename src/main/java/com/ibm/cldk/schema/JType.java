@@ -22,6 +22,12 @@ public class JType {
     private List<String> interfaces = new ArrayList<>();
     private List<JDecorator> decorators = new ArrayList<>();
 
+    /** Enum constants, in declaration order — present only on {@code enum} types. */
+    private List<JEnumConstant> enumConstants = new ArrayList<>();
+
+    /** Record components, in declaration order — present only on {@code record} types. */
+    private List<JRecordComponent> recordComponents = new ArrayList<>();
+
     /** Fields declared in this type, keyed by simple name (one entry per declared variable). */
     private Map<String, JField> fields = new LinkedHashMap<>();
 
