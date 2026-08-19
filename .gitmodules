@@ -7,9 +7,6 @@
 [submodule "src/test/resources/test-applications/commons-lang"]
 	path = src/test/resources/test-applications/commons-lang
 	url = https://github.com/apache/commons-lang.git
-[submodule "src/test/resources/test-applications/daytrader-microservices"]
-	path = src/test/resources/test-applications/daytrader-microservices
-	url = https://github.com/sample-daytrader/sample.daytrader.microservices.git
 [submodule "src/test/resources/test-applications/quarkuscoffeeshop-counter"]
 	path = src/test/resources/test-applications/quarkuscoffeeshop-counter
 	url = https://github.com/quarkuscoffeeshop/quarkuscoffeeshop-counter.git
