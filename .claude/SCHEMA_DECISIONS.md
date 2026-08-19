@@ -143,6 +143,12 @@ Both refinements came out of a field-by-field v1-vs-v2 comparison over ten real-
   reintroducing duplicated text. Absent when there is no body (abstract/interface methods).
   **Canonical note:** the keystone defines `get_method_body(sig)` as `module.source[callable.span.bytes]`,
   which is *not* v1's `code` semantics; the discrepancy is worth resolving in the canonical schema.
+- **Two v1 counting bugs surfaced by the comparison, which v2 deliberately does not reproduce.** v1
+  collected a callable's locals with a recursive `findAll(VariableDeclarator)`, so a **field declared in an
+  anonymous class** was reported as a local of the enclosing method; v2 records it as a field of the
+  anonymous class. And v1 filled a type's `initialization_blocks` recursively, counting a nested class's
+  `static { … }` block **twice** — once on the nested class and once on its enclosing type; v2 counts it
+  once. Where v2's totals are lower than v1's for these two metrics, v2 is the more accurate.
 
 ### D12 — L1 type resolution: library dependencies are always attempted
 

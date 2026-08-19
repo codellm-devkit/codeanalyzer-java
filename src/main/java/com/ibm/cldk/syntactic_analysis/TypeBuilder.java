@@ -21,6 +21,7 @@ import com.ibm.cldk.schema.JField;
 import com.ibm.cldk.schema.JRecordComponent;
 import com.ibm.cldk.schema.JType;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -222,6 +223,23 @@ public final class TypeBuilder {
                 TypeDeclaration<?> nestedType = (TypeDeclaration<?>) member;
                 nested.put(nestedType.getNameAsString(), build(nestedType, type.getId()));
             }
+        }
+        // Anonymous classes in field initializers are lexically members of this type, not of any
+        // callable, so they are attributed here (e.g. `static final X F = new X() { { ... } };`).
+        List<ObjectCreationExpr> anonymous = new ArrayList<>();
+        for (BodyDeclaration<?> member : members) {
+            if (member instanceof FieldDeclaration) {
+                member.findAll(ObjectCreationExpr.class).stream()
+                        .filter(oce -> oce.getAnonymousClassBody().isPresent())
+                        .forEach(anonymous::add);
+            }
+        }
+        anonymous.sort(Comparator
+                .comparingInt((ObjectCreationExpr oce) -> oce.getBegin().map(pos -> pos.line).orElse(0))
+                .thenComparingInt(oce -> oce.getBegin().map(pos -> pos.column).orElse(0)));
+        for (int i = 0; i < anonymous.size(); i++) {
+            String name = "$anon$" + i;
+            nested.put(name, buildAnonymous(anonymous.get(i), type.getId(), name));
         }
         type.setTypes(new LinkedHashMap<>(nested));
     }

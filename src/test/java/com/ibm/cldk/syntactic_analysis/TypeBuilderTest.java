@@ -191,6 +191,34 @@ class TypeBuilderTest {
     }
 
     @Test
+    void build_modelsAnonymousClassInAFieldInitializer() {
+        // commons-lang's AnnotationUtils does exactly this: an anonymous subclass configured by a
+        // double-brace initializer, in a field initializer — outside any callable body.
+        JType t = buildFirstType("package p;\nclass Foo {\n"
+                + "  static final Runnable R = new Runnable() {\n"
+                + "    { setUp(); }\n"
+                + "    public void run() { go(); }\n"
+                + "  };\n}\n");
+        JType anon = t.getTypes().get("$anon$0");
+        assertNotNull(anon, "expected the field-initializer anonymous class, got: " + t.getTypes().keySet());
+        assertEquals(t.getId() + "/$anon$0", anon.getId());
+        assertTrue(anon.getCallables().containsKey("run()"), "its methods belong to it");
+        assertNotNull(anon.getCallables().get("<instance-init>$0()"),
+                "its double-brace initializer must survive, got: " + anon.getCallables().keySet());
+    }
+
+    @Test
+    void build_numbersFieldInitializerAnonymousClassesSeparatelyFromNestedTypes() {
+        JType t = buildFirstType("package p;\nclass Foo {\n"
+                + "  static final Runnable A = new Runnable() { public void run() {} };\n"
+                + "  static final Runnable B = new Runnable() { public void run() {} };\n"
+                + "  static class Named {}\n}\n");
+        assertTrue(t.getTypes().containsKey("$anon$0"));
+        assertTrue(t.getTypes().containsKey("$anon$1"));
+        assertTrue(t.getTypes().containsKey("Named"), "named nested types are unaffected");
+    }
+
+    @Test
     void build_capturesStructuredDecoratorWithArgs() {
         JType t = buildFirstType("package p;\n@SuppressWarnings(\"unchecked\")\nclass Foo {}\n");
         assertEquals(1, t.getDecorators().size());
