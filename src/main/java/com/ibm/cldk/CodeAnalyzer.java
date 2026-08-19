@@ -28,6 +28,7 @@ import com.ibm.cldk.schema.Analysis;
 import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.schema.V2Emitter;
 import com.ibm.cldk.schema.V2Json;
+import com.ibm.cldk.syntactic_analysis.L1Cache;
 import com.ibm.cldk.syntactic_analysis.L1Extractor;
 import com.ibm.cldk.utils.BuildProject;
 import com.ibm.cldk.utils.Log;
@@ -130,6 +131,15 @@ public class CodeAnalyzer implements Runnable {
     // Deliberately an INSTANCE field: the pre-existing options on this class are static, which leaks
     // values between CommandLine instances in the same JVM. New flags do not add to that.
     private String schema = "v1";
+
+    @Option(names = {"-c",
+            "--cache-dir" }, description = "Directory holding the incremental analysis cache. When set, "
+                    + "unchanged files are reused from analysis_cache.json instead of being reparsed.")
+    private String cacheDir;
+
+    @Option(names = {
+            "--eager" }, description = "Ignore any cached modules and rebuild everything (default: lazy).")
+    private boolean eager = false;
 
     /** Handle used to report flag-validation errors as clean, non-zero picocli failures. */
     @Spec
@@ -370,13 +380,22 @@ public class CodeAnalyzer implements Runnable {
                     + "); third-party types may not resolve");
         }
 
+        // Lazy by default: reuse modules whose files are byte-for-byte unchanged. `--eager` forces a
+        // full rebuild, which is also how a caller recovers from a cache they distrust.
+        Path cache = cacheDir == null ? null : Paths.get(cacheDir);
+        String version = analyzerVersion();
+        Map<String, JModule> cached = eager
+                ? new java.util.LinkedHashMap<>()
+                : L1Cache.load(cache, application, version);
+
         Map<String, JModule> modules;
         try {
-            modules = L1Extractor.extractAll(Paths.get(input), application, dependencyDir);
+            modules = L1Extractor.extractAll(Paths.get(input), application, dependencyDir, cached);
         } finally {
             BuildProject.cleanLibraryDependencies();
         }
-        Analysis analysis = V2Emitter.emit(application, 1, modules, analyzerVersion());
+        L1Cache.save(cache, application, version, modules);
+        Analysis analysis = V2Emitter.emit(application, 1, modules, version);
 
         if (output == null) {
             // stdout is the data channel: compact JSON only, so the SDK can parse it directly.

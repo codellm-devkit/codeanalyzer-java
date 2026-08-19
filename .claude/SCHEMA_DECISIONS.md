@@ -125,6 +125,21 @@ Refinements settled while building L1 (2026-08), each checked against the keysto
 - **`module.content_hash` is SHA-256 hex of the UTF-8 source** — for incremental caching and the
   Neo4j writer's per-module diffing; never identity (the `id` is).
 
+### D14 — Incremental caching keyed on `content_hash`
+
+`module.content_hash` exists so an unchanged file need not be re-analysed, and the v2 path now uses it:
+with `-c/--cache-dir`, modules are persisted to `analysis_cache.json` and reused when the file on disk
+still hashes to the same value. The reuse skips **parsing** as well as building — the extractor
+enumerates and hashes files itself rather than parsing a whole source root up front — which is where the
+cost actually is: `commons-lang` (625 files) goes from 130s cold to 4s warm.
+
+- **Caching is opt-in.** No `--cache-dir`, no cache file; the analyzer never writes into a project
+  uninvited. `--eager` ignores an existing cache, which is also how a caller recovers from one they
+  distrust.
+- **The cache is invalidated wholesale when the application name or analyzer version changes**, because
+  both are baked into every `can://` id — a module cached under different settings would carry wrong
+  ids. A missing, corrupt or mismatched cache degrades to a full rebuild and is never fatal.
+
 ### D13 — Anonymous classes are modelled; body text is recovered via `body_span`
 
 Both refinements came out of a field-by-field v1-vs-v2 comparison over ten real-world applications

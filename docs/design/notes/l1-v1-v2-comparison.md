@@ -39,6 +39,10 @@ All twenty runs exited 0 and left the fixture submodules clean.
 JavaParser's `LexicalPreservingPrinter` — the dominant cost on large projects. (A second-order effect:
 each v2 run reused dependency jars the preceding v1 run had already downloaded.)
 
+**Incremental caching** (`-c/--cache-dir`) reuses modules whose files are byte-for-byte unchanged,
+skipping both the parse and the build: a second `commons-lang` run drops from 130s to 4s. The timings
+above are all cold runs, so they measure the emitters rather than the cache.
+
 **v2 payloads are somewhat larger** even though per-callable `code` is gone: source text is stored once
 per module rather than duplicated per callable, but that saving is outweighed by spans on every node
 (`start`/`end`/`bytes`), per-node comments, local variables, and the resolved call-site facts.

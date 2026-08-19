@@ -117,6 +117,78 @@ class CodeAnalyzerV2CliTest {
     }
 
     @Test
+    void cacheFileIsWrittenAndReusedOnASecondRun(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+        Path cache = tmp.resolve("cache");
+
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "--schema", "v2",
+                "--app-name", "widgets", "-c", cache.toString()));
+        Path cacheFile = cache.resolve("analysis_cache.json");
+        assertTrue(Files.exists(cacheFile), "a run with --cache-dir must write analysis_cache.json");
+
+        // Prove reuse rather than timing it: plant a sentinel in the cached module. If the second run
+        // reuses the cache the sentinel survives into the output; if it rebuilds, it cannot.
+        String doctored = Files.readString(cacheFile).replace("\"package\":\"com.example\"",
+                "\"package\":\"SENTINEL\"");
+        assertTrue(doctored.contains("SENTINEL"), "precondition: the cache holds the package name");
+        Files.writeString(cacheFile, doctored);
+
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "--schema", "v2",
+                "--app-name", "widgets", "-c", cache.toString()));
+        assertTrue(Files.readString(out.resolve("analysis.json")).contains("SENTINEL"),
+                "the second run should have reused the cached module");
+    }
+
+    @Test
+    void eagerIgnoresTheCache(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+        Path cache = tmp.resolve("cache");
+        run("-i", in.toString(), "-o", out.toString(), "--schema", "v2", "-c", cache.toString());
+        Path cacheFile = cache.resolve("analysis_cache.json");
+        Files.writeString(cacheFile,
+                Files.readString(cacheFile).replace("\"package\":\"com.example\"", "\"package\":\"SENTINEL\""));
+
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "--schema", "v2",
+                "-c", cache.toString(), "--eager"));
+        assertFalse(Files.readString(out.resolve("analysis.json")).contains("SENTINEL"),
+                "--eager must rebuild instead of trusting the cache");
+    }
+
+    @Test
+    void changedFileIsRebuiltWhileOthersAreReused(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+        Path cache = tmp.resolve("cache");
+        Path second = in.resolve("src/main/java/com/example/Other.java");
+        Files.writeString(second, "package com.example;\npublic class Other { int n() { return 2; } }\n",
+                StandardCharsets.UTF_8);
+        run("-i", in.toString(), "-o", out.toString(), "--schema", "v2", "-c", cache.toString());
+
+        // Sentinel both cached modules, then edit only one file on disk.
+        Path cacheFile = cache.resolve("analysis_cache.json");
+        Files.writeString(cacheFile, Files.readString(cacheFile).replace("int n()", "int SENTINEL()"));
+        Files.writeString(second, "package com.example;\npublic class Other { int n() { return 3; } }\n",
+                StandardCharsets.UTF_8);
+
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "--schema", "v2",
+                "-c", cache.toString()));
+        String analysis = Files.readString(out.resolve("analysis.json"));
+        assertFalse(analysis.contains("SENTINEL"), "the edited file must be rebuilt, not reused");
+        assertTrue(analysis.contains("return 3"), "and the new content must be present");
+    }
+
+    @Test
+    void noCacheDirMeansNoCacheFile(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "--schema", "v2"));
+        assertFalse(Files.exists(out.resolve("analysis_cache.json")),
+                "caching is opt-in: no --cache-dir, no cache file");
+    }
+
+    @Test
     void unknownSchemaValueFailsLoudly(@TempDir Path tmp) throws IOException {
         Path in = project(tmp.resolve("app"));
         assertNotEquals(0, run("-i", in.toString(), "--schema", "v3"),

@@ -1,5 +1,6 @@
 package com.ibm.cldk.syntactic_analysis;
 
+import com.github.javaparser.JavaParser;
 import com.github.javaparser.ParseResult;
 import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ast.CompilationUnit;
@@ -57,6 +58,12 @@ public final class L1Extractor {
         return extractAll(projectRoot, appName, null);
     }
 
+    /** Analyse a project without reusing any cached modules. */
+    public static Map<String, JModule> extractAll(Path projectRoot, String appName, Path dependencyDir)
+            throws IOException {
+        return extractAll(projectRoot, appName, dependencyDir, new LinkedHashMap<>());
+    }
+
     /**
      * Build the v2 symbol table for a project.
      *
@@ -66,7 +73,8 @@ public final class L1Extractor {
      *     missing or unreadable jars are skipped rather than failing the analysis
      * @return modules keyed by relative file path, iterated in sorted key order for determinism
      */
-    public static Map<String, JModule> extractAll(Path projectRoot, String appName, Path dependencyDir)
+    public static Map<String, JModule> extractAll(
+            Path projectRoot, String appName, Path dependencyDir, Map<String, JModule> cached)
             throws IOException {
         ParserConfiguration discovery = parserConfiguration();
         ProjectRoot root = new ParserCollectionStrategy(discovery).collect(projectRoot);
@@ -81,31 +89,54 @@ public final class L1Extractor {
         ParserConfiguration config = parserConfiguration()
                 .setSymbolResolver(new JavaSymbolSolver(typeSolver(sourceRoots, dependencyDir, discovery)));
 
-        // Collect into a sorted map first: source roots and directory listings are not ordered, and
-        // `-j N` output must be byte-identical to `-j 1`.
+        // Collect into a sorted map first: directory listings are not ordered, and output must not
+        // depend on traversal order.
         Map<String, JModule> modules = new TreeMap<>();
         String applicationId = CanId.applicationId(appName);
+        JavaParser parser = new JavaParser(config);
+        int reused = 0;
         for (SourceRoot sourceRoot : sourceRoots) {
-            sourceRoot.setParserConfiguration(config);
-            for (ParseResult<CompilationUnit> parseResult : sourceRoot.tryToParse()) {
-                if (parseResult.getResult().isEmpty()) {
-                    Log.debug("Skipping unparsable file: " + parseResult.getProblems());
-                    continue;
-                }
-                CompilationUnit cu = parseResult.getResult().get();
-                if (cu.getStorage().isEmpty()) {
-                    continue;
-                }
-                Path path = cu.getStorage().get().getPath();
+            for (Path path : javaFilesUnder(sourceRoot.getRoot())) {
                 String fileKey = fileKey(projectRoot, path);
                 // Read the file's own text rather than printing the AST: `span.bytes` must index the
                 // real file, byte for byte.
                 String source = Files.readString(path, StandardCharsets.UTF_8);
                 L1BuildContext ctx = new L1BuildContext(applicationId, fileKey, source);
-                modules.put(fileKey, new ModuleBuilder(ctx).build(cu));
+
+                // Reuse the cached module when the file is byte-for-byte what it was last time. This
+                // skips the parse as well as the build, which is where the cost is.
+                JModule cachedModule = cached.get(fileKey);
+                if (cachedModule != null && ctx.contentHash().equals(cachedModule.getContentHash())) {
+                    modules.put(fileKey, cachedModule);
+                    reused++;
+                    continue;
+                }
+
+                ParseResult<CompilationUnit> parseResult = parser.parse(path);
+                if (parseResult.getResult().isEmpty()) {
+                    Log.debug("Skipping unparsable file " + path + ": " + parseResult.getProblems());
+                    continue;
+                }
+                modules.put(fileKey, new ModuleBuilder(ctx).build(parseResult.getResult().get()));
             }
         }
+        if (!cached.isEmpty()) {
+            Log.debug("Reused " + reused + " of " + modules.size() + " modules from cache");
+        }
         return new LinkedHashMap<>(modules);
+    }
+
+    /** Java sources under a source root, in sorted order so traversal cannot affect output. */
+    private static List<Path> javaFilesUnder(Path root) throws IOException {
+        if (!Files.isDirectory(root)) {
+            return List.of();
+        }
+        try (Stream<Path> paths = Files.walk(root)) {
+            return paths.filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().endsWith(".java"))
+                    .sorted()
+                    .collect(java.util.stream.Collectors.toList());
+        }
     }
 
     private static ParserConfiguration parserConfiguration() {
