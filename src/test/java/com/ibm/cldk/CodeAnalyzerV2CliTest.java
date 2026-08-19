@@ -12,6 +12,7 @@ import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -55,6 +56,29 @@ class CodeAnalyzerV2CliTest {
         Field f = CodeAnalyzer.class.getDeclaredField(field);
         f.setAccessible(true);
         f.set(null, value);
+    }
+
+    /**
+     * These tests drive the whole CLI, which runs the v1 symbol table and leaves its <em>static</em>
+     * state populated ({@code javaSymbolSolver}, the resolution caches, the declared-callables table).
+     * {@link SymbolTable#extractSingle} does not assign that solver field, so it behaves differently
+     * depending on whether something else ran first — restore the initial state so this class cannot
+     * change the outcome of tests that run after it.
+     */
+    @AfterEach
+    void restoreSymbolTableStatics() throws Exception {
+        Field solver = SymbolTable.class.getDeclaredField("javaSymbolSolver");
+        solver.setAccessible(true);
+        solver.set(null, null);
+        clearCollection("unresolvedTypes");
+        clearCollection("unresolvedExpressions");
+        SymbolTable.declaredMethodsAndConstructors.clear();
+    }
+
+    private static void clearCollection(String field) throws Exception {
+        Field f = SymbolTable.class.getDeclaredField(field);
+        f.setAccessible(true);
+        ((java.util.Collection<?>) f.get(null)).clear();
     }
 
     @Test

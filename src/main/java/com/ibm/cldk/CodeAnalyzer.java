@@ -352,7 +352,30 @@ public class CodeAnalyzer implements Runnable {
         String application = appName != null && !appName.isBlank()
                 ? appName
                 : Paths.get(input).toAbsolutePath().normalize().getFileName().toString();
-        Map<String, JModule> modules = L1Extractor.extractAll(Paths.get(input), application);
+
+        // Always attempt library type resolution: without the dependency jars on the solver's path,
+        // third-party types degrade to bare spellings (`Model` rather than `org.springframework.ui.Model`)
+        // and consumers lose the qualified names they join on. A failure here only thins resolution, so
+        // it is a warning rather than a fatal error.
+        projectRootPom = projectRootPom == null ? input : projectRootPom;
+        Path dependencyDir = null;
+        try {
+            if (BuildProject.downloadLibraryDependencies(input, projectRootPom)) {
+                dependencyDir = BuildProject.libDownloadPath;
+            } else {
+                Log.warn("Failed to download library dependencies; third-party types may not resolve");
+            }
+        } catch (Exception e) {
+            Log.warn("Failed to download library dependencies (" + e.getMessage()
+                    + "); third-party types may not resolve");
+        }
+
+        Map<String, JModule> modules;
+        try {
+            modules = L1Extractor.extractAll(Paths.get(input), application, dependencyDir);
+        } finally {
+            BuildProject.cleanLibraryDependencies();
+        }
         Analysis analysis = V2Emitter.emit(application, 1, modules, analyzerVersion());
 
         if (output == null) {

@@ -125,6 +125,22 @@ Refinements settled while building L1 (2026-08), each checked against the keysto
 - **`module.content_hash` is SHA-256 hex of the UTF-8 source** — for incremental caching and the
   Neo4j writer's per-module diffing; never identity (the `id` is).
 
+### D12 — L1 type resolution: library dependencies are always attempted
+
+- **Dependency jars go on the solver's path.** L1 downloads the project's library dependencies before
+  parsing and adds a `JarTypeSolver` per jar, so third-party types resolve to qualified names
+  (`org.springframework.ui.Model`, `org.springframework.data.domain.Page<…Owner>`) instead of bare
+  spellings. Skipping this made v2 resolution strictly worse than v1's; it is now verified on a real
+  Spring application. A download failure only thins resolution — it warns, never fails the analysis.
+- **Reflection is JRE-only.** A classpath-wide `ReflectionTypeSolver` resolves the *analyzer's own*
+  dependencies (WALA, Guava, JavaParser, …) as if the analysed project depended on them, inventing
+  qualified names that are simply wrong. Project types come from source roots, library types from the
+  dependency jars, and reflection covers only the JDK.
+- **Resolution-derived flags are absent when unknown.** `is_static_call` is a `Boolean`: when the
+  callee cannot be resolved, staticness is genuinely unknown and the key is omitted rather than
+  emitted as `false`, which would assert "not static". Syntactically evident flags
+  (`is_constructor_call`) stay primitive.
+
 ### D11 — L1 conformance oracle and gate
 
 - **Oracle:** emitted output is validated against an in-repo JSON Schema,

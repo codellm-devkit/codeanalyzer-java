@@ -125,14 +125,14 @@ class CallSiteBuilderTest {
         assertEquals(List.of("int"), node.getArgumentTypes());
         assertEquals(List.of("1"), node.getArgumentExpr());
         assertEquals("substring(int)", node.getCalleeSignature());
-        assertFalse(node.isStaticCall());
+        assertEquals(Boolean.FALSE, node.getIsStaticCall(), "String.substring is an instance method");
         assertFalse(node.isConstructorCall());
     }
 
     @Test
     void build_flagsStaticCall() {
         JBodyNode node = build("package p;\nclass Foo {\n  void m() {\n    Math.max(1, 2);\n  }\n}\n").get("4:10");
-        assertTrue(node.isStaticCall(), "Math.max is static");
+        assertEquals(Boolean.TRUE, node.getIsStaticCall(), "Math.max is static");
         assertEquals("java.lang.Math", node.getReceiverType());
     }
 
@@ -149,6 +149,8 @@ class CallSiteBuilderTest {
         JBodyNode node = build("package p;\nclass Foo {\n  void m() {\n    mystery(x);\n  }\n}\n").get("4:5");
         assertEquals("call", node.getKind());
         assertNull(node.getCalleeSignature());
+        assertNull(node.getIsStaticCall(),
+                "staticness is unknown for an unresolved callee — absent, not a false claim");
     }
 
     @Test

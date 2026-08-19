@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -93,6 +94,46 @@ class L1ExtractorTest {
         assertTrue(run.getBody().values().stream()
                         .anyMatch(n -> "com.example.Greeter".equals(n.getReceiverType())),
                 "the greet(...) call's receiver type should resolve across files");
+    }
+
+    /** Copy one jar off the test classpath into {@code dir}, standing in for a downloaded dependency. */
+    private static Path stageDependencyJar(Path dir, String jarNameFragment) throws IOException {
+        Files.createDirectories(dir);
+        for (String entry : System.getProperty("java.class.path").split(java.io.File.pathSeparator)) {
+            if (entry.endsWith(".jar") && entry.contains(jarNameFragment)) {
+                Path target = dir.resolve(Paths.get(entry).getFileName());
+                Files.copy(Paths.get(entry), target);
+                return target;
+            }
+        }
+        throw new IllegalStateException("no jar matching '" + jarNameFragment + "' on the test classpath");
+    }
+
+    @Test
+    void extractAll_resolvesLibraryTypesFromDependencyJars(@TempDir Path tmp) throws IOException {
+        // Without the dependency jars a third-party type degrades to its bare spelling, losing the
+        // qualified name consumers join on — so library resolution is part of L1's contract.
+        Path project = tmp.resolve("app");
+        Path pkg = project.resolve("src/main/java/com/example");
+        Files.createDirectories(pkg);
+        Files.writeString(pkg.resolve("Holder.java"),
+                "package com.example;\nimport com.google.gson.Gson;\n"
+                        + "public class Holder {\n  Gson gson;\n  Gson make() { return new Gson(); }\n}\n",
+                StandardCharsets.UTF_8);
+        Path deps = stageDependencyJar(tmp.resolve("deps"), "gson").getParent();
+
+        JModule withJars = L1Extractor.extractAll(project, "app", deps)
+                .get("src/main/java/com/example/Holder.java");
+        JType holder = withJars.getTypes().get("Holder");
+        assertEquals("com.google.gson.Gson", holder.getFields().get("gson").getType(),
+                "library field type must resolve to its qualified name");
+        assertTrue(holder.getCallables().containsKey("make()"));
+        assertEquals("com.google.gson.Gson", holder.getCallables().get("make()").getReturnType());
+
+        JModule withoutJars = L1Extractor.extractAll(project, "app", null)
+                .get("src/main/java/com/example/Holder.java");
+        assertEquals("Gson", withoutJars.getTypes().get("Holder").getFields().get("gson").getType(),
+                "with no jars on the path it degrades to the AST spelling rather than failing");
     }
 
     @Test

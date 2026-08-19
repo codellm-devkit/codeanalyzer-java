@@ -39,6 +39,13 @@ public class JBodyNode {
     /** Erased signature of the resolved callee ({@code substring(int)}); absent when unresolvable. */
     private String calleeSignature;
 
-    private boolean isStaticCall;
+    /**
+     * Whether the callee is static. A {@code Boolean} rather than a primitive: when the callee cannot
+     * be resolved this is genuinely <em>unknown</em>, and absence says that honestly where {@code false}
+     * would assert "not static".
+     */
+    private Boolean isStaticCall;
+
+    /** Syntactically evident (a {@code new} expression or {@code this(...)}/{@code super(...)}). */
     private boolean isConstructorCall;
 }

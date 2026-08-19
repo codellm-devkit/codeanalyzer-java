@@ -92,7 +92,7 @@ public final class CallSiteBuilder {
             try {
                 ResolvedMethodDeclaration resolved = call.resolve();
                 node.setCalleeSignature(Signatures.typeErasure(resolved));
-                node.setStaticCall(resolved.isStatic());
+                node.setIsStaticCall(resolved.isStatic());
             } catch (Throwable e) {
                 Log.debug("Could not resolve call: " + call + ": " + e.getMessage());
             }
