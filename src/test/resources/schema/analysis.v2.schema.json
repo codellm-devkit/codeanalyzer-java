@@ -224,6 +224,7 @@
         "kind": { "enum": ["method", "constructor", "initializer", "lambda"] },
         "signature": { "type": "string", "minLength": 1 },
         "span": { "$ref": "#/$defs/span" },
+        "body_span": { "$ref": "#/$defs/span" },
         "comments": { "type": "array", "items": { "$ref": "#/$defs/comment" } },
         "parameters": { "type": "array", "items": { "$ref": "#/$defs/parameter" } },
         "return_type": { "type": "string" },

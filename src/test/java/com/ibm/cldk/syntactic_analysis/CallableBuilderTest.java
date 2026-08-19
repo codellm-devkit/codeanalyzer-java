@@ -12,6 +12,7 @@ import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.CallableDeclaration;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JCallable;
+import com.ibm.cldk.schema.JType;
 import com.ibm.cldk.schema.JVariableDeclaration;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -174,6 +175,51 @@ class CallableBuilderTest {
         JCallable c = build("void m() { class Local {} }");
         assertTrue(c.getTypes().containsKey("Local"));
         assertEquals(c.getId() + "/Local", c.getTypes().get("Local").getId());
+    }
+
+    @Test
+    void build_modelsAnonymousClassAsTypeUnderTheCallable() {
+        // v1 recursed into anonymous bodies and mis-attributed their members to the enclosing type;
+        // dropping them instead loses real facts, so they get their own node like a local class does.
+        JCallable c = build("void m() { Runnable r = new Runnable() { public void run() { log(); } }; }");
+        JType anon = c.getTypes().get("$anon$0");
+        assertNotNull(anon, "expected an anonymous-class type node, got: " + c.getTypes().keySet());
+        assertEquals("class", anon.getKind());
+        assertEquals(c.getId() + "/$anon$0", anon.getId());
+        assertEquals(List.of("java.lang.Runnable"), anon.getInterfaces(),
+                "an anonymous class implementing an interface records it under interfaces");
+        assertTrue(anon.getCallables().containsKey("run()"), "its methods are its own callables");
+        assertEquals(1, anon.getCallables().get("run()").getBody().size(),
+                "log() belongs to the anonymous class's run(), not to m()");
+    }
+
+    @Test
+    void build_anonymousClassCallsAreNotAttributedToTheEnclosingCallable() {
+        JCallable c = build("void m() { outer(); Runnable r = new Runnable() { public void run() { hidden(); } }; }");
+        // m()'s own body holds outer() and the `new Runnable()` constructor call, but never hidden().
+        assertEquals(2, c.getBody().size(), "got: " + c.getBody().keySet());
+        assertTrue(c.getBody().values().stream().noneMatch(n -> "hidden".equals(n.getCalleeSignature())));
+    }
+
+    @Test
+    void build_capturesAnonymousInstanceInitializerDoubleBraceIdiom() {
+        // The idiom spring-petclinic uses: new PetType() {{ setName("Dog"); }}
+        JCallable c = build("void m() { Object o = new Object() { { setUp(); } }; }");
+        JType anon = c.getTypes().get("$anon$0");
+        assertNotNull(anon);
+        JCallable init = anon.getCallables().get("<instance-init>$0()");
+        assertNotNull(init, "the double-brace initializer must survive as a callable, got: "
+                + anon.getCallables().keySet());
+        assertEquals("initializer", init.getKind());
+        assertEquals(1, init.getBody().size(), "setUp() belongs to the anonymous initializer");
+    }
+
+    @Test
+    void build_numbersMultipleAnonymousClassesInDeclarationOrder() {
+        JCallable c = build("void m() { r(new Runnable() { public void run() {} });"
+                + " r(new Runnable() { public void run() {} }); }");
+        assertTrue(c.getTypes().containsKey("$anon$0"));
+        assertTrue(c.getTypes().containsKey("$anon$1"));
     }
 
     @Test

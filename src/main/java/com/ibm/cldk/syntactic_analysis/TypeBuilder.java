@@ -1,6 +1,8 @@
 package com.ibm.cldk.syntactic_analysis;
 
+import com.github.javaparser.ast.NodeList;
 import com.github.javaparser.ast.body.AnnotationDeclaration;
+import com.github.javaparser.ast.body.BodyDeclaration;
 import com.github.javaparser.ast.body.CallableDeclaration;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.EnumConstantDeclaration;
@@ -10,6 +12,7 @@ import com.github.javaparser.ast.body.InitializerDeclaration;
 import com.github.javaparser.ast.body.Parameter;
 import com.github.javaparser.ast.body.RecordDeclaration;
 import com.github.javaparser.ast.body.TypeDeclaration;
+import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.ibm.cldk.javaee.EntrypointsFinderFactory;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JCallable;
@@ -106,50 +109,7 @@ public final class TypeBuilder {
             type.setRecordComponents(components);
         }
 
-        // Fields, keyed by simple name — one entry per declared variable (int a, b; -> a, b).
-        Map<String, JField> fields = new LinkedHashMap<>();
-        for (FieldDeclaration fd : td.getFields()) {
-            fieldBuilder.build(fd, type.getId()).forEach(f -> fields.put(f.getName(), f));
-        }
-        type.setFields(fields);
-
-        // Callables (methods + constructors) declared directly in this type — getMethods()/
-        // getConstructors() return only direct members, so nested-type methods are not swept in.
-        // Keyed by type-erasure signature. Field names are handed down so each callable's
-        // refs.fields can recognize accesses to this type's fields.
-        List<String> fieldNames = new ArrayList<>(fields.keySet());
-        String typeFqn = td.getFullyQualifiedName().orElse(td.getNameAsString());
-        List<CallableDeclaration<?>> declared = new ArrayList<>();
-        declared.addAll(td.getConstructors());
-        declared.addAll(td.getMethods());
-        Map<String, JCallable> callables = new TreeMap<>();
-        for (CallableDeclaration<?> cd : declared) {
-            JCallable callable = callableBuilder.build(cd, type.getId(), typeFqn, fieldNames);
-            callables.put(callable.getSignature(), callable);
-        }
-        // Initializer blocks are callables too (keystone kind `initializer`) — L3 gives them their own
-        // CFGs. Numbered per kind so the id survives line edits; `$` marks the synthetic member.
-        int staticIndex = 0;
-        int instanceIndex = 0;
-        for (InitializerDeclaration id : td.getMembers().stream()
-                .filter(m -> m instanceof InitializerDeclaration)
-                .map(m -> (InitializerDeclaration) m)
-                .collect(Collectors.toList())) {
-            String signature = id.isStatic()
-                    ? "<clinit>$" + staticIndex++ + "()"
-                    : "<instance-init>$" + instanceIndex++ + "()";
-            callables.put(signature, callableBuilder.buildInitializer(id, type.getId(), typeFqn, fieldNames, signature));
-        }
-        type.setCallables(new LinkedHashMap<>(callables));
-
-        // Recurse into member (inner) types; nesting/parent are encoded by this containment (and the
-        // id path). Local classes in method bodies are handled later by the callable builder.
-        Map<String, JType> nested = new TreeMap<>();
-        td.getMembers().stream()
-                .filter(m -> m instanceof TypeDeclaration)
-                .map(m -> (TypeDeclaration<?>) m)
-                .forEach(member -> nested.put(member.getNameAsString(), build(member, type.getId())));
-        type.setTypes(new LinkedHashMap<>(nested));
+        populateMembers(type, td.getMembers(), typeFqnOf(td));
 
         return type;
     }
@@ -169,5 +129,100 @@ public final class TypeBuilder {
             return "interface";
         }
         return "class";
+    }
+
+    /** The fully-qualified name used to qualify field references, falling back to the simple name. */
+    private static String typeFqnOf(TypeDeclaration<?> td) {
+        return td.getFullyQualifiedName().orElse(td.getNameAsString());
+    }
+
+    /**
+     * Build a {@code type} node for an anonymous class body ({@code new Runnable() { ... }}).
+     *
+     * <p>An anonymous class has no name, so it is keyed positionally ({@code $anon$0}, {@code $anon$1},
+     * ... in declaration order within the callable) — stable across line edits, and {@code $} marks it
+     * synthetic. Modelling it as its own type is what keeps its methods, initializers, locals and call
+     * sites attributed to it rather than mis-attributed to the enclosing callable or dropped.
+     */
+    public JType buildAnonymous(ObjectCreationExpr creation, String parentId, String name) {
+        JType type = new JType();
+        type.setId(CanId.childId(parentId, name));
+        type.setKind("class");
+        type.setSpan(ctx.spanOf(creation));
+
+        // The instantiated type is a supertype: an interface if it resolves to one, else a base class.
+        String supertype = ctx.resolveType(creation.getType());
+        if (resolvesToInterface(creation)) {
+            type.setInterfaces(List.of(supertype));
+        } else {
+            type.setBaseTypes(List.of(supertype));
+        }
+
+        populateMembers(type, creation.getAnonymousClassBody().orElseGet(NodeList::new), supertype);
+        return type;
+    }
+
+    private static boolean resolvesToInterface(ObjectCreationExpr creation) {
+        try {
+            return creation.getType().resolve().asReferenceType().getTypeDeclaration()
+                    .map(d -> d.isInterface())
+                    .orElse(false);
+        } catch (Throwable e) {
+            // Unresolvable supertype: treat it as a base class rather than guessing.
+            return false;
+        }
+    }
+
+    /**
+     * Populate a type's fields, callables (methods, constructors and initializer blocks) and member
+     * types from its declared members. Shared by named types and anonymous class bodies so both get the
+     * same treatment.
+     */
+    private void populateMembers(JType type, List<BodyDeclaration<?>> members, String typeFqn) {
+        // Fields, keyed by simple name — one entry per declared variable (int a, b; -> a, b).
+        Map<String, JField> fields = new LinkedHashMap<>();
+        for (BodyDeclaration<?> member : members) {
+            if (member instanceof FieldDeclaration) {
+                fieldBuilder.build((FieldDeclaration) member, type.getId())
+                        .forEach(f -> fields.put(f.getName(), f));
+            }
+        }
+        type.setFields(fields);
+
+        // Field names are handed down so each callable's refs.fields can recognise accesses to them.
+        List<String> fieldNames = new ArrayList<>(fields.keySet());
+        Map<String, JCallable> callables = new TreeMap<>();
+        for (BodyDeclaration<?> member : members) {
+            if (member instanceof CallableDeclaration) {
+                JCallable callable =
+                        callableBuilder.build((CallableDeclaration<?>) member, type.getId(), typeFqn, fieldNames);
+                callables.put(callable.getSignature(), callable);
+            }
+        }
+        // Initializer blocks are callables too (keystone kind `initializer`) — L3 gives them their own
+        // CFGs. Numbered per kind so the id survives line edits; `$` marks the synthetic member.
+        int staticIndex = 0;
+        int instanceIndex = 0;
+        for (BodyDeclaration<?> member : members) {
+            if (member instanceof InitializerDeclaration) {
+                InitializerDeclaration id = (InitializerDeclaration) member;
+                String signature = id.isStatic()
+                        ? "<clinit>$" + staticIndex++ + "()"
+                        : "<instance-init>$" + instanceIndex++ + "()";
+                callables.put(signature,
+                        callableBuilder.buildInitializer(id, type.getId(), typeFqn, fieldNames, signature));
+            }
+        }
+        type.setCallables(new LinkedHashMap<>(callables));
+
+        // Member types; nesting/parent are encoded by this containment (and the id path).
+        Map<String, JType> nested = new TreeMap<>();
+        for (BodyDeclaration<?> member : members) {
+            if (member instanceof TypeDeclaration) {
+                TypeDeclaration<?> nestedType = (TypeDeclaration<?>) member;
+                nested.put(nestedType.getNameAsString(), build(nestedType, type.getId()));
+            }
+        }
+        type.setTypes(new LinkedHashMap<>(nested));
     }
 }

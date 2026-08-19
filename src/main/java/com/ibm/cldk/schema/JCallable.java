@@ -24,6 +24,13 @@ public class JCallable {
     private List<String> errorChannel = new ArrayList<>();
     private List<String> modifiers = new ArrayList<>();
     private List<JDecorator> decorators = new ArrayList<>();
+    /**
+     * Span of the body block ({@code { ... }}) alone, absent when there is no body. The callable's own
+     * {@code span} covers the whole declaration, so this is what a consumer slices to obtain just the
+     * method body — the text v1 carried in its per-callable {@code code} field, without duplicating it.
+     */
+    private Span bodySpan;
+
     /** Signature-with-parameter-names text (not recoverable from span.bytes, which covers the body). */
     private String declaration;
 

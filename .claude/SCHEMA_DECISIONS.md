@@ -125,6 +125,25 @@ Refinements settled while building L1 (2026-08), each checked against the keysto
 - **`module.content_hash` is SHA-256 hex of the UTF-8 source** — for incremental caching and the
   Neo4j writer's per-module diffing; never identity (the `id` is).
 
+### D13 — Anonymous classes are modelled; body text is recovered via `body_span`
+
+Both refinements came out of a field-by-field v1-vs-v2 comparison over ten real-world applications
+(`docs/design/notes/l1-v1-v2-comparison.md`).
+
+- **Anonymous inner classes get their own `type` node**, keyed positionally (`$anon$0`, `$anon$1`, … in
+  declaration order) under the callable that declares them, exactly as named local classes are. v1
+  recursed into anonymous bodies and mis-attributed their initializers and locals to the *enclosing
+  type*; simply excluding them (the first v2 attempt) lost those facts instead. Modelling them closed
+  the measured gap exactly: initializer blocks and local variables went from -10/-20 to parity.
+- **`callable.body_span` delimits the body block.** v2 drops v1's per-callable `code` string (D1) on
+  the basis that body text is a slice of `module.source` — but the callable's own `span` covers the
+  *whole declaration*, so slicing it yields signature + body, not v1's body-only `code`. `body_span`
+  is the span of the `{ … }` block, so `source[body_span.bytes]` reproduces v1's `code` byte for byte
+  (pinned by `BodyTextParityTest`, which compares against the v1 emitter directly) without
+  reintroducing duplicated text. Absent when there is no body (abstract/interface methods).
+  **Canonical note:** the keystone defines `get_method_body(sig)` as `module.source[callable.span.bytes]`,
+  which is *not* v1's `code` semantics; the discrepancy is worth resolving in the canonical schema.
+
 ### D12 — L1 type resolution: library dependencies are always attempted
 
 - **Dependency jars go on the solver's path.** L1 downloads the project's library dependencies before
