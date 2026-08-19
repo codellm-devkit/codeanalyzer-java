@@ -12,5 +12,6 @@ public class Analysis {
     private String schemaVersion;
     private String language;
     private int maxLevel;
+    private JAnalyzerInfo analyzer;
     private JApplication application;
 }

@@ -16,6 +16,12 @@ public final class V2Emitter {
 
     /** Wrap already-built modules (keyed by relative file key) into the v2 envelope. */
     public static Analysis emit(String appName, int maxLevel, Map<String, JModule> modules) {
+        return emit(appName, maxLevel, modules, null);
+    }
+
+    /** As above, stamping the analyzer version into the envelope manifest. */
+    public static Analysis emit(
+            String appName, int maxLevel, Map<String, JModule> modules, String analyzerVersion) {
         JApplication application = new JApplication();
         application.setId(CanId.applicationId(appName));
 
@@ -30,6 +36,11 @@ public final class V2Emitter {
         analysis.setSchemaVersion("2.0.0");
         analysis.setLanguage("java");
         analysis.setMaxLevel(maxLevel);
+        if (analyzerVersion != null) {
+            JAnalyzerInfo analyzer = new JAnalyzerInfo();
+            analyzer.setVersion(analyzerVersion);
+            analysis.setAnalyzer(analyzer);
+        }
         analysis.setApplication(application);
         return analysis;
     }

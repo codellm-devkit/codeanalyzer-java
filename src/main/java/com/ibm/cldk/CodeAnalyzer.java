@@ -24,6 +24,11 @@ import com.google.gson.JsonParser;
 import com.ibm.cldk.entities.JavaCompilationUnit;
 import com.ibm.cldk.neo4j.BoltConfig;
 import com.ibm.cldk.neo4j.Neo4jEmitter;
+import com.ibm.cldk.schema.Analysis;
+import com.ibm.cldk.schema.JModule;
+import com.ibm.cldk.schema.V2Emitter;
+import com.ibm.cldk.schema.V2Json;
+import com.ibm.cldk.syntactic_analysis.L1Extractor;
 import com.ibm.cldk.utils.BuildProject;
 import com.ibm.cldk.utils.Log;
 import java.io.File;
@@ -40,7 +45,10 @@ import java.util.stream.Collectors;
 import org.apache.commons.lang3.tuple.Pair;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
+import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Option;
+import picocli.CommandLine.ParameterException;
+import picocli.CommandLine.Spec;
 
 class VersionProvider implements CommandLine.IVersionProvider {
 
@@ -116,6 +124,17 @@ public class CodeAnalyzer implements Runnable {
     @Option(names = { "--neo4j-database" }, description = "Neo4j database name (env: NEO4J_DATABASE, default: server default).")
     private static String neo4jDatabase;
 
+    @Option(names = {
+            "--schema" }, description = "Output schema: v1 (legacy, default) | v2 (canonical CPG). "
+                    + "v2 currently covers analysis level 1 only.")
+    // Deliberately an INSTANCE field: the pre-existing options on this class are static, which leaks
+    // values between CommandLine instances in the same JVM. New flags do not add to that.
+    private String schema = "v1";
+
+    /** Handle used to report flag-validation errors as clean, non-zero picocli failures. */
+    @Spec
+    private CommandSpec spec;
+
     private static final String outputFileName = "analysis.json";
 
     public static Gson gson = new GsonBuilder()
@@ -156,11 +175,16 @@ public class CodeAnalyzer implements Runnable {
         }
     }
 
-    private static void analyze() throws Exception {
+    private void analyze() throws Exception {
 
         // The Neo4j schema contract is a static artifact — no project analysis required.
         if ("schema".equalsIgnoreCase(emit)) {
             Neo4jEmitter.emitSchema(output);
+            return;
+        }
+
+        if (isV2Schema()) {
+            analyzeV2();
             return;
         }
 
@@ -288,6 +312,70 @@ public class CodeAnalyzer implements Runnable {
         }
         String consolidatedJSONString = gson.toJson(combinedJsonObject);
         emit(consolidatedJSONString);
+    }
+
+    private boolean isV2Schema() {
+        if ("v2".equalsIgnoreCase(schema)) {
+            return true;
+        }
+        if (!"v1".equalsIgnoreCase(schema)) {
+            // Never silently fall back on an unrecognised flag value — the caller asked for something
+            // specific and would otherwise process the wrong shape.
+            throw new ParameterException(spec.commandLine(),
+                    "error: unknown --schema value '" + schema + "'; use v1 or v2");
+        }
+        return false;
+    }
+
+    /**
+     * Emit the canonical schema v2 payload. Only the surfaces that exist today are accepted: level 1,
+     * whole-project, JSON. Anything else is an explicit error rather than a silently different result.
+     */
+    private void analyzeV2() throws Exception {
+        if (analysisLevel > 1) {
+            throw new ParameterException(spec.commandLine(),
+                    "error: --schema v2 currently supports --analysis-level 1 only");
+        }
+        if ("neo4j".equalsIgnoreCase(emit)) {
+            throw new ParameterException(spec.commandLine(),
+                    "error: --schema v2 does not support --emit neo4j yet; the graph projection is still v1");
+        }
+        if (sourceAnalysis != null || targetFiles != null) {
+            throw new ParameterException(spec.commandLine(),
+                    "error: --schema v2 supports whole-project analysis only "
+                            + "(not --source-analysis or --target-files)");
+        }
+        if (input == null) {
+            throw new ParameterException(spec.commandLine(), "error: --input is required");
+        }
+
+        String application = appName != null && !appName.isBlank()
+                ? appName
+                : Paths.get(input).toAbsolutePath().normalize().getFileName().toString();
+        Map<String, JModule> modules = L1Extractor.extractAll(Paths.get(input), application);
+        Analysis analysis = V2Emitter.emit(application, 1, modules, analyzerVersion());
+
+        if (output == null) {
+            // stdout is the data channel: compact JSON only, so the SDK can parse it directly.
+            System.out.println(V2Json.compact().toJson(analysis));
+        } else {
+            Path outputPath = Paths.get(output);
+            if (!Files.exists(outputPath)) {
+                Files.createDirectories(outputPath);
+            }
+            try (FileWriter writer = new FileWriter(new File(output, outputFileName))) {
+                writer.write(V2Json.pretty().toJson(analysis));
+            }
+        }
+    }
+
+    private static String analyzerVersion() {
+        try {
+            String[] versions = new VersionProvider().getVersion();
+            return versions.length > 0 ? versions[0] : "unknown";
+        } catch (Exception e) {
+            return "unknown";
+        }
     }
 
     private static void emit(String consolidatedJSONString) throws IOException {
