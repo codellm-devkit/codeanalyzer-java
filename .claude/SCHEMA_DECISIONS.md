@@ -125,6 +125,24 @@ Refinements settled while building L1 (2026-08), each checked against the keysto
 - **`module.content_hash` is SHA-256 hex of the UTF-8 source** — for incremental caching and the
   Neo4j writer's per-module diffing; never identity (the `id` is).
 
+### D11 — L1 conformance oracle and gate
+
+- **Oracle:** emitted output is validated against an in-repo JSON Schema,
+  `src/test/resources/schema/analysis.v2.schema.json`, because the SDK's v2 models do not exist yet.
+  The schema is **strict** (`additionalProperties: false`) so a renamed or stray key fails the gate
+  instead of reaching consumers, and it encodes the structural invariants directly: `can://java/` id
+  prefixes, `line:col`/`@tag` body keys via `propertyNames`, relative `symbol_table` keys, and
+  `[from, to)` byte spans. Replace it with the SDK models once they land.
+- **The gate runs at two scales.** In-repo fixtures run in the default `test` task on every change.
+  Whole real-world applications (the git-submodule fixtures) take minutes under full symbol
+  resolution, so they are tagged `realworld`, excluded from `test`, and run via
+  `./gradlew realWorldConformanceTest`. They are not optional — scale-dependent problems
+  (unresolvable dependencies, unusual constructs, memory) only appear there.
+- **v2 is opt-in for now.** `--schema v2` emits the canonical envelope; `v1` stays the default until
+  the rest of the migration lands, so existing consumers are unaffected. Unsupported combinations
+  (`-a > 1`, `--emit neo4j`, `--source-analysis`, `--target-files`, unknown `--schema`) exit non-zero
+  with a clear message rather than silently emitting a different shape.
+
 ### D9 — Neo4j namespace: keep the `J_` relationship prefix
 Existing convention (`J_CALLS`, …); dual-label `JSymbol` merge pattern retained.
 `SchemaCatalog` takes a major bump (families rename v1→v2).
