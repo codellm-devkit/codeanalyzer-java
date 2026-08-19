@@ -8,7 +8,9 @@ import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.ast.stmt.BlockStmt;
 import com.github.javaparser.ast.stmt.ExplicitConstructorInvocationStmt;
+import com.github.javaparser.resolution.declarations.ResolvedMethodDeclaration;
 import com.ibm.cldk.schema.JBodyNode;
+import com.ibm.cldk.utils.Log;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -63,10 +65,56 @@ public final class CallSiteBuilder {
             node.setKind("call");
             node.setSpan(ctx.spanOf(site));
             // `callee` stays unset at L1 and is filled in when L2 resolves this site.
-            node.setArguments(argumentsOf(site).stream().map(CallSiteBuilder::localId).collect(Collectors.toList()));
+            List<Expression> args = argumentsOf(site);
+            node.setArguments(args.stream().map(CallSiteBuilder::localId).collect(Collectors.toList()));
+            node.setArgumentExpr(args.stream().map(Object::toString).collect(Collectors.toList()));
+            node.setArgumentTypes(
+                    args.stream().map(ctx::resolveExpressionType).collect(Collectors.toList()));
+            enrich(node, site);
             nodes.put(localId(site), node);
         }
         return nodes;
+    }
+
+    /**
+     * Fill in the resolved call-site facts, degrading silently when resolution fails (a missing
+     * dependency must thin the node's data, never drop the node or fail the build).
+     */
+    private void enrich(JBodyNode node, Node site) {
+        if (site instanceof MethodCallExpr) {
+            MethodCallExpr call = (MethodCallExpr) site;
+            call.getScope().ifPresent(scope -> {
+                node.setReceiverExpr(scope.toString());
+                String type = ctx.resolveExpressionType(scope);
+                if (!type.isEmpty()) {
+                    node.setReceiverType(type);
+                }
+            });
+            try {
+                ResolvedMethodDeclaration resolved = call.resolve();
+                node.setCalleeSignature(Signatures.typeErasure(resolved));
+                node.setStaticCall(resolved.isStatic());
+            } catch (Throwable e) {
+                Log.debug("Could not resolve call: " + call + ": " + e.getMessage());
+            }
+        } else if (site instanceof ObjectCreationExpr) {
+            ObjectCreationExpr creation = (ObjectCreationExpr) site;
+            node.setConstructorCall(true);
+            node.setReceiverType(ctx.resolveType(creation.getType()));
+            try {
+                node.setCalleeSignature(Signatures.typeErasure(creation.resolve()));
+            } catch (Throwable e) {
+                Log.debug("Could not resolve constructor call: " + creation + ": " + e.getMessage());
+            }
+        } else if (site instanceof ExplicitConstructorInvocationStmt) {
+            node.setConstructorCall(true);
+            try {
+                node.setCalleeSignature(
+                        Signatures.typeErasure(((ExplicitConstructorInvocationStmt) site).resolve()));
+            } catch (Throwable e) {
+                Log.debug("Could not resolve constructor invocation: " + site + ": " + e.getMessage());
+            }
+        }
     }
 
     /**

@@ -6,7 +6,9 @@ import lombok.Data;
 
 /**
  * A component of a {@code record} type — its name, resolved {@code type}, modifiers and structured
- * decorators. A Java-specific addition to the keystone's type node (see cldk-devtools#40).
+ * decorators.
+ *
+ * <p>The canonical schema has no record-member vocabulary, so this is an additive Java field.
  *
  * <p>v1 also carried a {@code defaultValue} derived from compact-constructor assignments; that is
  * dropped deliberately — Java record components have no default values, so the field was misleading.

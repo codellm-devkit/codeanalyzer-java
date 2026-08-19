@@ -17,4 +17,28 @@ public class JBodyNode {
     /** Only meaningful on {@code call} nodes; {@code null} at L1 (backfilled at L2). */
     private String callee;
     private List<String> arguments = new ArrayList<>();
+
+    // --- Rich call-site facts (only on `call` nodes) --------------------------------------------
+    // The canonical `call` node carries just {callee, arguments}, which is thinner than every
+    // analyzer's real call-site data (the Python reference analyzer keeps a parallel rich
+    // `call_sites[]` for the same reason). These are therefore additive Java fields, retained because
+    // the framework/CRUD finders key on `receiver_type` and dropping them would regress against v1.
+
+    /** The receiver expression as written ({@code "abc"}, {@code helper}, {@code this}). */
+    private String receiverExpr;
+
+    /** Resolved type of the receiver — or, for a {@code new} expression, the instantiated type. */
+    private String receiverType;
+
+    /** Resolved types of the argument expressions, positionally. */
+    private List<String> argumentTypes = new ArrayList<>();
+
+    /** The argument expressions as written, positionally. */
+    private List<String> argumentExpr = new ArrayList<>();
+
+    /** Erased signature of the resolved callee ({@code substring(int)}); absent when unresolvable. */
+    private String calleeSignature;
+
+    private boolean isStaticCall;
+    private boolean isConstructorCall;
 }

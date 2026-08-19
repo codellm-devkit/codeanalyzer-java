@@ -610,15 +610,7 @@ public class SymbolTable {
      * @return String representing type erasure signature
      */
     private static String getTypeErasureSignature(ResolvedMethodLikeDeclaration methodDecl) {
-        StringBuilder signature = new StringBuilder(methodDecl.getName());
-        List<String> erasureParameterTypes = new ArrayList<>();
-        for (int i = 0; i < methodDecl.getNumberOfParams(); i++) {
-            erasureParameterTypes.add(methodDecl.getParam(i).getType().erasure().describe());
-        }
-        signature.append("(");
-        signature.append(String.join(", ", erasureParameterTypes));
-        signature.append(")");
-        return signature.toString();
+        return com.ibm.cldk.syntactic_analysis.Signatures.typeErasure(methodDecl);
     }
 
     private static boolean isEntryPointMethod(CallableDeclaration callableDecl) {

@@ -3,6 +3,7 @@ package com.ibm.cldk.syntactic_analysis;
 import com.github.javaparser.ast.body.CallableDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.Parameter;
+import com.github.javaparser.resolution.declarations.ResolvedMethodLikeDeclaration;
 import com.github.javaparser.resolution.types.ResolvedType;
 import com.ibm.cldk.utils.Log;
 import java.util.ArrayList;
@@ -17,6 +18,23 @@ import java.util.List;
 public final class Signatures {
 
     private Signatures() {}
+
+    /**
+     * The type-erasure signature of an already-<em>resolved</em> method/constructor — used to name the
+     * callee of a call site. Mirrors the declaration-side format so a call site's
+     * {@code callee_signature} matches the target callable's {@code signature}.
+     */
+    public static String typeErasure(ResolvedMethodLikeDeclaration methodDecl) {
+        StringBuilder signature = new StringBuilder(methodDecl.getName());
+        List<String> erasureParameterTypes = new ArrayList<>();
+        for (int i = 0; i < methodDecl.getNumberOfParams(); i++) {
+            erasureParameterTypes.add(methodDecl.getParam(i).getType().erasure().describe());
+        }
+        signature.append("(");
+        signature.append(String.join(", ", erasureParameterTypes));
+        signature.append(")");
+        return signature.toString();
+    }
 
     /**
      * The type-erasure signature for {@code callableDecl}: the method name (or {@code <init>} for a
@@ -41,7 +59,7 @@ public final class Signatures {
             signature.append(")");
             return signature.toString();
         } catch (Throwable e) {
-            Log.warn("Could not compute type erasure signature for " + callableDecl.getSignature().asString()
+            Log.debug("Could not compute type erasure signature for " + callableDecl.getSignature().asString()
                     + "; computing regular signature");
             return callableDecl.getSignature().asString();
         }

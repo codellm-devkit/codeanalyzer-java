@@ -1,6 +1,7 @@
 package com.ibm.cldk.syntactic_analysis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -111,6 +112,43 @@ class CallSiteBuilderTest {
         String source = "package p;\nclass Foo {\n  void m() {\n    a();\n    new B();\n    c();\n  }\n}\n";
         Map<String, JBodyNode> body = build(source);
         assertEquals(List.of("4:5", "5:9", "6:5"), new ArrayList<>(body.keySet()));
+    }
+
+    @Test
+    void build_callNodeCapturesReceiverAndResolvedTypes() {
+        // The rich call-site facts v1 exposed on CallSite: framework/CRUD finders key on receiver_type,
+        // and LLM consumers want the receiver/argument expressions verbatim.
+        JBodyNode node = build("package p;\nclass Foo {\n  void m() {\n    \"abc\".substring(1);\n  }\n}\n")
+                .get("4:11");
+        assertEquals("\"abc\"", node.getReceiverExpr());
+        assertEquals("java.lang.String", node.getReceiverType());
+        assertEquals(List.of("int"), node.getArgumentTypes());
+        assertEquals(List.of("1"), node.getArgumentExpr());
+        assertEquals("substring(int)", node.getCalleeSignature());
+        assertFalse(node.isStaticCall());
+        assertFalse(node.isConstructorCall());
+    }
+
+    @Test
+    void build_flagsStaticCall() {
+        JBodyNode node = build("package p;\nclass Foo {\n  void m() {\n    Math.max(1, 2);\n  }\n}\n").get("4:10");
+        assertTrue(node.isStaticCall(), "Math.max is static");
+        assertEquals("java.lang.Math", node.getReceiverType());
+    }
+
+    @Test
+    void build_flagsConstructorCall() {
+        JBodyNode node = build("package p;\nclass Foo {\n  void m() {\n    new String(\"x\");\n  }\n}\n").get("4:9");
+        assertTrue(node.isConstructorCall());
+        assertEquals("java.lang.String", node.getReceiverType(), "the instantiated type");
+    }
+
+    @Test
+    void build_unresolvableCallStillEmitsNodeWithoutResolvedFacts() {
+        // Honest degradation: an unresolvable callee must not drop the call node or crash.
+        JBodyNode node = build("package p;\nclass Foo {\n  void m() {\n    mystery(x);\n  }\n}\n").get("4:5");
+        assertEquals("call", node.getKind());
+        assertNull(node.getCalleeSignature());
     }
 
     @Test
