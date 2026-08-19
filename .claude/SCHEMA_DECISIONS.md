@@ -122,6 +122,16 @@ Refinements settled while building L1 (2026-08), each checked against the keysto
 - **`module.span` covers the whole file**, computed from the source rather than the compilation
   unit's AST range (which ends inconsistently around trailing whitespace), so
   `module.source[span.bytes] == module.source` always holds.
+- **A call site's `callee_signature` must be joinable against the target callable's `signature`.** A
+  resolved constructor's name is its *class* name, while the declaration side emits `<init>`, so the
+  callee side normalises to `<init>` too. Without this every constructor edge would be unjoinable and
+  L2 would silently drop it (88 of petclinic's call sites).
+- **Call sites with no source range are skipped.** They cannot be addressed by a `line:col` id, and
+  fabricating one would both invent a location and collide with every other rangeless node, silently
+  overwriting entries in `body`.
+- **Metrics are scope-filtered like every other callable fact.** `metrics.cyclomatic` counts only branch
+  points belonging to the callable itself; those inside a nested or anonymous class belong to that
+  class's callables and would otherwise be counted twice.
 - **`module.content_hash` is SHA-256 hex of the UTF-8 source** — for incremental caching and the
   Neo4j writer's per-module diffing; never identity (the `id` is).
 

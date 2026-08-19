@@ -3,6 +3,7 @@ package com.ibm.cldk.syntactic_analysis;
 import com.github.javaparser.ast.body.CallableDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.Parameter;
+import com.github.javaparser.resolution.declarations.ResolvedConstructorDeclaration;
 import com.github.javaparser.resolution.declarations.ResolvedMethodLikeDeclaration;
 import com.github.javaparser.resolution.types.ResolvedType;
 import com.ibm.cldk.utils.Log;
@@ -25,7 +26,11 @@ public final class Signatures {
      * {@code callee_signature} matches the target callable's {@code signature}.
      */
     public static String typeErasure(ResolvedMethodLikeDeclaration methodDecl) {
-        StringBuilder signature = new StringBuilder(methodDecl.getName());
+        // A ResolvedConstructorDeclaration's name is its *class* name; the declaration side emits
+        // `<init>`. Using the class name here would make a call site's callee_signature unjoinable
+        // against the constructor's own signature, so every constructor edge would be missed.
+        String name = methodDecl instanceof ResolvedConstructorDeclaration ? "<init>" : methodDecl.getName();
+        StringBuilder signature = new StringBuilder(name);
         List<String> erasureParameterTypes = new ArrayList<>();
         for (int i = 0; i < methodDecl.getNumberOfParams(); i++) {
             erasureParameterTypes.add(methodDecl.getParam(i).getType().erasure().describe());

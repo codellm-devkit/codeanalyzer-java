@@ -241,22 +241,33 @@ public final class CallableBuilder {
      * in the callable (mirrors the v1 symbol-table metric).
      */
     private static int cyclomaticComplexity(InitializerDeclaration id) {
-        return branchPoints(id) + 1;
+        return branchPoints(id.getBody()) + 1;
     }
 
     private static int cyclomaticComplexity(CallableDeclaration<?> cd) {
-        return branchPoints(cd) + 1;
+        return bodyOf(cd).map(CallableBuilder::branchPoints).orElse(0) + 1;
     }
 
-    /** Branch points (if / loop / switch-case / ternary / catch) inside any node. */
-    private static int branchPoints(com.github.javaparser.ast.Node node) {
-        int ifCount = node.findAll(IfStmt.class).size();
-        int loopCount = node.findAll(DoStmt.class).size() + node.findAll(ForStmt.class).size()
-                + node.findAll(ForEachStmt.class).size() + node.findAll(WhileStmt.class).size();
-        int switchCaseCount =
-                node.findAll(SwitchStmt.class).stream().mapToInt(s -> s.getEntries().size()).sum();
-        int ternaryCount = node.findAll(ConditionalExpr.class).size();
-        int catchCount = node.findAll(CatchClause.class).size();
+    /**
+     * Branch points (if / loop / switch-case / ternary / catch) belonging to this body itself. Branches
+     * inside a nested type or anonymous class belong to <em>its</em> callables — counting them here too
+     * would inflate the enclosing callable and double-count them, and every other metric on the callable
+     * is scope-filtered the same way.
+     */
+    private static int branchPoints(BlockStmt node) {
+        int ifCount = own(node, IfStmt.class).size();
+        int loopCount = own(node, DoStmt.class).size() + own(node, ForStmt.class).size()
+                + own(node, ForEachStmt.class).size() + own(node, WhileStmt.class).size();
+        int switchCaseCount = own(node, SwitchStmt.class).stream().mapToInt(s -> s.getEntries().size()).sum();
+        int ternaryCount = own(node, ConditionalExpr.class).size();
+        int catchCount = own(node, CatchClause.class).size();
         return ifCount + loopCount + switchCaseCount + ternaryCount + catchCount;
+    }
+
+    /** Nodes of a kind that belong to {@code body} itself, not to a type nested within it. */
+    private static <T extends com.github.javaparser.ast.Node> List<T> own(BlockStmt body, Class<T> kind) {
+        return body.findAll(kind).stream()
+                .filter(n -> AstScopes.belongsDirectlyTo(n, body))
+                .collect(Collectors.toList());
     }
 }

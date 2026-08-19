@@ -55,6 +55,11 @@ public final class CallSiteBuilder {
                 .filter(n -> AstScopes.belongsDirectlyTo(n, body))
                 .forEach(sites::add);
 
+        // A node with no source range cannot be addressed by a line:col id. Inventing one would both
+        // fabricate a location and collide with every other rangeless node, silently overwriting call
+        // sites; skipping is the honest degradation.
+        sites.removeIf(site -> !hasPosition(site));
+
         sites.sort(Comparator.<Node>comparingInt(n -> anchorPosition(n)[0])
                 .thenComparingInt(n -> anchorPosition(n)[1]));
 
@@ -128,6 +133,12 @@ public final class CallSiteBuilder {
         return new ArrayList<>(args);
     }
 
+    /** Whether a call site has a usable source position (its anchor's, or its own). */
+    private static boolean hasPosition(Node site) {
+        Node anchor = anchorOf(site);
+        return anchor.getRange().isPresent() || site.getRange().isPresent();
+    }
+
     /** The local id {@code line:col} of a node's addressing anchor. */
     private static String localId(Node node) {
         int[] pos = anchorPosition(node);
@@ -139,14 +150,18 @@ public final class CallSiteBuilder {
      * {@code new} expression, and the statement itself for {@code this(...)}/{@code super(...)} —
      * so sites nested in one expression stay distinct. Falls back to the node's own begin.
      */
-    private static int[] anchorPosition(Node node) {
-        Node anchor = node;
+    private static Node anchorOf(Node node) {
         if (node instanceof MethodCallExpr) {
-            anchor = ((MethodCallExpr) node).getName();
-        } else if (node instanceof ObjectCreationExpr) {
-            anchor = ((ObjectCreationExpr) node).getType();
+            return ((MethodCallExpr) node).getName();
         }
-        return anchor.getRange()
+        if (node instanceof ObjectCreationExpr) {
+            return ((ObjectCreationExpr) node).getType();
+        }
+        return node;
+    }
+
+    private static int[] anchorPosition(Node node) {
+        return anchorOf(node).getRange()
                 .map(r -> new int[] {r.begin.line, r.begin.column})
                 .orElseGet(() -> node.getRange()
                         .map(r -> new int[] {r.begin.line, r.begin.column})

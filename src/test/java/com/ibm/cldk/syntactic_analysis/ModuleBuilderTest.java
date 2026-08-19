@@ -107,6 +107,25 @@ class ModuleBuilderTest {
     }
 
     @Test
+    void build_moduleSpanEndIsCorrectForCrlfSources() {
+        // Splitting on "\n" alone leaves the "\r" attached, inflating the line count on
+        // Windows-authored files.
+        String source = "package p;\r\nclass Foo {}\r\n";
+        JModule module = build(source);
+        assertEquals(3, module.getSpan().getEnd()[0], "two terminated lines -> end on line 3, col 1");
+        assertEquals(source.getBytes(StandardCharsets.UTF_8).length, module.getSpan().getBytes()[1]);
+    }
+
+    @Test
+    void build_moduleSpanEndHandlesMissingTrailingNewline() {
+        String source = "package p;\nclass Foo {}";
+        JModule module = build(source);
+        assertEquals(2, module.getSpan().getEnd()[0]);
+        assertEquals("class Foo {}".length() + 1, module.getSpan().getEnd()[1],
+                "with no trailing newline the end sits just past the last character");
+    }
+
+    @Test
     void build_defaultsPackageToEmptyWhenAbsent() {
         String source = "public class Foo {}\n";
         CompilationUnit cu = parse(source);

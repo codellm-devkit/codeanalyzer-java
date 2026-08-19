@@ -12,7 +12,9 @@ import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.CallableDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.stmt.BlockStmt;
+import com.github.javaparser.ast.stmt.ExpressionStmt;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JBodyNode;
 import java.util.ArrayList;
@@ -141,6 +143,49 @@ class CallSiteBuilderTest {
         JBodyNode node = build("package p;\nclass Foo {\n  void m() {\n    new String(\"x\");\n  }\n}\n").get("4:9");
         assertTrue(node.isConstructorCall());
         assertEquals("java.lang.String", node.getReceiverType(), "the instantiated type");
+    }
+
+    @Test
+    void build_constructorCalleeSignatureMatchesTheDeclarationSideSignature() {
+        // The callee signature must be joinable against the target callable's `signature`, which uses
+        // `<init>` for constructors. A class-named signature would never match, so L2 would silently
+        // drop every constructor edge.
+        JBodyNode node = build("package p;\nclass Foo {\n  void m() {\n    new String(\"x\");\n  }\n}\n")
+                .get("4:9");
+        assertEquals("<init>(java.lang.String)", node.getCalleeSignature());
+    }
+
+    @Test
+    void build_resolutionFailureForOneExpressionDoesNotPoisonAnother() {
+        // Two receivers spelled `x` in different methods: one unresolvable, one not. Memoizing the
+        // failure by expression text would wrongly blank the second.
+        String source = "package p;\nclass Foo {\n"
+                + "  void a(Mystery x) { x.f(); }\n"
+                + "  void b(String x) { x.length(); }\n}\n";
+        CompilationUnit cu = TestParsers.parseResolved(source);
+        L1BuildContext ctx = new L1BuildContext(CanId.applicationId("myapp"), FILE_KEY, source);
+        CallSiteBuilder builder = new CallSiteBuilder(ctx);
+        MethodDeclaration a = cu.getType(0).getMethodsByName("a").get(0);
+        MethodDeclaration b = cu.getType(0).getMethodsByName("b").get(0);
+
+        builder.build(a.getBody().orElseThrow());   // fails to resolve `x`
+        Map<String, JBodyNode> second = builder.build(b.getBody().orElseThrow());
+
+        assertEquals("java.lang.String", second.values().iterator().next().getReceiverType(),
+                "the resolvable `x` must still resolve after the unresolvable one");
+    }
+
+    @Test
+    void build_skipsCallSitesWithoutASourceRange() {
+        // Programmatically constructed nodes carry no range. They cannot be addressed by a line:col id,
+        // and inventing one would both fabricate a location and collide with any other rangeless node.
+        BlockStmt body = new BlockStmt();
+        body.addStatement(new ExpressionStmt(new MethodCallExpr("foo")));
+        body.addStatement(new ExpressionStmt(new MethodCallExpr("bar")));
+        L1BuildContext ctx = new L1BuildContext(CanId.applicationId("myapp"), FILE_KEY, "class X {}\n");
+
+        assertTrue(new CallSiteBuilder(ctx).build(body).isEmpty(),
+                "rangeless call sites are skipped rather than silently overwriting each other");
     }
 
     @Test

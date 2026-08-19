@@ -19,7 +19,7 @@ public final class Spans {
 
     /** Byte offset into {@code source} of the position at (1-based {@code line}, 0-based {@code col}). */
     public static int byteOffset(String source, int line, int col) {
-        List<String> lines = splitKeepEnds(source);
+        List<String> lines = splitLinesKeepingTerminators(source);
         int prefixBytes = 0;
         for (int k = 0; k < line - 1 && k < lines.size(); k++) {
             prefixBytes += utf8Length(lines.get(k));
@@ -29,7 +29,7 @@ public final class Spans {
         return prefixBytes + utf8Length(current.substring(0, c));
     }
 
-    /** {@code [from, to]} byte offsets for a span from (startLine,startCol) to (endLine,endCol). */
+    /** {@code [from, to)} byte offsets (end exclusive) for a span from (startLine,startCol) to (endLine,endCol). */
     public static int[] byteOffsets(String source, int startLine, int startCol, int endLine, int endCol) {
         return new int[] {byteOffset(source, startLine, startCol), byteOffset(source, endLine, endCol)};
     }
@@ -43,7 +43,7 @@ public final class Spans {
      * {@code \r\n}, {@code \r}), mirroring Python's {@code splitlines(keepends=True)}. A final line
      * without a terminator is included.
      */
-    private static List<String> splitKeepEnds(String s) {
+    public static List<String> splitLinesKeepingTerminators(String s) {
         List<String> out = new ArrayList<>();
         int n = s.length();
         int start = 0;

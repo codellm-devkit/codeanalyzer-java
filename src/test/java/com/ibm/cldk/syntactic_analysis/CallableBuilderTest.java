@@ -156,6 +156,17 @@ class CallableBuilderTest {
     }
 
     @Test
+    void build_cyclomaticMetricExcludesNestedAnonymousClassBranches() {
+        // Every other metric is scope-filtered; complexity must be too, or the branches of a nested
+        // class are counted twice — once on it and once on the method that merely declares it.
+        JCallable c = build("void m(boolean p) { Runnable r = new Runnable() {"
+                + " public void run() { if (p) {} if (!p) {} } }; }");
+        assertEquals(1, c.getMetrics().getCyclomatic(), "m() itself branches nowhere");
+        assertEquals(3, c.getTypes().get("$anon$0").getCallables().get("run()")
+                .getMetrics().getCyclomatic(), "the two ifs belong to run()");
+    }
+
+    @Test
     void build_capturesBodyCallNodes() {
         JCallable c = build("void m() { foo(); }");
         assertEquals(1, c.getBody().size());

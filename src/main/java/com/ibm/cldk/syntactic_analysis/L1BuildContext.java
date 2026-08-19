@@ -31,9 +31,13 @@ public final class L1BuildContext {
     private final String fileKey;
     private final String source;
 
-    /** Memoized resolution failures — retrying them is expensive and they recur across a project. */
+    /**
+     * Memoized *type* resolution failures. Safe because a declared type spelling resolves consistently
+     * within one file (this context is per-file), and retrying an unresolvable spelling is expensive.
+     * Expression results are deliberately NOT memoized: the same text (`x`) can denote different types
+     * in different scopes of one file, so caching a failure would blank later resolvable occurrences.
+     */
     private final Set<String> unresolvedTypes = new HashSet<>();
-    private final Set<String> unresolvedExpressions = new HashSet<>();
 
     public L1BuildContext(String applicationId, String fileKey, String source) {
         this.applicationId = applicationId;
@@ -75,15 +79,10 @@ public final class L1BuildContext {
      * (mirrors the v1 behaviour, where an unresolved expression contributes no type fact).
      */
     public String resolveExpressionType(Expression expression) {
-        String spelling = expression.toString();
-        if (unresolvedExpressions.contains(spelling)) {
-            return "";
-        }
         try {
             return expression.calculateResolvedType().describe();
         } catch (Throwable e) {
-            Log.debug("Could not resolve expression: " + spelling + ": " + e.getMessage());
-            unresolvedExpressions.add(spelling);
+            Log.debug("Could not resolve expression: " + expression + ": " + e.getMessage());
             return "";
         }
     }
@@ -114,9 +113,18 @@ public final class L1BuildContext {
      * invariant {@code module.source[span.bytes] == module.source} always holds.
      */
     public Span wholeFileSpan() {
-        String[] lines = source.split("\n", -1);
-        int lastLine = Math.max(1, lines.length);
-        int lastCol = lines[lines.length - 1].length() + 1;
+        // The end is the position one past the last character. Lines are split on universal newlines
+        // (shared with Spans, so \r\n and lone \r count like \n) and keep their terminators, so when the
+        // file ends with one the position is the start of the following line.
+        List<String> lines = Spans.splitLinesKeepingTerminators(source);
+        int lastLine = 1;
+        int lastCol = 1;
+        if (!lines.isEmpty()) {
+            String last = lines.get(lines.size() - 1);
+            boolean endsWithTerminator = last.endsWith("\n") || last.endsWith("\r");
+            lastLine = endsWithTerminator ? lines.size() + 1 : lines.size();
+            lastCol = endsWithTerminator ? 1 : last.length() + 1;
+        }
         Span span = new Span();
         span.setStart(new int[] {1, 1});
         span.setEnd(new int[] {lastLine, lastCol});
