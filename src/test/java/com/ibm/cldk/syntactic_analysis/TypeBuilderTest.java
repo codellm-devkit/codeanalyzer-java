@@ -1,6 +1,7 @@
 package com.ibm.cldk.syntactic_analysis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -128,7 +129,15 @@ class TypeBuilderTest {
         // TypeBuilder must hand its field names to the callable builder so refs.fields resolves.
         JType t = buildFirstType("package p;\nclass Foo {\n  int count;\n  void inc() { count = count + 1; }\n}\n");
         JCallable inc = t.getCallables().get("inc()");
-        assertEquals(List.of("count"), inc.getRefs().getFields());
+        assertEquals(List.of("p.Foo.count"), inc.getRefs().getFields(),
+                "field refs are qualified by their declaring type");
+    }
+
+    @Test
+    void build_flagsEntrypointClass() {
+        assertTrue(buildFirstType("package p;\n@RestController\nclass Api {}\n").isEntrypointClass(),
+                "@RestController is a Spring entrypoint class");
+        assertFalse(buildFirstType("package p;\nclass Plain {}\n").isEntrypointClass());
     }
 
     @Test

@@ -22,6 +22,9 @@ public class JType {
     private List<String> interfaces = new ArrayList<>();
     private List<JDecorator> decorators = new ArrayList<>();
 
+    /** True when a framework finder recognises this type as an entrypoint (e.g. a Spring controller). */
+    private boolean isEntrypointClass;
+
     /** Enum constants, in declaration order — present only on {@code enum} types. */
     private List<JEnumConstant> enumConstants = new ArrayList<>();
 

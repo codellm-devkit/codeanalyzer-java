@@ -10,6 +10,7 @@ import com.github.javaparser.ast.body.InitializerDeclaration;
 import com.github.javaparser.ast.body.Parameter;
 import com.github.javaparser.ast.body.RecordDeclaration;
 import com.github.javaparser.ast.body.TypeDeclaration;
+import com.ibm.cldk.javaee.EntrypointsFinderFactory;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JCallable;
 import com.ibm.cldk.schema.JEnumConstant;
@@ -51,6 +52,8 @@ public final class TypeBuilder {
         type.setId(CanId.childId(parentId, td.getNameAsString()));
         type.setKind(kindOf(td));
         type.setSpan(ctx.spanOf(td));
+        type.setEntrypointClass(
+                EntrypointsFinderFactory.getEntrypointFinders().anyMatch(f -> f.isEntrypointClass(td)));
         type.setComments(ctx.commentsOf(td));
         type.setModifiers(
                 td.getModifiers().stream().map(m -> m.getKeyword().asString()).collect(Collectors.toList()));
@@ -115,12 +118,13 @@ public final class TypeBuilder {
         // Keyed by type-erasure signature. Field names are handed down so each callable's
         // refs.fields can recognize accesses to this type's fields.
         List<String> fieldNames = new ArrayList<>(fields.keySet());
+        String typeFqn = td.getFullyQualifiedName().orElse(td.getNameAsString());
         List<CallableDeclaration<?>> declared = new ArrayList<>();
         declared.addAll(td.getConstructors());
         declared.addAll(td.getMethods());
         Map<String, JCallable> callables = new TreeMap<>();
         for (CallableDeclaration<?> cd : declared) {
-            JCallable callable = callableBuilder.build(cd, type.getId(), fieldNames);
+            JCallable callable = callableBuilder.build(cd, type.getId(), typeFqn, fieldNames);
             callables.put(callable.getSignature(), callable);
         }
         // Initializer blocks are callables too (keystone kind `initializer`) — L3 gives them their own
@@ -134,7 +138,7 @@ public final class TypeBuilder {
             String signature = id.isStatic()
                     ? "<clinit>$" + staticIndex++ + "()"
                     : "<instance-init>$" + instanceIndex++ + "()";
-            callables.put(signature, callableBuilder.buildInitializer(id, type.getId(), fieldNames, signature));
+            callables.put(signature, callableBuilder.buildInitializer(id, type.getId(), typeFqn, fieldNames, signature));
         }
         type.setCallables(new LinkedHashMap<>(callables));
 

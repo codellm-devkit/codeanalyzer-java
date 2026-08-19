@@ -2,7 +2,6 @@ package com.ibm.cldk.syntactic_analysis;
 
 import com.github.javaparser.ast.Node;
 import com.github.javaparser.ast.NodeList;
-import com.github.javaparser.ast.body.BodyDeclaration;
 import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
@@ -50,10 +49,10 @@ public final class CallSiteBuilder {
 
     public Map<String, JBodyNode> build(BlockStmt body) {
         List<Node> sites = new ArrayList<>();
-        body.findAll(MethodCallExpr.class).stream().filter(n -> belongsDirectlyTo(n, body)).forEach(sites::add);
-        body.findAll(ObjectCreationExpr.class).stream().filter(n -> belongsDirectlyTo(n, body)).forEach(sites::add);
+        body.findAll(MethodCallExpr.class).stream().filter(n -> AstScopes.belongsDirectlyTo(n, body)).forEach(sites::add);
+        body.findAll(ObjectCreationExpr.class).stream().filter(n -> AstScopes.belongsDirectlyTo(n, body)).forEach(sites::add);
         body.findAll(ExplicitConstructorInvocationStmt.class).stream()
-                .filter(n -> belongsDirectlyTo(n, body))
+                .filter(n -> AstScopes.belongsDirectlyTo(n, body))
                 .forEach(sites::add);
 
         sites.sort(Comparator.<Node>comparingInt(n -> anchorPosition(n)[0])
@@ -115,22 +114,6 @@ public final class CallSiteBuilder {
                 Log.debug("Could not resolve constructor invocation: " + site + ": " + e.getMessage());
             }
         }
-    }
-
-    /**
-     * True when {@code node} is part of {@code body} itself and not of a nested type or anonymous
-     * class declared within it: no {@link BodyDeclaration} (which includes type declarations and
-     * member methods/initializers) lies between the node and the body block.
-     */
-    static boolean belongsDirectlyTo(Node node, BlockStmt body) {
-        for (Node cur = node.getParentNode().orElse(null);
-                cur != null && cur != body;
-                cur = cur.getParentNode().orElse(null)) {
-            if (cur instanceof BodyDeclaration) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private static List<Expression> argumentsOf(Node site) {

@@ -6,8 +6,10 @@ import com.github.javaparser.ast.body.InitializerDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.TypeDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
+import com.github.javaparser.ast.expr.CastExpr;
 import com.github.javaparser.ast.expr.ConditionalExpr;
 import com.github.javaparser.ast.expr.FieldAccessExpr;
+import com.github.javaparser.ast.expr.InstanceOfExpr;
 import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.ast.stmt.BlockStmt;
@@ -18,6 +20,7 @@ import com.github.javaparser.ast.stmt.ForStmt;
 import com.github.javaparser.ast.stmt.IfStmt;
 import com.github.javaparser.ast.stmt.SwitchStmt;
 import com.github.javaparser.ast.stmt.WhileStmt;
+import com.ibm.cldk.javaee.EntrypointsFinderFactory;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JCallable;
 import com.ibm.cldk.schema.JMetrics;
@@ -62,7 +65,8 @@ public final class CallableBuilder {
      * @param parentTypeId the containing type's id
      * @param classFieldNames simple names of the enclosing type's fields (for {@code refs.fields})
      */
-    public JCallable build(CallableDeclaration<?> cd, String parentTypeId, List<String> classFieldNames) {
+    public JCallable build(
+            CallableDeclaration<?> cd, String parentTypeId, String typeFqn, List<String> classFieldNames) {
         JCallable callable = new JCallable();
         String signature = Signatures.typeErasure(cd);
         callable.setSignature(signature);
@@ -77,6 +81,8 @@ public final class CallableBuilder {
                 cd.getThrownExceptions().stream().map(ctx::resolveType).collect(Collectors.toList()));
         callable.setModifiers(
                 cd.getModifiers().stream().map(m -> m.getKeyword().asString()).collect(Collectors.toList()));
+        callable.setEntrypoint(
+                EntrypointsFinderFactory.getEntrypointFinders().anyMatch(f -> f.isEntrypointMethod(cd)));
         callable.setComments(ctx.commentsOf(cd));
         callable.setDecorators(
                 cd.getAnnotations().stream().map(decoratorBuilder::build).collect(Collectors.toList()));
@@ -90,7 +96,7 @@ public final class CallableBuilder {
 
         Optional<BlockStmt> body = bodyOf(cd);
         body.flatMap(b -> b.getRange().map(r -> r.begin.line)).ifPresent(callable::setCodeStartLine);
-        callable.setRefs(refs(body, classFieldNames));
+        callable.setRefs(refs(body, typeFqn, classFieldNames));
         body.ifPresent(b -> callable.setLocalVariables(localVariables(b)));
         body.ifPresent(b -> callable.setBody(callSiteBuilder.build(b)));
         body.ifPresent(b -> callable.setTypes(localClasses(b, callable.getId())));
@@ -103,7 +109,11 @@ public final class CallableBuilder {
      * metrics, local classes) works exactly as for a method.
      */
     public JCallable buildInitializer(
-            InitializerDeclaration id, String parentTypeId, List<String> classFieldNames, String signature) {
+            InitializerDeclaration id,
+            String parentTypeId,
+            String typeFqn,
+            List<String> classFieldNames,
+            String signature) {
         JCallable callable = new JCallable();
         callable.setSignature(signature);
         callable.setId(CanId.childId(parentTypeId, signature));
@@ -121,7 +131,7 @@ public final class CallableBuilder {
 
         BlockStmt body = id.getBody();
         body.getRange().map(r -> r.begin.line).ifPresent(callable::setCodeStartLine);
-        callable.setRefs(refs(Optional.of(body), classFieldNames));
+        callable.setRefs(refs(Optional.of(body), typeFqn, classFieldNames));
         callable.setLocalVariables(localVariables(body));
         callable.setBody(callSiteBuilder.build(body));
         callable.setTypes(localClasses(body, callable.getId()));
@@ -139,7 +149,7 @@ public final class CallableBuilder {
     private List<JVariableDeclaration> localVariables(BlockStmt body) {
         List<JVariableDeclaration> locals = new ArrayList<>();
         for (VariableDeclarator vd : body.findAll(VariableDeclarator.class)) {
-            if (!CallSiteBuilder.belongsDirectlyTo(vd, body)) {
+            if (!AstScopes.belongsDirectlyTo(vd, body)) {
                 continue;
             }
             JVariableDeclaration local = new JVariableDeclaration();
@@ -158,13 +168,13 @@ public final class CallableBuilder {
         TypeBuilder typeBuilder = new TypeBuilder(ctx);
         Map<String, JType> locals = new TreeMap<>();
         body.findAll(TypeDeclaration.class).stream()
-                .filter(td -> CallSiteBuilder.belongsDirectlyTo(td, body))
+                .filter(td -> AstScopes.belongsDirectlyTo(td, body))
                 .forEach(td -> locals.put(td.getNameAsString(), typeBuilder.build(td, callableId)));
         return new LinkedHashMap<>(locals);
     }
 
     /** Syntactic cross-refs: types referenced and enclosing-type fields accessed in the body. */
-    private JRefs refs(Optional<BlockStmt> body, List<String> classFieldNames) {
+    private JRefs refs(Optional<BlockStmt> body, String typeFqn, List<String> classFieldNames) {
         JRefs refs = new JRefs();
         if (body.isEmpty()) {
             return refs;
@@ -173,21 +183,35 @@ public final class CallableBuilder {
 
         TreeSet<String> types = new TreeSet<>();
         b.findAll(VariableDeclarator.class).stream()
-                .filter(vd -> CallSiteBuilder.belongsDirectlyTo(vd, b) && vd.getType().isClassOrInterfaceType())
+                .filter(vd -> AstScopes.belongsDirectlyTo(vd, b) && vd.getType().isClassOrInterfaceType())
                 .forEach(vd -> types.add(ctx.resolveType(vd.getType())));
         b.findAll(ObjectCreationExpr.class).stream()
-                .filter(oce -> CallSiteBuilder.belongsDirectlyTo(oce, b))
+                .filter(oce -> AstScopes.belongsDirectlyTo(oce, b))
                 .forEach(oce -> types.add(ctx.resolveType(oce.getType())));
+        b.findAll(CastExpr.class).stream()
+                .filter(ce -> AstScopes.belongsDirectlyTo(ce, b))
+                .forEach(ce -> types.add(ctx.resolveType(ce.getType())));
+        b.findAll(InstanceOfExpr.class).stream()
+                .filter(ie -> AstScopes.belongsDirectlyTo(ie, b))
+                .forEach(ie -> types.add(ctx.resolveType(ie.getType())));
+        b.findAll(CatchClause.class).stream()
+                .filter(cc -> AstScopes.belongsDirectlyTo(cc, b))
+                .forEach(cc -> types.add(ctx.resolveType(cc.getParameter().getType())));
         refs.setTypes(new ArrayList<>(types));
 
+        // Field refs are qualified by their declaring type (as v1 did), so `other.count` and
+        // `this.count` stay distinguishable; unresolvable scopes fall back to the bare name.
         TreeSet<String> fields = new TreeSet<>();
         b.findAll(FieldAccessExpr.class).stream()
-                .filter(fa -> CallSiteBuilder.belongsDirectlyTo(fa, b)
+                .filter(fa -> AstScopes.belongsDirectlyTo(fa, b)
                         && !(fa.getParentNode().orElse(null) instanceof FieldAccessExpr))
-                .forEach(fa -> fields.add(fa.getNameAsString()));
+                .forEach(fa -> {
+                    String declaring = ctx.resolveExpressionType(fa.getScope());
+                    fields.add(declaring.isEmpty() ? fa.getNameAsString() : declaring + "." + fa.getNameAsString());
+                });
         b.findAll(NameExpr.class).stream()
-                .filter(ne -> CallSiteBuilder.belongsDirectlyTo(ne, b) && classFieldNames.contains(ne.getNameAsString()))
-                .forEach(ne -> fields.add(ne.getNameAsString()));
+                .filter(ne -> AstScopes.belongsDirectlyTo(ne, b) && classFieldNames.contains(ne.getNameAsString()))
+                .forEach(ne -> fields.add(typeFqn + "." + ne.getNameAsString()));
         refs.setFields(new ArrayList<>(fields));
         return refs;
     }

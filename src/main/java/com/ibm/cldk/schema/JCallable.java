@@ -34,6 +34,9 @@ public class JCallable {
     private boolean isImplicit;
 
     private List<JComment> comments = new ArrayList<>();
+    /** True when a framework finder recognises this callable as an entrypoint (e.g. a Spring route). */
+    private boolean isEntrypoint;
+
     private JMetrics metrics;
     private JRefs refs;
 

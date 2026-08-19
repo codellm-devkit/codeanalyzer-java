@@ -1,6 +1,7 @@
 package com.ibm.cldk.syntactic_analysis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -28,7 +29,7 @@ class CallableBuilderTest {
         CompilationUnit cu = TestParsers.parseResolved(source);
         CallableDeclaration<?> cd = cu.getType(0).findFirst(CallableDeclaration.class).orElseThrow();
         L1BuildContext ctx = new L1BuildContext(CanId.applicationId("myapp"), FILE_KEY, source);
-        return new CallableBuilder(ctx).build(cd, TYPE_ID, classFieldNames);
+        return new CallableBuilder(ctx).build(cd, TYPE_ID, "com.example.Foo", classFieldNames);
     }
 
     private static JCallable build(String memberSource) {
@@ -75,6 +76,13 @@ class CallableBuilderTest {
         assertEquals("java.lang.String", c.getReturnType());
         assertEquals(List.of("public"), c.getModifiers());
         assertEquals("Override", c.getDecorators().get(0).getName());
+    }
+
+    @Test
+    void build_flagsEntrypointMethod() {
+        assertTrue(build("@GetMapping(\"/x\") String get() { return \"\"; }").isEntrypoint(),
+                "@GetMapping is a Spring entrypoint method");
+        assertFalse(build("String plain() { return \"\"; }").isEntrypoint());
     }
 
     @Test
@@ -136,6 +144,17 @@ class CallableBuilderTest {
     }
 
     @Test
+    void build_refsTypesIncludeCastsInstanceofAndCatchTypes() {
+        // v1 only scanned variable declarators and object creations; a cast/instanceof/catch type is
+        // just as much a referenced type.
+        JCallable c = build("void m(Object o) { try { String s = (String) o; if (o instanceof Integer) {} }"
+                + " catch (IllegalStateException e) {} }");
+        assertTrue(c.getRefs().getTypes().contains("java.lang.String"));
+        assertTrue(c.getRefs().getTypes().contains("java.lang.Integer"), "instanceof type");
+        assertTrue(c.getRefs().getTypes().contains("java.lang.IllegalStateException"), "catch type");
+    }
+
+    @Test
     void build_capturesBodyCallNodes() {
         JCallable c = build("void m() { foo(); }");
         assertEquals(1, c.getBody().size());
@@ -147,7 +166,7 @@ class CallableBuilderTest {
         JCallable c = build("void m() { Helper h = new Helper(); this.count = h.value(); }", List.of("count"));
         assertTrue(c.getRefs().getTypes().contains("Helper"),
                 "referenced types should include the syntactic type Helper");
-        assertEquals(List.of("count"), c.getRefs().getFields());
+        assertEquals(List.of("com.example.Foo.count"), c.getRefs().getFields());
     }
 
     @Test
