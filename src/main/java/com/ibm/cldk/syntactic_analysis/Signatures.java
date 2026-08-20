@@ -1,8 +1,10 @@
 package com.ibm.cldk.syntactic_analysis;
 
 import com.github.javaparser.ast.body.CallableDeclaration;
+import com.github.javaparser.ast.body.CompactConstructorDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.Parameter;
+import com.github.javaparser.ast.body.RecordDeclaration;
 import com.github.javaparser.resolution.declarations.ResolvedConstructorDeclaration;
 import com.github.javaparser.resolution.declarations.ResolvedMethodLikeDeclaration;
 import com.github.javaparser.resolution.types.ResolvedType;
@@ -43,30 +45,57 @@ public final class Signatures {
 
     /**
      * The type-erasure signature for {@code callableDecl}: the method name (or {@code <init>} for a
-     * constructor) followed by erased parameter types. Falls back to the plain AST signature if the
-     * parameter types cannot be resolved (no symbol solver configured).
+     * constructor) followed by erased parameter types.
      */
     public static String typeErasure(CallableDeclaration<?> callableDecl) {
+        String name = (callableDecl instanceof MethodDeclaration) ? callableDecl.getNameAsString() : "<init>";
+        return signature(name, callableDecl.getParameters());
+    }
+
+    /**
+     * The type-erasure signature of a record's <em>compact</em> constructor ({@code record P(int x) {
+     * public P { ... } }}). A compact constructor declares no parameters of its own — it <em>is</em> the
+     * canonical constructor, whose parameters are the record's components — so the signature is built
+     * from those components. Deriving it from the declaration's own (empty) parameter list would emit
+     * {@code <init>()}, which no {@code new P(...)} call site could ever join against.
+     */
+    public static String typeErasure(CompactConstructorDeclaration compactConstructor) {
+        List<Parameter> components = compactConstructor.findAncestor(RecordDeclaration.class)
+                .<List<Parameter>>map(RecordDeclaration::getParameters)
+                .orElseGet(List::of);
+        return signature("<init>", components);
+    }
+
+    /** {@code <name>(<erased param types>)} — the durable signature format shared by every caller. */
+    private static String signature(String name, List<Parameter> parameters) {
+        List<String> erasureParameterTypes = new ArrayList<>();
+        for (Parameter parameter : parameters) {
+            erasureParameterTypes.add(erasedTypeOf(parameter));
+        }
+        return name + "(" + String.join(", ", erasureParameterTypes) + ")";
+    }
+
+    /**
+     * One parameter's erased type, degrading to the AST spelling when it cannot be resolved.
+     *
+     * <p>Resolution is attempted <em>per parameter</em> rather than for the signature as a whole. An
+     * all-or-nothing fallback to {@code CallableDeclaration.getSignature()} would emit unqualified
+     * spellings for <em>every</em> parameter as soon as one failed — {@code m(List, Mystery)} where the
+     * call-site side always emits qualified names, {@code m(java.util.List, Mystery)}. The two would
+     * never join, so L2 would silently drop the edge (the same failure mode that made every constructor
+     * edge unjoinable before the callee side normalised to {@code <init>}). Degrading only the
+     * parameters that genuinely cannot be resolved keeps the rest joinable.
+     */
+    private static String erasedTypeOf(Parameter parameter) {
+        // A varargs parameter is an array at the call site; `type` alone is the element type.
+        String suffix = parameter.isVarArgs() ? "[]" : "";
         try {
-            StringBuilder signature = new StringBuilder(
-                    (callableDecl instanceof MethodDeclaration) ? callableDecl.getNameAsString() : "<init>");
-            List<String> erasureParameterTypes = new ArrayList<>();
-            for (Parameter parameter : callableDecl.getParameters()) {
-                ResolvedType resolvedType = parameter.getType().resolve();
-                if (parameter.isVarArgs()) {
-                    erasureParameterTypes.add(resolvedType.erasure().describe() + "[]");
-                } else {
-                    erasureParameterTypes.add(resolvedType.erasure().describe());
-                }
-            }
-            signature.append("(");
-            signature.append(String.join(", ", erasureParameterTypes));
-            signature.append(")");
-            return signature.toString();
+            ResolvedType resolvedType = parameter.getType().resolve();
+            return resolvedType.erasure().describe() + suffix;
         } catch (Throwable e) {
-            Log.debug("Could not compute type erasure signature for " + callableDecl.getSignature().asString()
-                    + "; computing regular signature");
-            return callableDecl.getSignature().asString();
+            Log.debug("Could not resolve parameter type " + parameter.getType().asString()
+                    + "; falling back to the AST spelling");
+            return parameter.getType().asString() + suffix;
         }
     }
 }

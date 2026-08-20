@@ -12,6 +12,10 @@ import lombok.Data;
  * no flat {@code start_line}/{@code end_line}, and no {@code call_sites[]} — the source is a slice of
  * {@code module.source[span.bytes]} and call sites are {@code body} {@code call} nodes. Metrics and
  * cross-refs are nested (D3). {@code thrown_exceptions} become {@code error_channel}.
+ *
+ * <p>D1's "no flat line fields" applies to {@code code_start_line} too: it is exactly
+ * {@code body_span.start[0]}, and a primitive sentinel would have to assert {@code -1} for an abstract
+ * method — a fact where {@code body_span} is correctly absent altogether.
  */
 @Data
 public class JCallable {
@@ -31,13 +35,18 @@ public class JCallable {
      */
     private Span bodySpan;
 
-    /** Signature-with-parameter-names text (not recoverable from span.bytes, which covers the body). */
+    /**
+     * Signature-with-parameter-names text, as v1 exposed it — {@code public int add(int a, int b)}.
+     * Retained because it is useful verbatim in LLM prompts: {@code span.bytes} covers the declaration
+     * <em>and</em> the body, so recovering just this line means re-parsing the slice.
+     */
     private String declaration;
 
-    /** First line of the body block, or -1 when there is no body (abstract/interface method). */
-    private int codeStartLine = -1;
-
-    /** True for compiler-generated members the source does not declare (e.g. a default constructor). */
+    /**
+     * True for compiler-generated members the source does not declare (e.g. a default constructor).
+     * Never set at L1, which reads declarations only; implicit members are discovered at L2, from the
+     * call graph's view of the compiled code.
+     */
     private boolean isImplicit;
 
     private List<JComment> comments = new ArrayList<>();

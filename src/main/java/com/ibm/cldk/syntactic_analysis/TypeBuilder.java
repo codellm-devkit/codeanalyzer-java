@@ -5,6 +5,7 @@ import com.github.javaparser.ast.body.AnnotationDeclaration;
 import com.github.javaparser.ast.body.BodyDeclaration;
 import com.github.javaparser.ast.body.CallableDeclaration;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
+import com.github.javaparser.ast.body.CompactConstructorDeclaration;
 import com.github.javaparser.ast.body.EnumConstantDeclaration;
 import com.github.javaparser.ast.body.EnumDeclaration;
 import com.github.javaparser.ast.body.FieldDeclaration;
@@ -78,20 +79,6 @@ public final class TypeBuilder {
         type.setBaseTypes(baseTypes);
         type.setInterfaces(interfaces);
 
-        if (td instanceof EnumDeclaration) {
-            List<JEnumConstant> constants = new ArrayList<>();
-            for (EnumConstantDeclaration ecd : ((EnumDeclaration) td).getEntries()) {
-                JEnumConstant constant = new JEnumConstant();
-                constant.setName(ecd.getNameAsString());
-                constant.setArguments(
-                        ecd.getArguments().stream().map(Object::toString).collect(Collectors.toList()));
-                constant.setSpan(ctx.spanOf(ecd));
-                constant.setComments(ctx.commentsOf(ecd));
-                constants.add(constant);
-            }
-            type.setEnumConstants(constants);
-        }
-
         if (td instanceof RecordDeclaration) {
             List<JRecordComponent> components = new ArrayList<>();
             for (Parameter p : ((RecordDeclaration) td).getParameters()) {
@@ -112,7 +99,53 @@ public final class TypeBuilder {
 
         populateMembers(type, td.getMembers(), typeFqnOf(td));
 
+        if (td instanceof EnumDeclaration) {
+            populateEnumConstants(type, (EnumDeclaration) td, typeFqnOf(td));
+        }
+
         return type;
+    }
+
+    /**
+     * Populate an enum's {@code enum_constants}, and give any constant that declares a class body
+     * ({@code PLUS { int apply(int a) { ... } }}) its own {@code type} node.
+     *
+     * <p>Entries are not part of {@code EnumDeclaration.getMembers()}, so this runs alongside
+     * {@link #populateMembers} rather than inside it. A constant with a body is an anonymous subclass of
+     * the enum, and is modelled as one for the same reason ordinary anonymous classes are (D13): its
+     * methods, call sites and locals belong to it. Leaving the body unmodelled dropped those facts
+     * entirely — the callables did not exist anywhere in the output, so L2 could not resolve calls into
+     * or out of them. Keyed {@code $enum$<NAME>}: {@code $} marks the synthetic member and keeps it
+     * distinct from a nested type that happens to share the constant's name.
+     */
+    private void populateEnumConstants(JType type, EnumDeclaration enumDecl, String typeFqn) {
+        List<JEnumConstant> constants = new ArrayList<>();
+        Map<String, JType> constantBodies = new LinkedHashMap<>(type.getTypes());
+        for (EnumConstantDeclaration ecd : enumDecl.getEntries()) {
+            JEnumConstant constant = new JEnumConstant();
+            constant.setName(ecd.getNameAsString());
+            constant.setArguments(
+                    ecd.getArguments().stream().map(Object::toString).collect(Collectors.toList()));
+            constant.setSpan(ctx.spanOf(ecd));
+            constant.setComments(ctx.commentsOf(ecd));
+            constant.setDecorators(
+                    ecd.getAnnotations().stream().map(decoratorBuilder::build).collect(Collectors.toList()));
+            constants.add(constant);
+
+            if (!ecd.getClassBody().isEmpty()) {
+                String name = "$enum$" + ecd.getNameAsString();
+                JType body = new JType();
+                body.setId(CanId.childId(type.getId(), name));
+                body.setKind("class");
+                body.setSpan(ctx.spanOf(ecd));
+                // The enum itself is the supertype the constant's body specialises.
+                body.setBaseTypes(List.of(typeFqn));
+                populateMembers(body, ecd.getClassBody(), typeFqn);
+                constantBodies.put(name, body);
+            }
+        }
+        type.setEnumConstants(constants);
+        type.setTypes(constantBodies);
     }
 
     /** Maps a JavaParser type declaration to its v2 {@code kind} (design decision D4). */
@@ -198,6 +231,14 @@ public final class TypeBuilder {
                 JCallable callable =
                         callableBuilder.build((CallableDeclaration<?>) member, type.getId(), typeFqn, fieldNames);
                 callables.put(callable.getSignature(), callable);
+            } else if (member instanceof CompactConstructorDeclaration) {
+                // A record's compact constructor extends BodyDeclaration directly rather than
+                // CallableDeclaration, so it needs its own branch — matching only CallableDeclaration
+                // dropped it silently, losing the canonical constructor along with its body, call sites
+                // and locals, and leaving every `new R(...)` site with no callable to resolve to.
+                JCallable callable = callableBuilder.buildCompactConstructor(
+                        (CompactConstructorDeclaration) member, type.getId(), typeFqn, fieldNames);
+                callables.put(callable.getSignature(), callable);
             }
         }
         // Initializer blocks are callables too (keystone kind `initializer`) — L3 gives them their own
@@ -226,11 +267,16 @@ public final class TypeBuilder {
         }
         // Anonymous classes in field initializers are lexically members of this type, not of any
         // callable, so they are attributed here (e.g. `static final X F = new X() { { ... } };`).
+        // Scope-filtered like every other member fact: an anonymous class declared *inside* another
+        // anonymous class's body belongs to that class, and is built when its own members are populated.
+        // Without the filter the inner class was emitted twice — once correctly nested and once hoisted
+        // to this type — double-counting its callables, call sites and metrics.
         List<ObjectCreationExpr> anonymous = new ArrayList<>();
         for (BodyDeclaration<?> member : members) {
             if (member instanceof FieldDeclaration) {
                 member.findAll(ObjectCreationExpr.class).stream()
                         .filter(oce -> oce.getAnonymousClassBody().isPresent())
+                        .filter(oce -> AstScopes.belongsDirectlyTo(oce, member))
                         .forEach(anonymous::add);
             }
         }

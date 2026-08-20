@@ -39,6 +39,25 @@ public class JBodyNode {
     /** Erased signature of the resolved callee ({@code substring(int)}); absent when unresolvable. */
     private String calleeSignature;
 
+    /** Invoked name — the method's name, or {@code <init>} for a constructor call. */
+    private String methodName;
+
+    /**
+     * The type this call evaluates to (the instantiated type for a {@code new} expression); absent when
+     * it cannot be resolved.
+     */
+    private String returnType;
+
+    /**
+     * Declared accessibility of the callee: {@code public}, {@code protected}, {@code private} or
+     * {@code package_private}. Absent when the callee cannot be resolved — accessibility is then
+     * genuinely unknown, and v1's {@code is_unspecified} boolean conflated that with package-private.
+     */
+    private String accessibility;
+
+    /** Comment attached to the construct containing this call site, if any. */
+    private JComment comment;
+
     /**
      * Whether the callee is static. A {@code Boolean} rather than a primitive: when the callee cannot
      * be resolved this is genuinely <em>unknown</em>, and absence says that honestly where {@code false}

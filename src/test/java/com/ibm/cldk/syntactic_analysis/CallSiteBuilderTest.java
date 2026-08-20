@@ -215,4 +215,68 @@ class CallSiteBuilderTest {
         assertTrue(body.keySet().stream().anyMatch(k -> k.startsWith("4:")));
         assertEquals(2, body.size(), "both run(...) and log() are calls in m()'s body");
     }
+
+    @Test
+    void build_capturesMethodNameReturnTypeAndAccessibility() {
+        // The rich call-site facts v1 carried on CallSite; the SDK reconstructs `.call_sites` from these.
+        String source = "package p;\nclass Foo {\n  void m() {\n    \"abc\".substring(1);\n  }\n}\n";
+        JBodyNode node = build(source).get("4:11");
+        assertNotNull(node, "expected the substring call site");
+        assertEquals("substring", node.getMethodName());
+        assertEquals("java.lang.String", node.getReturnType());
+        assertEquals("public", node.getAccessibility());
+    }
+
+    @Test
+    void build_reportsPackagePrivateAccessibilityDistinctlyFromUnknown() {
+        // v1 collapsed both onto is_unspecified=true. Package-private is a resolved fact; an unresolved
+        // callee has no accessibility fact at all (D12).
+        // `m()` must come first — build() analyses the file's first callable.
+        String pkgPrivate = "package p;\nclass Foo {\n  void m() {\n    hidden();\n  }\n"
+                + "  void hidden() {}\n}\n";
+        assertEquals("package_private", build(pkgPrivate).get("4:5").getAccessibility());
+
+        String unresolved = "package p;\nclass Foo {\n  void m() {\n    mystery();\n  }\n}\n";
+        assertNull(build(unresolved).get("4:5").getAccessibility(),
+                "accessibility is unknown for an unresolved callee — absent, not 'unspecified'");
+    }
+
+    @Test
+    void build_constructorCallCarriesInitNameAndInstantiatedType() {
+        String source = "package p;\nclass Foo {\n  void m() {\n    new StringBuilder();\n  }\n}\n";
+        JBodyNode node = build(source).get("4:9");
+        assertEquals("<init>", node.getMethodName());
+        assertEquals("java.lang.StringBuilder", node.getReturnType(),
+                "a constructor call evaluates to the instantiated type");
+        assertTrue(node.isConstructorCall());
+    }
+
+    @Test
+    void build_returnTypeOfACastCallIsTheCastType() {
+        // Mirrors v1: a cast is a stronger statement of the call's type than JavaParser's inference
+        // through it, so the cast wins.
+        String source = "package p;\nclass Foo {\n  void m() {\n    String s = (String) o();\n  }\n"
+                + "  Object o() { return null; }\n}\n";
+        assertEquals("java.lang.String", build(source).get("4:25").getReturnType());
+    }
+
+    @Test
+    void build_capturesTheCommentOnTheCallsStatement() {
+        String source = "package p;\nclass Foo {\n  void m() {\n"
+                + "    // charge the customer\n    bill();\n  }\n}\n";
+        JBodyNode node = build(source).get("5:5");
+        assertNotNull(node.getComment(), "the statement's comment documents the call site");
+        assertTrue(node.getComment().getContent().contains("charge the customer"));
+    }
+
+    @Test
+    void build_explicitConstructorInvocationTakesItsOwnComment() {
+        // this(...)/super(...) IS the statement, so its comment is on the site itself. Reading the
+        // parent's would pick up the enclosing block's comment, which documents the block.
+        String source = "package p;\nclass Foo {\n  Foo() {\n    // delegate to the full constructor\n"
+                + "    this(1);\n  }\n}\n";
+        JBodyNode node = build(source).get("5:5");
+        assertNotNull(node.getComment());
+        assertTrue(node.getComment().getContent().contains("delegate to the full constructor"));
+    }
 }

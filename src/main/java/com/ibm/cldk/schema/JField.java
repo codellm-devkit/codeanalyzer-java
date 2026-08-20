@@ -6,8 +6,9 @@ import lombok.Data;
 
 /**
  * A v2 {@code field} node — one per declared variable, so {@code int a, b;} yields two fields. The
- * {@code id} is the containment path {@code <type-id>/<name>}; {@code type} is the AST spelling
- * (syntactic — no resolution at L1). {@code span} covers the whole field declaration text.
+ * {@code id} is the containment path {@code <type-id>/<name>}; {@code type} is the <em>resolved</em>
+ * qualified name ({@code java.util.List<java.lang.String>}), degrading to the AST spelling when the
+ * symbol solver cannot resolve it (D8). {@code span} covers the whole field declaration text.
  */
 @Data
 public class JField {

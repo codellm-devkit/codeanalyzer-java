@@ -121,15 +121,17 @@ class CallableBuilderTest {
     }
 
     @Test
-    void build_capturesCodeStartLineOfTheBody() {
+    void build_bodySpanStartIsTheBodysFirstLine() {
+        // v1's `code_start_line` is exactly body_span.start[0], so it is not emitted separately (D1).
         // "class Foo {" is line 4 of the wrapper, so the member starts on line 5.
         JCallable c = build("void m() {\n    x();\n  }");
-        assertEquals(5, c.getCodeStartLine());
+        assertEquals(5, c.getBodySpan().getStart()[0]);
     }
 
     @Test
-    void build_abstractMethodHasNoCodeStartLine() {
-        assertEquals(-1, build("abstract void m();").getCodeStartLine());
+    void build_abstractMethodHasNoBodySpan() {
+        // Absence encodes "no fact" (D10) — where v1 had to assert code_start_line = -1.
+        assertNull(build("abstract void m();").getBodySpan());
     }
 
     @Test
@@ -237,5 +239,28 @@ class CallableBuilderTest {
     void build_abstractMethodHasEmptyBody() {
         JCallable c = build("abstract void m();");
         assertTrue(c.getBody().isEmpty());
+    }
+
+    @Test
+    void build_signatureQualifiesResolvableParametersEvenWhenAnotherIsUnresolvable() {
+        // The signature must stay joinable against a call site's callee_signature, which always
+        // qualifies. Degrading the *whole* signature to AST spellings because one parameter failed
+        // produced m(List, Mystery) against the call side's m(java.util.List, Mystery) — never joinable,
+        // so L2 would silently drop the edge.
+        assertEquals("m(java.util.List, Mystery)", build("void m(List<String> xs, Mystery y) {}").getSignature());
+    }
+
+    @Test
+    void build_initializerErrorChannelRecordsWhatItThrows() {
+        // An initializer block cannot declare `throws`, so its error channel is what it actually throws
+        // (the fact v1 carried as InitializationBlock.thrownExceptions).
+        String source = "package com.example;\nimport java.io.IOException;\nimport java.util.*;\n"
+                + "class Foo {\n  static { if (true) throw new IllegalStateException(\"x\"); }\n}\n";
+        CompilationUnit cu = TestParsers.parseResolved(source);
+        var id = cu.getType(0).findFirst(com.github.javaparser.ast.body.InitializerDeclaration.class).orElseThrow();
+        L1BuildContext ctx = new L1BuildContext(CanId.applicationId("myapp"), FILE_KEY, source);
+        JCallable c = new CallableBuilder(ctx)
+                .buildInitializer(id, TYPE_ID, "com.example.Foo", List.of(), "<clinit>$0()");
+        assertEquals(List.of("java.lang.IllegalStateException"), c.getErrorChannel());
     }
 }

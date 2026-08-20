@@ -165,7 +165,8 @@
         "name": { "type": "string", "minLength": 1 },
         "arguments": { "$ref": "#/$defs/stringList" },
         "span": { "$ref": "#/$defs/span" },
-        "comments": { "type": "array", "items": { "$ref": "#/$defs/comment" } }
+        "comments": { "type": "array", "items": { "$ref": "#/$defs/comment" } },
+        "decorators": { "type": "array", "items": { "$ref": "#/$defs/decorator" } }
       }
     },
 
@@ -232,7 +233,6 @@
         "modifiers": { "$ref": "#/$defs/stringList" },
         "decorators": { "type": "array", "items": { "$ref": "#/$defs/decorator" } },
         "declaration": { "type": "string" },
-        "code_start_line": { "type": "integer" },
         "is_implicit": { "type": "boolean" },
         "is_entrypoint": { "type": "boolean" },
         "metrics": {
@@ -298,7 +298,11 @@
         "argument_expr": { "$ref": "#/$defs/stringList" },
         "callee_signature": { "type": "string" },
         "is_static_call": { "type": "boolean" },
-        "is_constructor_call": { "type": "boolean" }
+        "is_constructor_call": { "type": "boolean" },
+        "method_name": { "type": "string" },
+        "return_type": { "type": "string" },
+        "accessibility": { "enum": ["public", "protected", "private", "package_private"] },
+        "comment": { "$ref": "#/$defs/comment" }
       }
     }
   }

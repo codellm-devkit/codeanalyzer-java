@@ -114,14 +114,31 @@ public final class L1Extractor {
 
                 ParseResult<CompilationUnit> parseResult = parser.parse(path);
                 if (parseResult.getResult().isEmpty()) {
-                    Log.debug("Skipping unparsable file " + path + ": " + parseResult.getProblems());
+                    Log.warn("Skipping unparsable file " + path + ": " + parseResult.getProblems());
                     continue;
+                }
+                // A file can yield a usable AST *despite* parse problems: JavaParser recovers by
+                // replacing what it could not parse (a whole method body, say) with an error node. The
+                // module then looks structurally complete while the recovered region's call sites, locals
+                // and local types are simply absent — and nothing downstream, the strict JSON conformance
+                // gate included, can tell that from a genuinely empty method. Emitting it beats dropping
+                // the file, but it must be said out loud.
+                if (!parseResult.isSuccessful()) {
+                    Log.warn("Partially parsed " + path + " — facts in the unparsed region(s) are missing: "
+                            + parseResult.getProblems());
                 }
                 modules.put(fileKey, new ModuleBuilder(ctx).build(parseResult.getResult().get()));
             }
         }
         if (!cached.isEmpty()) {
             Log.debug("Reused " + reused + " of " + modules.size() + " modules from cache");
+        }
+        // Source-root discovery uses JavaParser's own stricter check, so a single file with a parse
+        // problem can make it abandon the directory that contains it. Exiting 0 with an empty symbol
+        // table would look like "this project has no code" rather than "discovery found nothing".
+        if (modules.isEmpty()) {
+            Log.warn("No Java modules were built under " + projectRoot + " (" + sourceRoots.size()
+                    + " source root(s) discovered) — the symbol table will be empty");
         }
         return new LinkedHashMap<>(modules);
     }

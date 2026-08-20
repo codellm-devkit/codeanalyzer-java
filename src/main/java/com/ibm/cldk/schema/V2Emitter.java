@@ -6,9 +6,9 @@ import java.util.TreeSet;
 
 /**
  * Assembles the canonical schema v2 envelope from per-file {@link JModule}s produced by
- * {@link V2SymbolTableBuilder}. Pure wiring — the tree is built by the L1 builder straight from the
- * JavaParser AST (so spans, structured decorators, and source come from where that data actually
- * lives); this class only wraps the modules into the {@code application} + envelope.
+ * {@code L1Extractor}/{@code ModuleBuilder}. Pure wiring — the tree is built by those builders straight
+ * from the JavaParser AST (so spans, structured decorators, and source come from where that data
+ * actually lives); this class only wraps the modules into the {@code application} + envelope.
  */
 public final class V2Emitter {
 

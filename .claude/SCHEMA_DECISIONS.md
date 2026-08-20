@@ -85,8 +85,13 @@ Ordinal ids `…@<line>:<col>` (real) / `…@<tag>` (synthetic) within a callabl
   are **resolved qualified names** (`java.lang.String`), and the callable `signature` uses
   **erased** resolved parameter types (`m(java.util.List, java.lang.String)`) — which is why the
   durable id depends on the solver being configured. Resolution failures degrade to the AST spelling
-  (never crash) and are memoized per spelling. `refs.fields` remain simple names for now; promoting
-  them to `can://` ids needs cross-module resolution (L2+).
+  (never crash) and are memoized per spelling. `refs.fields` are qualified by their declaring type
+  (`p.Foo.count`); promoting them to full `can://` ids needs cross-module resolution (L2+).
+- **Degradation is per parameter, not per signature.** An earlier all-or-nothing `try/catch` around
+  the whole parameter list meant one unresolvable parameter dropped *every* parameter to its AST
+  spelling — emitting `m(List, Mystery)` on the declaration side against `m(java.util.List, Mystery)`
+  on the call side, so L2 could never join the edge. Each parameter is erased independently and only
+  the ones that fail degrade. This is shared with v1 (above), so v1 signatures improve too.
 - **`callable.kind ∈ {method, constructor}`.** Direct members only (via
   `getMethods()`/`getConstructors()`); nested-type methods hang under their own type,
   local (method-body) classes under `callable.types` (D4 containment).
@@ -174,6 +179,52 @@ Both refinements came out of a field-by-field v1-vs-v2 comparison over ten real-
   anonymous class. And v1 filled a type's `initialization_blocks` recursively, counting a nested class's
   `static { … }` block **twice** — once on the nested class and once on its enclosing type; v2 counts it
   once. Where v2's totals are lower than v1's for these two metrics, v2 is the more accurate.
+
+### D15 — Constructs L1 silently dropped, and the call-site facts v2 owes v1
+
+A pre-merge review of the L1 emitter, read against the v1 entities field by field. Three constructs
+produced no output at all, and one group of facts had lapsed relative to v1.
+
+- **A compact constructor is not a `CallableDeclaration`.** `record Point(int x, int y) { Point {…} }`
+  parses to a `CompactConstructorDeclaration`, which extends `BodyDeclaration` directly, so a member
+  loop matching only `CallableDeclaration` dropped the record's canonical constructor entirely — body,
+  call sites, metrics and all. Its **signature comes from the record components**, not from its own
+  (empty) parameter list: `<init>(int, int)`, so a `new Point(1, 2)` site can join it. Its
+  `parameters` stay empty, because the components are already on the type as `record_components` and
+  duplicating them would double-count. A record that declares *no* constructor still emits none — L1
+  reads declarations, and the implicit canonical constructor is not one.
+- **An enum constant with a class body is an anonymous subclass, and gets a type.** `PLUS { int
+  apply(…) {…} }` was unmodelled, so its overriding methods were absent from the output and L2 could
+  resolve no call into or out of them. Constants are not in `getMembers()`, so they are walked
+  separately, and each body becomes a member type keyed **`$enum$<NAME>`** — following the existing
+  `$`-marks-synthetic convention (`$anon$0`, `<clinit>$0()`) and avoiding collision with a nested type
+  that happens to share the constant's name. `base_types` is the enum itself, which is what the body
+  specialises. A constant with no body gets no type.
+- **A nested anonymous class in a field initializer was emitted twice.** The hoisting pass that finds
+  anonymous classes outside any callable used an unfiltered `findAll`, so an anonymous class nested
+  inside another one appeared both correctly nested *and* hoisted onto the enclosing type —
+  double-counting its callables and metrics. `AstScopes.belongsDirectlyTo` was generalised from
+  `BlockStmt` to any `Node` so a field declaration can be a scope boundary too.
+- **Partial parses are announced.** JavaParser can return a usable AST *despite* problems, replacing
+  what it could not parse with an error node. The module then looks structurally complete while the
+  recovered region's call sites, locals and local types are simply absent — indistinguishable, to the
+  strict conformance gate included, from a genuinely empty method. It is still emitted (dropping the
+  file is worse) but now warns, as does a run that discovers zero modules.
+- **Call sites carry the facts v1's `CallSite` carried.** D1 has the SDK reconstruct the old
+  `.call_sites` surface from body nodes, so anything v1 exposed there must remain reconstructible.
+  Four had lapsed: `method_name`, `return_type`, `comment` (from the call's parent statement), and the
+  callee's accessibility. Accessibility is a **single enum** (`public`/`protected`/`private`/
+  `package_private`) rather than v1's four booleans, whose `is_unspecified` conflated "unknown" with
+  "package-private"; per D12 the key is simply absent when the callee is unresolvable. `return_type`
+  prefers an enclosing cast's type over JavaParser's inference through it, matching v1, and is the
+  instantiated type for a constructor call.
+- **An initializer's `error_channel` is what it throws.** An initializer block cannot declare
+  `throws`, so v1 carried `InitializationBlock.thrownExceptions`; v2's initializer callables had no
+  counterpart. It is now populated from the throws in the block — scope-filtered like every other
+  callable fact, and reaching *nested* throws, where v1 only scanned top-level statements.
+- **`code_start_line` is dropped, extending D1.** It is exactly `body_span.start[0]` (D13), and where
+  there is no body v1 had to assert the sentinel `-1` while absence already encodes "no fact" (D10).
+  Nothing consumes it: the only reader, `GraphProjector`, is v1-only per D11.
 
 ### D12 — L1 type resolution: library dependencies are always attempted
 

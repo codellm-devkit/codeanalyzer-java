@@ -1,12 +1,16 @@
 package com.ibm.cldk.syntactic_analysis;
 
+import com.github.javaparser.ast.AccessSpecifier;
 import com.github.javaparser.ast.Node;
 import com.github.javaparser.ast.NodeList;
+import com.github.javaparser.ast.comments.Comment;
+import com.github.javaparser.ast.expr.CastExpr;
 import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.ast.stmt.BlockStmt;
 import com.github.javaparser.ast.stmt.ExplicitConstructorInvocationStmt;
+import com.github.javaparser.resolution.declarations.ResolvedConstructorDeclaration;
 import com.github.javaparser.resolution.declarations.ResolvedMethodDeclaration;
 import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.utils.Log;
@@ -15,6 +19,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -85,8 +90,11 @@ public final class CallSiteBuilder {
      * dependency must thin the node's data, never drop the node or fail the build).
      */
     private void enrich(JBodyNode node, Node site) {
+        commentOn(site).ifPresent(c -> node.setComment(ctx.comment(c)));
+
         if (site instanceof MethodCallExpr) {
             MethodCallExpr call = (MethodCallExpr) site;
+            node.setMethodName(call.getNameAsString());
             call.getScope().ifPresent(scope -> {
                 node.setReceiverExpr(scope.toString());
                 String type = ctx.resolveExpressionType(scope);
@@ -94,30 +102,87 @@ public final class CallSiteBuilder {
                     node.setReceiverType(type);
                 }
             });
+            String returnType = returnTypeOf(call);
+            if (!returnType.isEmpty()) {
+                node.setReturnType(returnType);
+            }
             try {
                 ResolvedMethodDeclaration resolved = call.resolve();
                 node.setCalleeSignature(Signatures.typeErasure(resolved));
                 node.setIsStaticCall(resolved.isStatic());
+                node.setAccessibility(accessibilityOf(resolved.accessSpecifier()));
             } catch (Throwable e) {
                 Log.debug("Could not resolve call: " + call + ": " + e.getMessage());
             }
         } else if (site instanceof ObjectCreationExpr) {
             ObjectCreationExpr creation = (ObjectCreationExpr) site;
             node.setConstructorCall(true);
-            node.setReceiverType(ctx.resolveType(creation.getType()));
+            node.setMethodName("<init>");
+            String instantiated = ctx.resolveType(creation.getType());
+            node.setReceiverType(instantiated);
+            // A constructor call evaluates to the instantiated type.
+            node.setReturnType(instantiated);
             try {
-                node.setCalleeSignature(Signatures.typeErasure(creation.resolve()));
+                ResolvedConstructorDeclaration resolved = creation.resolve();
+                node.setCalleeSignature(Signatures.typeErasure(resolved));
+                node.setAccessibility(accessibilityOf(resolved.accessSpecifier()));
             } catch (Throwable e) {
                 Log.debug("Could not resolve constructor call: " + creation + ": " + e.getMessage());
             }
         } else if (site instanceof ExplicitConstructorInvocationStmt) {
             node.setConstructorCall(true);
+            node.setMethodName("<init>");
             try {
-                node.setCalleeSignature(
-                        Signatures.typeErasure(((ExplicitConstructorInvocationStmt) site).resolve()));
+                ResolvedConstructorDeclaration resolved = ((ExplicitConstructorInvocationStmt) site).resolve();
+                node.setCalleeSignature(Signatures.typeErasure(resolved));
+                node.setAccessibility(accessibilityOf(resolved.accessSpecifier()));
+                node.setReceiverType(resolved.declaringType().getQualifiedName());
+                node.setReturnType(resolved.declaringType().getQualifiedName());
             } catch (Throwable e) {
                 Log.debug("Could not resolve constructor invocation: " + site + ": " + e.getMessage());
             }
+        }
+    }
+
+    /**
+     * The comment documenting a call site. A comment is attached to the <em>statement</em>, so an
+     * expression site (a method call, a {@code new}) takes its enclosing statement's — the node v1 read.
+     * A {@code this(...)}/{@code super(...)} site already <em>is</em> the statement, and its own comment
+     * is the one that documents it; its parent is the enclosing block, whose comment belongs to the block.
+     */
+    private static Optional<Comment> commentOn(Node site) {
+        return site.getComment().or(() -> site.getParentNode().flatMap(Node::getComment));
+    }
+
+    /**
+     * The type a method call evaluates to. Mirrors v1: when the call is immediately cast, the cast type
+     * is reported, because JavaParser's own inference through a cast is the less reliable of the two.
+     */
+    private String returnTypeOf(MethodCallExpr call) {
+        Node parent = call.getParentNode().orElse(null);
+        if (parent instanceof CastExpr) {
+            return ctx.resolveType(((CastExpr) parent).getType());
+        }
+        return ctx.resolveExpressionType(call);
+    }
+
+    /**
+     * The callee's declared accessibility. v1 carried four mutually exclusive booleans
+     * ({@code is_public}/{@code is_protected}/{@code is_private}/{@code is_unspecified}) — the boolean
+     * pile D4 replaces with a single {@code kind}-style field. Package-private is named explicitly rather
+     * than left as "unspecified", and the key is simply absent when the callee cannot be resolved, so
+     * genuinely-unknown accessibility is no longer indistinguishable from package-private (D12).
+     */
+    private static String accessibilityOf(AccessSpecifier access) {
+        switch (access) {
+            case PUBLIC:
+                return "public";
+            case PROTECTED:
+                return "protected";
+            case PRIVATE:
+                return "private";
+            default:
+                return "package_private";
         }
     }
 

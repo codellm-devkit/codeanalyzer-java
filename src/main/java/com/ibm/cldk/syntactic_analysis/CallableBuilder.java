@@ -1,6 +1,7 @@
 package com.ibm.cldk.syntactic_analysis;
 
 import com.github.javaparser.ast.body.CallableDeclaration;
+import com.github.javaparser.ast.body.CompactConstructorDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.InitializerDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
@@ -19,6 +20,7 @@ import com.github.javaparser.ast.stmt.ForEachStmt;
 import com.github.javaparser.ast.stmt.ForStmt;
 import com.github.javaparser.ast.stmt.IfStmt;
 import com.github.javaparser.ast.stmt.SwitchStmt;
+import com.github.javaparser.ast.stmt.ThrowStmt;
 import com.github.javaparser.ast.stmt.WhileStmt;
 import com.ibm.cldk.javaee.EntrypointsFinderFactory;
 import com.ibm.cldk.schema.CanId;
@@ -96,12 +98,53 @@ public final class CallableBuilder {
         callable.setMetrics(metrics);
 
         Optional<BlockStmt> body = bodyOf(cd);
-        body.flatMap(b -> b.getRange().map(r -> r.begin.line)).ifPresent(callable::setCodeStartLine);
         body.ifPresent(b -> callable.setBodySpan(ctx.spanOf(b)));
         callable.setRefs(refs(body, typeFqn, classFieldNames));
         body.ifPresent(b -> callable.setLocalVariables(localVariables(b)));
         body.ifPresent(b -> callable.setBody(callSiteBuilder.build(b)));
         body.ifPresent(b -> callable.setTypes(localClasses(b, callable.getId())));
+        return callable;
+    }
+
+    /**
+     * Build a record's <em>compact</em> constructor ({@code record P(int x, int y) { public P { ... } }}).
+     *
+     * <p>A {@link CompactConstructorDeclaration} is a {@code BodyDeclaration} but <em>not</em> a
+     * {@link CallableDeclaration}, so it needs its own entry point rather than falling through the
+     * method/constructor path. It is the record's canonical constructor: its parameters are the record's
+     * components (see {@link Signatures#typeErasure(CompactConstructorDeclaration)}), which is what makes
+     * a {@code new P(...)} call site joinable against it.
+     */
+    public JCallable buildCompactConstructor(
+            CompactConstructorDeclaration ccd, String parentTypeId, String typeFqn, List<String> classFieldNames) {
+        JCallable callable = new JCallable();
+        String signature = Signatures.typeErasure(ccd);
+        callable.setSignature(signature);
+        callable.setId(CanId.childId(parentTypeId, signature));
+        callable.setKind("constructor");
+        callable.setSpan(ctx.spanOf(ccd));
+        // The parameters are the record's components, declared on the record header rather than here;
+        // they are already modelled as `type.record_components`, so they are not duplicated onto the
+        // callable with fabricated spans pointing at the header.
+        callable.setErrorChannel(
+                ccd.getThrownExceptions().stream().map(ctx::resolveType).collect(Collectors.toList()));
+        callable.setModifiers(
+                ccd.getModifiers().stream().map(m -> m.getKeyword().asString()).collect(Collectors.toList()));
+        callable.setComments(ctx.commentsOf(ccd));
+        callable.setDecorators(
+                ccd.getAnnotations().stream().map(decoratorBuilder::build).collect(Collectors.toList()));
+        callable.setDeclaration(ccd.getDeclarationAsString(true, true, true).strip());
+
+        JMetrics metrics = new JMetrics();
+        metrics.setCyclomatic(branchPoints(ccd.getBody()) + 1);
+        callable.setMetrics(metrics);
+
+        BlockStmt body = ccd.getBody();
+        callable.setBodySpan(ctx.spanOf(body));
+        callable.setRefs(refs(Optional.of(body), typeFqn, classFieldNames));
+        callable.setLocalVariables(localVariables(body));
+        callable.setBody(callSiteBuilder.build(body));
+        callable.setTypes(localClasses(body, callable.getId()));
         return callable;
     }
 
@@ -126,13 +169,16 @@ public final class CallableBuilder {
                 id.isStatic() ? List.of("static") : List.of());
         callable.setDecorators(
                 id.getAnnotations().stream().map(decoratorBuilder::build).collect(Collectors.toList()));
+        // An initializer block cannot declare `throws`, so its error channel is what it actually throws:
+        // the resolved types of the `throw` statements belonging to the block itself (v1 recorded the
+        // same fact, from the block's top-level statements only — nested throws were missed).
+        callable.setErrorChannel(thrownTypes(id.getBody()));
 
         JMetrics metrics = new JMetrics();
         metrics.setCyclomatic(cyclomaticComplexity(id));
         callable.setMetrics(metrics);
 
         BlockStmt body = id.getBody();
-        body.getRange().map(r -> r.begin.line).ifPresent(callable::setCodeStartLine);
         callable.setBodySpan(ctx.spanOf(body));
         callable.setRefs(refs(Optional.of(body), typeFqn, classFieldNames));
         callable.setLocalVariables(localVariables(body));
@@ -191,6 +237,19 @@ public final class CallableBuilder {
             locals.put(name, typeBuilder.buildAnonymous(anonymous.get(i), callableId, name));
         }
         return new LinkedHashMap<>(locals);
+    }
+
+    /**
+     * Resolved types of the exceptions {@code throw}n by this block — the error channel of a construct
+     * that has no {@code throws} clause to declare one. Scope-filtered like every other body fact: a
+     * {@code throw} inside a nested or anonymous class belongs to <em>its</em> callable.
+     */
+    private List<String> thrownTypes(BlockStmt body) {
+        return own(body, ThrowStmt.class).stream()
+                .map(t -> ctx.resolveExpressionType(t.getExpression()))
+                .filter(type -> !type.isEmpty())
+                .distinct()
+                .collect(Collectors.toList());
     }
 
     /** Syntactic cross-refs: types referenced and enclosing-type fields accessed in the body. */

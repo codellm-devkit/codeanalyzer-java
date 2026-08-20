@@ -5,8 +5,9 @@ import java.util.List;
 import lombok.Data;
 
 /**
- * A local variable declared in a callable's body: {@code name}, the AST-declared {@code type}
- * (syntactic at L1), its {@code initializer} expression text if any, and {@code span}.
+ * A local variable declared in a callable's body: {@code name}, the declared {@code type} as a
+ * <em>resolved</em> qualified name (degrading to the AST spelling when unresolvable, D8), its
+ * {@code initializer} expression text if any, and {@code span}.
  *
  * <p>Kept as a named list on the callable (as the Python reference analyzer does) even though L3 will
  * also emit the declaration <em>statements</em> into {@code body} — the two answer different

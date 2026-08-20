@@ -227,4 +227,74 @@ class TypeBuilderTest {
         assertEquals(List.of("\"unchecked\""), d.getArgs());
         assertNotNull(d.getSpan());
     }
+
+    @Test
+    void build_modelsRecordCompactConstructor() {
+        // A CompactConstructorDeclaration extends BodyDeclaration, not CallableDeclaration, so matching
+        // only the latter dropped the record's canonical constructor entirely — body, call sites and all.
+        JType t = buildFirstType("package p;\nrecord Point(int x, int y) {\n"
+                + "  Point {\n    validate(x);\n  }\n}\n");
+        JCallable ctor = t.getCallables().get("<init>(int, int)");
+        assertNotNull(ctor, "expected the compact constructor, got: " + t.getCallables().keySet());
+        assertEquals("constructor", ctor.getKind());
+        assertEquals(t.getId() + "/<init>(int, int)", ctor.getId());
+        assertNotNull(ctor.getBodySpan());
+        assertEquals(1, ctor.getBody().size(), "validate(x) is a call site of the compact constructor");
+    }
+
+    @Test
+    void build_compactConstructorSignatureMatchesTheCanonicalConstructor() {
+        // The signature must come from the record's components, not from the compact constructor's own
+        // (empty) parameter list — otherwise it is <init>() and no `new Point(1, 2)` site can join it.
+        JType t = buildFirstType("package p;\nimport java.util.List;\n"
+                + "record Pair(List<String> names, int count) {\n  Pair {}\n}\n");
+        assertTrue(t.getCallables().containsKey("<init>(java.util.List, int)"),
+                "got: " + t.getCallables().keySet());
+    }
+
+    @Test
+    void build_plainRecordDeclaresNoConstructorCallable() {
+        // The implicit canonical constructor is not declared in source; L1 reads declarations only.
+        JType t = buildFirstType("package p;\nrecord Point(int x, int y) {}\n");
+        assertTrue(t.getCallables().isEmpty(), "got: " + t.getCallables().keySet());
+    }
+
+    @Test
+    void build_nestedAnonymousClassInFieldInitializerIsNotAlsoHoistedToThisType() {
+        // The inner anonymous class belongs to the outer one. Without the scope filter it appeared twice
+        // — correctly nested, and again hoisted here — double-counting its callables and metrics.
+        JType t = buildFirstType("package p;\nclass Foo {\n"
+                + "  static final Runnable A = new Runnable() {\n"
+                + "    public void run() { r(new Runnable() { public void run() { deep(); } }); }\n"
+                + "  };\n}\n");
+        assertEquals(Set.of("$anon$0"), t.getTypes().keySet(),
+                "only the field's own anonymous class is a member of Foo");
+        JType inner = t.getTypes().get("$anon$0").getCallables().get("run()").getTypes().get("$anon$0");
+        assertNotNull(inner, "the inner class stays nested under the outer class's run()");
+        assertEquals(1, inner.getCallables().get("run()").getBody().size(), "deep() is counted once");
+    }
+
+    @Test
+    void build_modelsEnumConstantClassBodyAsItsOwnType() {
+        // A constant with a body is an anonymous subclass of the enum; leaving it unmodelled dropped its
+        // callables from the output entirely, so L2 could not resolve calls into or out of them.
+        JType t = buildFirstType("package p;\nenum Op {\n"
+                + "  PLUS { int apply(int a) { return helper(a); } },\n  MINUS;\n"
+                + "  int helper(int a) { return a; }\n}\n");
+        JType plus = t.getTypes().get("$enum$PLUS");
+        assertNotNull(plus, "expected a type for PLUS's class body, got: " + t.getTypes().keySet());
+        assertEquals(t.getId() + "/$enum$PLUS", plus.getId());
+        assertEquals(List.of("p.Op"), plus.getBaseTypes(), "the enum is the supertype it specialises");
+        assertEquals(1, plus.getCallables().get("apply(int)").getBody().size(),
+                "helper(a) is a call site of PLUS.apply, not of anything on Op");
+        assertFalse(t.getTypes().containsKey("$enum$MINUS"), "a constant with no body gets no type");
+    }
+
+    @Test
+    void build_capturesEnumConstantDecorators() {
+        JType t = buildFirstType("package p;\nenum E {\n  @Deprecated OLD,\n  NEW;\n}\n");
+        List<JEnumConstant> constants = t.getEnumConstants();
+        assertEquals("Deprecated", constants.get(0).getDecorators().get(0).getName());
+        assertTrue(constants.get(1).getDecorators().isEmpty());
+    }
 }

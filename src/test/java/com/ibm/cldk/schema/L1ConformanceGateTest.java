@@ -96,7 +96,9 @@ class L1ConformanceGateTest {
     }
 
     @ParameterizedTest(name = "L1 gate on in-repo fixture: {0}")
-    @ValueSource(strings = {"record-class-test", "init-blocks-test", "call-graph-test"})
+    @ValueSource(strings = {
+        "record-class-test", "init-blocks-test", "call-graph-test", "enum-record-bodies-test"
+    })
     void inRepoFixturesConformToTheCanonicalSchema(String fixture) throws IOException {
         Path project = TEST_APPS.resolve(fixture);
         JsonNode payload = analyse(project);
@@ -141,6 +143,81 @@ class L1ConformanceGateTest {
             }
         }
         assertTrue(sawInitializer, "initializer blocks must surface as callables");
+    }
+
+    @Test
+    void compactConstructorIsEmittedWithTheRecordComponentsAsItsSignature() throws IOException {
+        // A compact constructor is a CompactConstructorDeclaration, not a CallableDeclaration, so it was
+        // dropped wholesale. Its signature has to come from the record's components or no `new Money(...)`
+        // site can ever join it.
+        JsonNode money = typeIn(analyse(TEST_APPS.resolve("enum-record-bodies-test")), "Money");
+        JsonNode ctor = money.path("callables").path("<init>(java.util.List, int)");
+        assertFalse(ctor.isMissingNode(),
+                "expected the compact constructor, got: " + fieldNames(money.path("callables")));
+        assertEquals("constructor", ctor.path("kind").asText());
+        assertTrue(ctor.path("body").size() > 0, "its body's call sites belong to it");
+    }
+
+    @Test
+    void enumConstantClassBodiesAreEmittedAsTypes() throws IOException {
+        JsonNode op = typeIn(analyse(TEST_APPS.resolve("enum-record-bodies-test")), "Op");
+        JsonNode plus = op.path("types").path("$enum$PLUS");
+        assertFalse(plus.isMissingNode(),
+                "expected a type for PLUS's class body, got: " + fieldNames(op.path("types")));
+        assertTrue(plus.path("callables").has("apply(int, int)"),
+                "the overriding method must be a callable of the constant's own type");
+        assertFalse(op.path("types").has("$enum$NOOP"), "a constant with no body gets no type");
+    }
+
+    @Test
+    void initializerErrorChannelRecordsNestedThrows() throws IOException {
+        // v1 only scanned an initializer's top-level statements, so a throw inside a catch was invisible.
+        JsonNode app = typeIn(analyse(TEST_APPS.resolve("init-blocks-test")), "App");
+        JsonNode init = app.path("callables").path("<clinit>$0()");
+        assertFalse(init.isMissingNode());
+        assertEquals("java.lang.RuntimeException", init.path("error_channel").path(0).asText());
+    }
+
+    @Test
+    void callSitesCarryTheResolvedCalleeFactsTheSdkReconstructs() throws IOException {
+        // D1 has the SDK rebuild v1's `.call_sites` surface from body nodes, so every fact v1's CallSite
+        // exposed must still be present on one.
+        JsonNode money = typeIn(analyse(TEST_APPS.resolve("enum-record-bodies-test")), "Money");
+        JsonNode body = money.path("callables").path("plus(org.example.Money)").path("body");
+        // `return new Money(tags, cents + other.cents());` — a constructor call and a method call.
+        JsonNode ctorCall = nodeWithMethodName(body, "<init>");
+        assertEquals("org.example.Money", ctorCall.path("return_type").asText(),
+                "a constructor call evaluates to the instantiated type");
+        JsonNode centsCall = nodeWithMethodName(body, "cents");
+        assertEquals("int", centsCall.path("return_type").asText());
+        assertEquals("public", centsCall.path("accessibility").asText(),
+                "a record's accessor is public — the fact v1 spread over four booleans");
+    }
+
+    private static JsonNode nodeWithMethodName(JsonNode body, String methodName) {
+        for (JsonNode node : body) {
+            if (methodName.equals(node.path("method_name").asText())) {
+                return node;
+            }
+        }
+        throw new AssertionError("no call site named " + methodName + " among " + body.size() + " body nodes");
+    }
+
+    /** The first type of the module declaring {@code name}, searched by simple name. */
+    private static JsonNode typeIn(JsonNode payload, String name) {
+        for (JsonNode module : payload.get("application").get("symbol_table")) {
+            JsonNode type = module.path("types").path(name);
+            if (!type.isMissingNode()) {
+                return type;
+            }
+        }
+        throw new AssertionError("no type named " + name + " in the emitted symbol table");
+    }
+
+    private static String fieldNames(JsonNode node) {
+        StringBuilder names = new StringBuilder();
+        node.fieldNames().forEachRemaining(n -> names.append(names.length() == 0 ? "" : ", ").append(n));
+        return names.toString();
     }
 
     static boolean submodulesCheckedOut() {
