@@ -28,6 +28,15 @@ public class JCallable {
     private List<String> errorChannel = new ArrayList<>();
     private List<String> modifiers = new ArrayList<>();
     private List<JDecorator> decorators = new ArrayList<>();
+
+    /**
+     * Declared type parameters, in declaration order — the {@code <T>} in {@code <T> T pick(T t)}.
+     * A type variable resolves to its bare name, and {@code declaration} omits the clause, so these
+     * are the only place the bound is recorded. The type parameters a generic <em>enclosing type</em>
+     * declares are on that type, not repeated here.
+     */
+    private List<JTypeParameter> typeParameters = new ArrayList<>();
+
     /**
      * Span of the body block ({@code { ... }}) alone, absent when there is no body. The callable's own
      * {@code span} covers the whole declaration, so this is what a consumer slices to obtain just the

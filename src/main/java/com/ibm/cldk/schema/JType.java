@@ -22,6 +22,12 @@ public class JType {
     private List<String> interfaces = new ArrayList<>();
     private List<JDecorator> decorators = new ArrayList<>();
 
+    /**
+     * Declared type parameters, in declaration order — non-empty only for a generic class, interface
+     * or record (an enum or annotation type cannot be generic).
+     */
+    private List<JTypeParameter> typeParameters = new ArrayList<>();
+
     /** True when a framework finder recognises this type as an entrypoint (e.g. a Spring controller). */
     private boolean isEntrypointClass;
 

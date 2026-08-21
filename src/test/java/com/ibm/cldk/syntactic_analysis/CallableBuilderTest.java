@@ -13,6 +13,7 @@ import com.github.javaparser.ast.body.CallableDeclaration;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JCallable;
 import com.ibm.cldk.schema.JType;
+import com.ibm.cldk.schema.JTypeParameter;
 import com.ibm.cldk.schema.JVariableDeclaration;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -262,5 +263,38 @@ class CallableBuilderTest {
         JCallable c = new CallableBuilder(ctx)
                 .buildInitializer(id, TYPE_ID, "com.example.Foo", List.of(), "<clinit>$0()");
         assertEquals(List.of("java.lang.IllegalStateException"), c.getErrorChannel());
+    }
+
+    @Test
+    void build_capturesMethodTypeParametersWithTheirBounds() {
+        // Without these the bound is unrecoverable: the parameter's `type` is the bare variable name, and
+        // `declaration` omits the `<V extends Number>` clause because JavaParser renders it that way.
+        JCallable c = build("<V extends Number> V pick(V v) { return v; }");
+        assertEquals(List.of("V"),
+                c.getTypeParameters().stream().map(JTypeParameter::getName).collect(Collectors.toList()));
+        assertEquals(List.of("java.lang.Number"), c.getTypeParameters().get(0).getBounds());
+        assertEquals("V", c.getParameters().get(0).getType(), "a type variable has no qualified name");
+        assertFalse(c.getDeclaration().contains("extends Number"),
+                "`declaration` drops the clause, which is precisely why type_parameters exists");
+    }
+
+    @Test
+    void build_nonGenericMethodHasNoTypeParameters() {
+        assertTrue(build("int add(int a, int b) { return a + b; }").getTypeParameters().isEmpty());
+    }
+
+    @Test
+    void build_genericConstructorCarriesItsOwnTypeParameters() {
+        assertEquals(List.of("T"),
+                build("<T> Foo(T seed) {}").getTypeParameters().stream()
+                        .map(JTypeParameter::getName).collect(Collectors.toList()));
+    }
+
+    @Test
+    void build_signatureIgnoresTypeParametersSoItStaysJoinable() {
+        // The erased signature is the containment key. A type variable erases to its bound, and the
+        // clause must not leak into the id or a call site could never join it.
+        JCallable c = build("<V extends Number> void take(V v) {}");
+        assertEquals("take(java.lang.Number)", c.getSignature());
     }
 }

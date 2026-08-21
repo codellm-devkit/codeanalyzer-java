@@ -53,12 +53,14 @@ public final class CallableBuilder {
     private final ParameterBuilder parameterBuilder;
     private final DecoratorBuilder decoratorBuilder;
     private final CallSiteBuilder callSiteBuilder;
+    private final TypeParameterBuilder typeParameterBuilder;
 
     public CallableBuilder(L1BuildContext ctx) {
         this.ctx = ctx;
         this.parameterBuilder = new ParameterBuilder(ctx);
         this.decoratorBuilder = new DecoratorBuilder(ctx);
         this.callSiteBuilder = new CallSiteBuilder(ctx);
+        this.typeParameterBuilder = new TypeParameterBuilder(ctx);
         // TypeBuilder is constructed lazily in localClasses() to break the callable<->type
         // construction cycle (a type builds callables; a callable builds its local-class types).
     }
@@ -89,8 +91,10 @@ public final class CallableBuilder {
         callable.setComments(ctx.commentsOf(cd));
         callable.setDecorators(
                 cd.getAnnotations().stream().map(decoratorBuilder::build).collect(Collectors.toList()));
+        callable.setTypeParameters(typeParameterBuilder.build(cd));
 
-        // `declaration` mirrors v1: modifiers + return type + name + parameter names, no body.
+        // `declaration` mirrors v1: modifiers + return type + name + parameter names, no body. It omits
+        // the type-parameter clause, which is why `type_parameters` carries the bounds separately.
         callable.setDeclaration(cd.getDeclarationAsString(true, true, true).strip());
 
         JMetrics metrics = new JMetrics();
@@ -125,7 +129,8 @@ public final class CallableBuilder {
         callable.setSpan(ctx.spanOf(ccd));
         // The parameters are the record's components, declared on the record header rather than here;
         // they are already modelled as `type.record_components`, so they are not duplicated onto the
-        // callable with fabricated spans pointing at the header.
+        // callable with fabricated spans pointing at the header. Type parameters are the same story: a
+        // compact constructor cannot declare its own, and a generic record's belong to the record.
         callable.setErrorChannel(
                 ccd.getThrownExceptions().stream().map(ctx::resolveType).collect(Collectors.toList()));
         callable.setModifiers(

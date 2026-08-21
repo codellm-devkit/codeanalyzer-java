@@ -15,6 +15,7 @@ import com.ibm.cldk.schema.JDecorator;
 import com.ibm.cldk.schema.JEnumConstant;
 import com.ibm.cldk.schema.JRecordComponent;
 import com.ibm.cldk.schema.JType;
+import com.ibm.cldk.schema.JTypeParameter;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -296,5 +297,46 @@ class TypeBuilderTest {
         List<JEnumConstant> constants = t.getEnumConstants();
         assertEquals("Deprecated", constants.get(0).getDecorators().get(0).getName());
         assertTrue(constants.get(1).getDecorators().isEmpty());
+    }
+
+    @Test
+    void build_capturesTypeParametersInDeclarationOrderWithResolvedBounds() {
+        // A type argument binds by position, so order is load-bearing. Bounds keep their type arguments,
+        // matching every other resolved type field.
+        JType t = buildFirstType(
+                "package p;\nimport java.io.*;\nclass Box<K extends Comparable<K> & Serializable, V> {}\n");
+        assertEquals(List.of("K", "V"),
+                t.getTypeParameters().stream().map(JTypeParameter::getName).collect(Collectors.toList()));
+        assertEquals(List.of("java.lang.Comparable<K>", "java.io.Serializable"),
+                t.getTypeParameters().get(0).getBounds());
+        assertNotNull(t.getTypeParameters().get(0).getSpan());
+    }
+
+    @Test
+    void build_unboundedTypeParameterHasNoBoundsRatherThanAFabricatedObject() {
+        // The implicit `extends Object` is not written in the source. Emitting it would make an unbounded
+        // parameter indistinguishable from one explicitly bounded by Object.
+        JType t = buildFirstType("package p;\nclass Box<T> {}\n");
+        assertTrue(t.getTypeParameters().get(0).getBounds().isEmpty());
+    }
+
+    @Test
+    void build_typeParametersAreEmptyForKindsThatCannotBeGeneric() {
+        assertTrue(buildFirstType("package p;\nenum E { A }\n").getTypeParameters().isEmpty());
+        assertTrue(buildFirstType("package p;\n@interface A {}\n").getTypeParameters().isEmpty());
+        assertTrue(buildFirstType("package p;\nclass Plain {}\n").getTypeParameters().isEmpty());
+    }
+
+    @Test
+    void build_genericRecordCarriesItsTypeParameters() {
+        JType t = buildFirstType("package p;\nrecord Pair<A, B>(A left, B right) {}\n");
+        assertEquals(List.of("A", "B"),
+                t.getTypeParameters().stream().map(JTypeParameter::getName).collect(Collectors.toList()));
+    }
+
+    @Test
+    void build_capturesAnnotationsOnATypeParameter() {
+        JType t = buildFirstType("package p;\nclass Box<@Deprecated T> {}\n");
+        assertEquals("Deprecated", t.getTypeParameters().get(0).getDecorators().get(0).getName());
     }
 }

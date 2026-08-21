@@ -97,7 +97,11 @@ class L1ConformanceGateTest {
 
     @ParameterizedTest(name = "L1 gate on in-repo fixture: {0}")
     @ValueSource(strings = {
-        "record-class-test", "init-blocks-test", "call-graph-test", "enum-record-bodies-test"
+        "record-class-test",
+        "init-blocks-test",
+        "call-graph-test",
+        "enum-record-bodies-test",
+        "generics-varargs-duplicate-signature-test"
     })
     void inRepoFixturesConformToTheCanonicalSchema(String fixture) throws IOException {
         Path project = TEST_APPS.resolve(fixture);
@@ -192,6 +196,48 @@ class L1ConformanceGateTest {
         assertEquals("int", centsCall.path("return_type").asText());
         assertEquals("public", centsCall.path("accessibility").asText(),
                 "a record's accessor is public — the fact v1 spread over four booleans");
+    }
+
+    @Test
+    void typeParametersCarryTheBoundsThatDistinguishOverloads() throws IOException {
+        // These three `copy` overloads differ ONLY in their type parameter's bound. The erased signature
+        // keeps them apart, but without `type_parameters` nothing in the output says why they differ.
+        JsonNode utils = typeIn(analyse(TEST_APPS.resolve("generics-varargs-duplicate-signature-test")),
+                "FunctorUtils");
+        JsonNode callables = utils.path("callables");
+        assertEquals("java.util.function.Consumer<?>",
+                soleBoundOf(callables.path("copy(java.util.function.Consumer<?>[])")));
+        assertEquals("java.util.function.Predicate<?>",
+                soleBoundOf(callables.path("copy(java.util.function.Predicate<?>[])")));
+        assertEquals("java.util.function.Function<?, ?>",
+                soleBoundOf(callables.path("copy(java.util.function.Function<?, ?>[])")));
+    }
+
+    @Test
+    void multipleTypeParametersKeepDeclarationOrder() throws IOException {
+        // `<R extends Function<I, O>, P extends Function<...>, I, O>` — a type argument binds by position,
+        // so reordering these would silently mis-describe the method.
+        JsonNode utils = typeIn(analyse(TEST_APPS.resolve("generics-varargs-duplicate-signature-test")),
+                "FunctorUtils");
+        JsonNode params = utils.path("callables")
+                .path("coerce(java.util.function.Function<? super I, ? extends O>)")
+                .path("type_parameters");
+        assertEquals(4, params.size());
+        assertEquals("R", params.path(0).path("name").asText());
+        assertEquals("P", params.path(1).path("name").asText());
+        assertEquals("I", params.path(2).path("name").asText());
+        assertEquals("O", params.path(3).path("name").asText());
+        assertTrue(params.path(2).path("bounds").isEmpty(), "`I` is unbounded");
+    }
+
+    /** The single declared bound of a callable's single type parameter. */
+    private static String soleBoundOf(JsonNode callable) {
+        assertFalse(callable.isMissingNode(), "expected the callable to be emitted");
+        JsonNode params = callable.path("type_parameters");
+        assertEquals(1, params.size(), "expected exactly one type parameter");
+        JsonNode bounds = params.path(0).path("bounds");
+        assertEquals(1, bounds.size(), "expected exactly one bound");
+        return bounds.path(0).asText();
     }
 
     private static JsonNode nodeWithMethodName(JsonNode body, String methodName) {

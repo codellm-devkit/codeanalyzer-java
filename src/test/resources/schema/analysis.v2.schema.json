@@ -148,6 +148,7 @@
         "base_types": { "$ref": "#/$defs/stringList" },
         "interfaces": { "$ref": "#/$defs/stringList" },
         "decorators": { "type": "array", "items": { "$ref": "#/$defs/decorator" } },
+        "type_parameters": { "type": "array", "items": { "$ref": "#/$defs/typeParameter" } },
         "is_entrypoint_class": { "type": "boolean" },
         "enum_constants": { "type": "array", "items": { "$ref": "#/$defs/enumConstant" } },
         "record_components": { "type": "array", "items": { "$ref": "#/$defs/recordComponent" } },
@@ -182,6 +183,18 @@
         "decorators": { "type": "array", "items": { "$ref": "#/$defs/decorator" } },
         "comments": { "type": "array", "items": { "$ref": "#/$defs/comment" } },
         "is_variadic": { "type": "boolean" }
+      }
+    },
+
+    "typeParameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "bounds": { "$ref": "#/$defs/stringList" },
+        "span": { "$ref": "#/$defs/span" },
+        "decorators": { "type": "array", "items": { "$ref": "#/$defs/decorator" } }
       }
     },
 
@@ -232,6 +245,7 @@
         "error_channel": { "$ref": "#/$defs/stringList" },
         "modifiers": { "$ref": "#/$defs/stringList" },
         "decorators": { "type": "array", "items": { "$ref": "#/$defs/decorator" } },
+        "type_parameters": { "type": "array", "items": { "$ref": "#/$defs/typeParameter" } },
         "declaration": { "type": "string" },
         "is_implicit": { "type": "boolean" },
         "is_entrypoint": { "type": "boolean" },

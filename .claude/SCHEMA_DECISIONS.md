@@ -226,6 +226,29 @@ produced no output at all, and one group of facts had lapsed relative to v1.
   there is no body v1 had to assert the sentinel `-1` while absence already encodes "no fact" (D10).
   Nothing consumes it: the only reader, `GraphProjector`, is v1-only per D11.
 
+### D16 — Generic declarations carry `type_parameters`
+
+Neither v1 nor v2 recorded a type-parameter clause, which left generic signatures unreconstructable
+from the emitted facts. A parameter declared `T` resolves to the bare spelling `T` — a type variable
+has no qualified name — and `declaration` omits the clause because JavaParser's
+`getDeclarationAsString` does. A consumer seeing `type: "T"` therefore had no way to learn what `T`
+ranges over. `type_parameters` on both `type` and `callable` supplies exactly that, and nothing else:
+this is a new fact, not a reshaping of an existing one.
+
+- **Order is declaration order**, because a type argument binds to a parameter by position.
+- **An unbounded parameter has no `bounds`.** The implicit `extends Object` is not written in the
+  source, and fabricating it would make an unbounded parameter indistinguishable from one explicitly
+  bounded by `Object` — the absence-is-no-fact rule of D10.
+- **Bounds keep their type arguments** (`java.lang.Comparable<? super T>`), matching every other
+  resolved type field; only *signatures* erase.
+- **Genericity is keyed off `NodeWithTypeParameters`**, not an `instanceof` chain, which puts the
+  language rule in one place: classes, interfaces, records, methods and constructors can be generic;
+  enums, annotation types, anonymous classes and enum-constant bodies cannot. A compact constructor
+  cannot declare its own either, and a generic record's belong to the record.
+- **Signatures are unaffected**, so ids and call-site joins are untouched. A type-variable parameter
+  erases to its bound on *both* sides of the join — declaration and resolved call site agree — so the
+  addition is purely additive.
+
 ### D12 — L1 type resolution: library dependencies are always attempted
 
 - **Dependency jars go on the solver's path.** L1 downloads the project's library dependencies before

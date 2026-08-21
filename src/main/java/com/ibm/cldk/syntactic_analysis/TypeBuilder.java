@@ -40,12 +40,14 @@ public final class TypeBuilder {
     private final DecoratorBuilder decoratorBuilder;
     private final FieldBuilder fieldBuilder;
     private final CallableBuilder callableBuilder;
+    private final TypeParameterBuilder typeParameterBuilder;
 
     public TypeBuilder(L1BuildContext ctx) {
         this.ctx = ctx;
         this.decoratorBuilder = new DecoratorBuilder(ctx);
         this.fieldBuilder = new FieldBuilder(ctx);
         this.callableBuilder = new CallableBuilder(ctx);
+        this.typeParameterBuilder = new TypeParameterBuilder(ctx);
     }
 
     /**
@@ -64,6 +66,7 @@ public final class TypeBuilder {
                 td.getModifiers().stream().map(m -> m.getKeyword().asString()).collect(Collectors.toList()));
         type.setDecorators(
                 td.getAnnotations().stream().map(decoratorBuilder::build).collect(Collectors.toList()));
+        type.setTypeParameters(typeParameterBuilder.build(td));
 
         List<String> baseTypes = new ArrayList<>();
         List<String> interfaces = new ArrayList<>();
