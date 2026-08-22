@@ -1,6 +1,7 @@
 package com.ibm.cldk.schema;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 
@@ -22,6 +23,21 @@ public final class V2Emitter {
     /** As above, stamping the analyzer version into the envelope manifest. */
     public static Analysis emit(
             String appName, int maxLevel, Map<String, JModule> modules, String analyzerVersion) {
+        return emit(appName, maxLevel, modules, analyzerVersion, null, null);
+    }
+
+    /**
+     * As above, additionally attaching L2's application-scope overlays. {@code callGraph} and
+     * {@code externalSymbols} are set only when non-{@code null} (L2+), so an L1 envelope omits both
+     * keys — absence means "no fact", not an empty collection.
+     */
+    public static Analysis emit(
+            String appName,
+            int maxLevel,
+            Map<String, JModule> modules,
+            String analyzerVersion,
+            List<JCallEdge> callGraph,
+            Map<String, JExternalSymbol> externalSymbols) {
         JApplication application = new JApplication();
         application.setId(CanId.applicationId(appName));
 
@@ -31,6 +47,8 @@ public final class V2Emitter {
             sorted.put(fileKey, modules.get(fileKey));
         }
         application.setSymbolTable(sorted);
+        application.setCallGraph(callGraph);
+        application.setExternalSymbols(externalSymbols);
 
         Analysis analysis = new Analysis();
         analysis.setSchemaVersion("2.0.0");

@@ -1,5 +1,7 @@
 package org.example;
 
+import org.example.greeting.Greeter;
+
 public class User {
 
     private String name;
@@ -27,6 +29,6 @@ public class User {
     String helloString()
     {
         log();
-        return "Hello, " + this.getName();
+        return Greeter.greet(this.getName());
     }
 }

@@ -196,10 +196,22 @@ class CodeAnalyzerV2CliTest {
     }
 
     @Test
-    void v2WithAnalysisLevelAboveOneFailsLoudly(@TempDir Path tmp) throws IOException {
+    void v2AtAnalysisLevelTwoEmitsTheCallGraphOverlay(@TempDir Path tmp) throws IOException {
         Path in = project(tmp.resolve("app"));
-        assertNotEquals(0, run("-i", in.toString(), "--schema", "v2", "-a", "2"),
-                "v2 has no call graph yet; asking for level 2 must be an error, not a level-1 payload");
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "--schema", "v2", "-a", "2"),
+                "level 2 is supported: declared edges need only the dependency jars, never a build");
+        JsonObject root = JsonParser.parseString(Files.readString(out.resolve("analysis.json"))).getAsJsonObject();
+        assertEquals(2, root.get("max_level").getAsInt());
+        assertTrue(root.getAsJsonObject("application").has("call_graph"),
+                "level 2 attaches the call_graph overlay");
+    }
+
+    @Test
+    void v2WithAnalysisLevelAboveTwoFailsLoudly(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        assertNotEquals(0, run("-i", in.toString(), "--schema", "v2", "-a", "3"),
+                "L3/L4 are not implemented; asking for a level beyond 2 must be an error, not an L2 payload");
     }
 
     @Test
