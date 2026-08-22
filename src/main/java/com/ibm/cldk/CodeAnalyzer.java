@@ -142,6 +142,11 @@ public class CodeAnalyzer implements Runnable {
             "--eager" }, description = "Ignore any cached modules and rebuild everything (default: lazy).")
     private boolean eager = false;
 
+    @Option(names = {
+            "--no-rta" }, description = "Skip the WALA RTA overlay at --schema v2 --analysis-level 2, "
+                    + "emitting declared-only call edges without building the application.")
+    private boolean noRta = false;
+
     /** Handle used to report flag-validation errors as clean, non-zero picocli failures. */
     @Spec
     private CommandSpec spec;
@@ -391,8 +396,17 @@ public class CodeAnalyzer implements Runnable {
                 : L1Cache.load(cache, application, version);
 
         Map<String, JModule> modules;
+        List<L2CallGraph.RtaEndpoint> rtaEndpoints = null;
         try {
             modules = L1Extractor.extractAll(Paths.get(input), application, dependencyDir, cached);
+            // The RTA overlay wants those same dependency jars in WALA's scope, so build it here, before
+            // the finally cleans them. `declared` edges need no build, so level 2 never fails for want of
+            // one: a build failure (or --no-rta) leaves rta absent and declared edges intact.
+            if (analysisLevel >= 2 && !noRta) {
+                String buildCommand = noBuild ? null : (build == null ? "auto" : build);
+                String deps = dependencyDir == null ? null : dependencyDir.toString();
+                rtaEndpoints = RtaCallGraph.endpoints(input, deps, buildCommand);
+            }
         } finally {
             BuildProject.cleanLibraryDependencies();
         }
@@ -402,9 +416,7 @@ public class CodeAnalyzer implements Runnable {
 
         Analysis analysis;
         if (analysisLevel >= 2) {
-            // `declared` edges need only the dependency jars already on the solver's path — no build —
-            // so level 2 never fails for want of one. (The `rta` overlay and its build wiring land later.)
-            L2CallGraph.Result l2 = L2CallGraph.build(application, modules);
+            L2CallGraph.Result l2 = L2CallGraph.build(application, modules, rtaEndpoints);
             analysis = V2Emitter.emit(
                     application, analysisLevel, modules, version, l2.callGraph(), l2.externalSymbols());
         } else {

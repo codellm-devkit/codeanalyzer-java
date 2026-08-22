@@ -15,17 +15,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 
 /**
- * The L2 pass: a pure walk over the emitted L1 tree that backfills each resolved {@code call} node's
+ * The L2 pass: a walk over the emitted L1 tree that backfills each resolved {@code call} node's
  * {@code callee}, accumulates the {@code declared} {@code call_graph} edges, and homes out-of-project
- * targets as {@code external_symbols} (§4).
+ * targets as {@code external_symbols} (§4). When a WALA RTA call graph is supplied, its edges are
+ * joined in as an {@code rta} overlay (§5): {@code prov} carries the set-union of the analyses that
+ * attest each edge.
  *
- * <p>It consumes only the tree. Each call site carries a declaring-type <em>binary name</em> hint (an
- * L1 refinement); this pass builds a type index from the tree keyed by that same binary name, then for
- * each site maps the hint through the index — a hit composes an in-project callable id, a miss homes an
- * external symbol. Deriving the index from the payload rather than registering it during L1 keeps L1
- * free of cross-module state and makes a warm-cache run compute exactly what a cold run does.
+ * <p>The declared pass consumes only the tree. Each call site carries a declaring-type <em>binary
+ * name</em> hint (an L1 refinement); this pass builds a type index from the tree keyed by that same
+ * binary name, then for each site maps the hint through the index — a hit composes an in-project
+ * callable id, a miss homes an external symbol. Deriving the index from the payload rather than
+ * registering it during L1 keeps L1 free of cross-module state and makes a warm-cache run compute
+ * exactly what a cold run does.
  *
  * <p>Resolution order, first match wins. The hint is a discriminated union — a {@code can://} id when
  * L1 resolved the site locally (an anonymous creation), a binary type name otherwise:
@@ -40,10 +44,52 @@ import java.util.TreeMap;
  *   <li><b>External.</b> The type is not in the project → an {@code @external} id; register the symbol.
  *   <li><b>Unresolved.</b> No hint (the site did not resolve) → nothing; {@code callee} stays absent.
  * </ol>
+ *
+ * <p>The RTA overlay may add external symbols but never in-project nodes: an in-project WALA endpoint
+ * that maps to no callable in the tree (a bridge method, {@code access$000}, {@code lambda$foo$0},
+ * {@code $values()}, or an {@code $anon$N}-vs-{@code Outer$1} identity-join failure) is <em>dropped</em>
+ * rather than fabricated, since the {@code declared} edge already attests those calls. That drop falls
+ * out of the same tree-membership check the declared pass uses, so no-dangling is structural.
  */
 public final class L2CallGraph {
 
     private L2CallGraph() {}
+
+    /**
+     * One WALA RTA call-graph edge, reduced to what the join needs and nothing WALA-specific — so the
+     * join logic is unit-testable against synthetic endpoint pairs. The type names are <em>binary</em>
+     * ({@code org.example.Map$Entry}) and the signatures are erased ({@code m(java.util.List)}), already
+     * converted from WALA's descriptors by the adapter that produces these.
+     */
+    public static final class RtaEndpoint {
+        private final boolean srcAppClass;
+        private final String srcType;
+        private final String srcSignature;
+        private final boolean dstAppClass;
+        private final String dstType;
+        private final String dstSignature;
+
+        public RtaEndpoint(
+                boolean srcAppClass,
+                String srcType,
+                String srcSignature,
+                boolean dstAppClass,
+                String dstType,
+                String dstSignature) {
+            this.srcAppClass = srcAppClass;
+            this.srcType = srcType;
+            this.srcSignature = srcSignature;
+            this.dstAppClass = dstAppClass;
+            this.dstType = dstType;
+            this.dstSignature = dstSignature;
+        }
+
+        @Override
+        public String toString() {
+            return (srcAppClass ? "app " : "lib ") + srcType + "#" + srcSignature
+                    + " -> " + (dstAppClass ? "app " : "lib ") + dstType + "#" + dstSignature;
+        }
+    }
 
     /** The application-scope overlays the pass produces, alongside the {@code callee} mutations. */
     public static final class Result {
@@ -64,13 +110,19 @@ public final class L2CallGraph {
         }
     }
 
-    /**
-     * Backfill {@code callee} on every resolvable {@code call} node of {@code modules} (mutating them
-     * in place) and return the {@code declared} edges and external symbols the sites imply.
-     */
+    /** Declared-only: backfill {@code callee} and produce {@code declared} edges + external symbols. */
     public static Result build(String appName, Map<String, JModule> modules) {
+        return build(appName, modules, null);
+    }
+
+    /**
+     * As {@link #build(String, Map)}, additionally joining a WALA RTA call graph (as {@link RtaEndpoint}
+     * pairs) into the edges as an {@code rta} overlay. {@code rtaEdges} may be {@code null} (declared
+     * only). The overlay never mutates {@code callee} — that is a declared-analysis refinement.
+     */
+    public static Result build(String appName, Map<String, JModule> modules, List<RtaEndpoint> rtaEdges) {
         // The type index (named types only) and the set of every callable id in the tree. The latter
-        // turns both the no-dangling invariant and the signature-miss case into O(1) membership checks.
+        // turns no-dangling, the signature-miss case, and the RTA drop rules into O(1) membership checks.
         Map<String, String> typeIdByBinaryName = new HashMap<>();
         Set<String> callableIds = new HashSet<>();
         for (JModule module : modules.values()) {
@@ -84,29 +136,26 @@ public final class L2CallGraph {
             module.getTypes().values().forEach(type -> collectCallableIds(type, callableIds));
         }
 
-        // Sorted maps so the output is deterministic regardless of walk order: edges by (src, dst),
-        // external symbols by key.
-        Map<String, Map<String, Integer>> weightBySrcDst = new TreeMap<>();
+        // Sorted maps so the output is deterministic regardless of walk order.
         Map<String, JExternalSymbol> externalSymbols = new TreeMap<>();
+        Map<String, Map<String, Integer>> declaredWeights = new TreeMap<>();
         for (JModule module : modules.values()) {
             for (JType type : module.getTypes().values()) {
-                backfillTree(type, appName, typeIdByBinaryName, callableIds, weightBySrcDst, externalSymbols);
+                backfillTree(type, appName, typeIdByBinaryName, callableIds, declaredWeights, externalSymbols);
             }
         }
 
-        List<JCallEdge> callGraph = new ArrayList<>();
-        for (Map.Entry<String, Map<String, Integer>> srcEntry : weightBySrcDst.entrySet()) {
-            for (Map.Entry<String, Integer> dstEntry : srcEntry.getValue().entrySet()) {
-                JCallEdge edge = new JCallEdge();
-                edge.setSrc(srcEntry.getKey());
-                edge.setDst(dstEntry.getKey());
-                edge.setProv(List.of("declared"));
-                edge.setWeight(dstEntry.getValue());
-                callGraph.add(edge);
+        Map<String, Map<String, Integer>> rtaWeights = new TreeMap<>();
+        if (rtaEdges != null) {
+            for (RtaEndpoint edge : rtaEdges) {
+                joinRtaEdge(edge, appName, typeIdByBinaryName, callableIds, rtaWeights, externalSymbols);
             }
         }
-        Log.debug("L2 call graph: " + callGraph.size() + " declared edge(s), "
-                + externalSymbols.size() + " external symbol(s)");
+
+        List<JCallEdge> callGraph = mergeEdges(declaredWeights, rtaWeights);
+        Log.debug("L2 call graph: " + callGraph.size() + " edge(s), "
+                + externalSymbols.size() + " external symbol(s)"
+                + (rtaEdges == null ? " (declared only)" : " (declared + rta)"));
         return new Result(callGraph, externalSymbols);
     }
 
@@ -177,7 +226,7 @@ public final class L2CallGraph {
 
     /**
      * The callee id for one {@code call} node, or {@code null} when it resolves to nothing (a
-     * signature-miss or an unresolved site). Registers an external symbol as a side effect of case 3.
+     * signature-miss or an unresolved site). Registers an external symbol as a side effect of case 4.
      */
     private static String resolveCallee(
             JBodyNode node,
@@ -198,20 +247,105 @@ public final class L2CallGraph {
         if (signature == null) {
             return null; // resolved the type but not a signature to compose
         }
-        String typeId = index.get(hint);
-        if (typeId != null) {
-            String composed = CanId.childId(typeId, signature);
-            return callableIds.contains(composed) ? composed : null; // in-project hit, else signature-miss
+        String inProject = inProjectId(hint, signature, index, callableIds);
+        if (index.containsKey(hint)) {
+            return inProject; // in-project hit (case 2) or signature-miss (case 3, null)
         }
-        String externalId = CanId.externalId(appName, hint, signature);
-        externalSymbols.computeIfAbsent(externalId, k -> {
-            JExternalSymbol symbol = new JExternalSymbol();
-            symbol.setKind(node.isConstructorCall() ? "constructor" : "method");
-            symbol.setSignature(signature);
-            // The id carries the binary name; declaring_type is the legible dotted spelling.
-            symbol.setDeclaringType(hint.replace('$', '.'));
-            return symbol;
-        });
+        String externalId = CanId.externalId(appName, hint, signature); // case 4
+        externalSymbols.computeIfAbsent(externalId, k -> externalSymbol(signature, hint, node.isConstructorCall()));
         return externalId;
+    }
+
+    /**
+     * Join one WALA RTA edge. The src must be an in-project callable that exists in the tree, or the
+     * edge is unattributable and dropped. An in-project dst that maps to no tree callable is dropped
+     * (the overlay never fabricates an in-project node); a library dst is homed external.
+     */
+    private static void joinRtaEdge(
+            RtaEndpoint edge,
+            String appName,
+            Map<String, String> index,
+            Set<String> callableIds,
+            Map<String, Map<String, Integer>> rtaWeights,
+            Map<String, JExternalSymbol> externalSymbols) {
+        if (!edge.srcAppClass) {
+            return; // a library caller has no in-project node to attribute the edge to
+        }
+        String src = inProjectId(edge.srcType, edge.srcSignature, index, callableIds);
+        if (src == null) {
+            return; // an in-project synthetic (bridge, access$, lambda$) or an identity-join failure
+        }
+        String dst;
+        if (edge.dstAppClass) {
+            dst = inProjectId(edge.dstType, edge.dstSignature, index, callableIds);
+            if (dst == null) {
+                return; // in-project but absent from the tree — drop rather than fabricate
+            }
+        } else {
+            dst = CanId.externalId(appName, edge.dstType, edge.dstSignature);
+            externalSymbols.computeIfAbsent(
+                    dst, k -> externalSymbol(edge.dstSignature, edge.dstType, edge.dstSignature.startsWith("<init>")));
+        }
+        rtaWeights.computeIfAbsent(src, k -> new TreeMap<>()).merge(dst, 1, Integer::sum);
+    }
+
+    /** The in-project callable id for a binary type + signature, or {@code null} if absent from the tree. */
+    private static String inProjectId(
+            String binaryType, String signature, Map<String, String> index, Set<String> callableIds) {
+        String typeId = index.get(binaryType);
+        if (typeId == null) {
+            return null;
+        }
+        String composed = CanId.childId(typeId, signature);
+        return callableIds.contains(composed) ? composed : null;
+    }
+
+    private static JExternalSymbol externalSymbol(String signature, String binaryType, boolean constructor) {
+        JExternalSymbol symbol = new JExternalSymbol();
+        symbol.setKind(constructor ? "constructor" : "method");
+        symbol.setSignature(signature);
+        // The id carries the binary name; declaring_type is the legible dotted spelling.
+        symbol.setDeclaringType(binaryType.replace('$', '.'));
+        return symbol;
+    }
+
+    /**
+     * Merge the declared and RTA weight tables into edges. One edge per {@code (src, dst)}: {@code prov}
+     * is the set-union of the analyses attesting it, alphabetical; {@code weight} is the declared
+     * call-site count when declared attests it (those are the sites a consumer can navigate to),
+     * otherwise the RTA count. Edges sort by {@code (src, dst)}.
+     */
+    private static List<JCallEdge> mergeEdges(
+            Map<String, Map<String, Integer>> declaredWeights, Map<String, Map<String, Integer>> rtaWeights) {
+        Set<String> srcs = new TreeSet<>();
+        srcs.addAll(declaredWeights.keySet());
+        srcs.addAll(rtaWeights.keySet());
+
+        List<JCallEdge> edges = new ArrayList<>();
+        for (String src : srcs) {
+            Map<String, Integer> declared = declaredWeights.getOrDefault(src, Map.of());
+            Map<String, Integer> rta = rtaWeights.getOrDefault(src, Map.of());
+            Set<String> dsts = new TreeSet<>();
+            dsts.addAll(declared.keySet());
+            dsts.addAll(rta.keySet());
+            for (String dst : dsts) {
+                boolean byDeclared = declared.containsKey(dst);
+                boolean byRta = rta.containsKey(dst);
+                List<String> prov = new ArrayList<>();
+                if (byDeclared) {
+                    prov.add("declared"); // alphabetical before "rta"
+                }
+                if (byRta) {
+                    prov.add("rta");
+                }
+                JCallEdge edge = new JCallEdge();
+                edge.setSrc(src);
+                edge.setDst(dst);
+                edge.setProv(prov);
+                edge.setWeight(byDeclared ? declared.get(dst) : rta.get(dst));
+                edges.add(edge);
+            }
+        }
+        return edges;
     }
 }

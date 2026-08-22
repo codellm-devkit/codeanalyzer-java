@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.ibm.cldk.RtaCallGraph;
 import com.ibm.cldk.syntactic_analysis.L1Extractor;
 import com.ibm.cldk.syntactic_analysis.L2CallGraph;
 import com.networknt.schema.JsonSchema;
@@ -18,6 +19,7 @@ import com.networknt.schema.SpecVersion;
 import com.networknt.schema.ValidationMessage;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -27,7 +29,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 
 /**
  * The L2 gate: each item maps to a definition-of-done clause from the design (§8), asserted on the
@@ -254,6 +258,26 @@ class L2CallGraphGateTest {
         JsonElement l2Stripped = stripCallee(application(l2).getAsJsonObject("symbol_table").deepCopy());
         assertEquals(application(l1).getAsJsonObject("symbol_table"), l2Stripped,
                 "with `callee` removed, the L2 tree must be identical to the L1 tree");
+    }
+
+    static boolean submodulesCheckedOut() {
+        return Files.isDirectory(Paths.get("src/test/resources/test-applications/commons-lang/src"));
+    }
+
+    @Test
+    @Tag("realworld")
+    @EnabledIf("submodulesCheckedOut")
+    void aRealApplicationYieldsAtLeastOneRtaAttestedEdge() throws IOException {
+        // The join logic is unit-tested against synthetic endpoints (L2CallGraphTest); this asserts the
+        // whole path — build, WALA RTA, descriptor conversion, join — produces rta on a real application.
+        // It builds the app, so it is realworld-tagged and out of the inner-loop suite.
+        Path project = Paths.get("src/test/resources/test-applications/commons-lang");
+        String app = "commons-lang";
+        Map<String, JModule> modules = L1Extractor.extractAll(project, app);
+        List<L2CallGraph.RtaEndpoint> rta = RtaCallGraph.endpoints(project.toString(), null, "auto");
+        L2CallGraph.Result result = L2CallGraph.build(app, modules, rta);
+        assertTrue(result.callGraph().stream().anyMatch(e -> e.getProv().contains("rta")),
+                "the RTA overlay must attest at least one edge on a real application");
     }
 
     /** Remove every {@code callee} key, recursively — the one refinement L2 makes to the L1 tree. */
