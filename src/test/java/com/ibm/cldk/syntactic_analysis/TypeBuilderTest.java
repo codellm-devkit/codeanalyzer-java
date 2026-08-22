@@ -299,7 +299,7 @@ class TypeBuilderTest {
         // The trap: a non-canonical constructor does not suppress the canonical one. This really does
         // compile to both <init>(int) and <init>(int, int).
         JType t = buildFirstType("package p;\nrecord Point(int x, int y) {\n  Point(int x) { this(x, 0); }\n}\n");
-        assertEquals(Set.of("<init>(int)", "<init>(int, int)"), t.getCallables().keySet());
+        assertEquals(Set.of("<init>(int)", "<init>(int, int)"), constructorsOf(t));
         assertFalse(t.getCallables().get("<init>(int)").isImplicit(), "the declared one is not implicit");
         assertTrue(t.getCallables().get("<init>(int, int)").isImplicit());
     }
@@ -308,7 +308,7 @@ class TypeBuilderTest {
     void build_recordDeclaringItsCanonicalConstructorGetsNoImplicitOne() {
         JType t = buildFirstType("package p;\nrecord Point(int x, int y) {\n"
                 + "  Point(int x, int y) { this.x = x; this.y = y; }\n}\n");
-        assertEquals(Set.of("<init>(int, int)"), t.getCallables().keySet());
+        assertEquals(Set.of("<init>(int, int)"), constructorsOf(t));
         assertFalse(t.getCallables().get("<init>(int, int)").isImplicit());
     }
 
@@ -317,8 +317,15 @@ class TypeBuilderTest {
         // The compact constructor IS the canonical one, and Signatures mints both keys the same way, so
         // it must occupy the canonical slot rather than sitting beside a synthesized duplicate.
         JType t = buildFirstType("package p;\nrecord Point(int x, int y) {\n  Point {\n    check(x);\n  }\n}\n");
-        assertEquals(Set.of("<init>(int, int)"), t.getCallables().keySet());
+        assertEquals(Set.of("<init>(int, int)"), constructorsOf(t));
         assertFalse(t.getCallables().get("<init>(int, int)").isImplicit());
+    }
+
+    /** A record's own constructors, so a constructor-suppression assertion is not also about accessors. */
+    private static Set<String> constructorsOf(JType type) {
+        return type.getCallables().keySet().stream()
+                .filter(s -> s.startsWith("<init>"))
+                .collect(Collectors.toSet());
     }
 
     @Test
@@ -341,6 +348,76 @@ class TypeBuilderTest {
     void build_enumWithNoDeclaredConstructorGetsTheImplicitOne() {
         JType t = buildFirstType("package p;\nenum Color { RED, GREEN }\n");
         assertTrue(t.getCallables().get("<init>()").isImplicit(), "got: " + t.getCallables().keySet());
+    }
+
+    @Test
+    void build_recordComponentsGetTheirImplicitAccessors() {
+        // `money.cents()` resolves to the *record itself*, so without these the call site names a
+        // callable absent from the tree: unnameable and un-homable, since the type is in-project.
+        JType t = buildFirstType("package p;\nrecord Point(int x, int y) {}\n");
+        JCallable x = t.getCallables().get("x()");
+        assertNotNull(x, "got: " + t.getCallables().keySet());
+        assertEquals("method", x.getKind());
+        assertTrue(x.isImplicit());
+        assertEquals("int", x.getReturnType());
+        assertEquals(List.of("public"), x.getModifiers());
+        assertEquals(t.getId() + "/x()", x.getId());
+        assertNull(x.getSpan(), "nothing was written, so there is no source range to point at");
+        assertNotNull(t.getCallables().get("y()"));
+    }
+
+    @Test
+    void build_declaredAccessorSuppressesTheImplicitOne() {
+        // A record may override an accessor. Both occupy the same signature slot, so the declared one
+        // has to win rather than sit beside a synthesized duplicate.
+        JType t = buildFirstType("package p;\nrecord Point(int x, int y) {\n"
+                + "  public int x() { return x + 1; }\n}\n");
+        assertFalse(t.getCallables().get("x()").isImplicit(), "the declared accessor is not implicit");
+        assertTrue(t.getCallables().get("y()").isImplicit());
+    }
+
+    @Test
+    void build_anAccessorOfAVarargsComponentReturnsTheArrayType() {
+        // The component is declared `String...` but the field, and so the accessor's return, is String[].
+        JType t = buildFirstType("package p;\nrecord Args(int n, String... parts) {}\n");
+        assertEquals("java.lang.String[]", t.getCallables().get("parts()").getReturnType());
+    }
+
+    @Test
+    void build_enumGetsValuesAndValueOf() {
+        // `Op.values()` and `Op.valueOf(s)` also resolve to the enum itself. Declaring either is a
+        // compile error, so unlike the accessors there is nothing that could suppress them.
+        JType t = buildFirstType("package p;\nenum Color { RED, GREEN }\n");
+        JCallable values = t.getCallables().get("values()");
+        assertNotNull(values, "got: " + t.getCallables().keySet());
+        assertEquals("method", values.getKind());
+        assertTrue(values.isImplicit());
+        assertEquals("p.Color[]", values.getReturnType());
+        assertEquals(List.of("public", "static"), values.getModifiers());
+        JCallable valueOf = t.getCallables().get("valueOf(java.lang.String)");
+        assertNotNull(valueOf, "got: " + t.getCallables().keySet());
+        assertEquals("p.Color", valueOf.getReturnType());
+        assertEquals(1, valueOf.getParameters().size());
+        assertEquals("java.lang.String", valueOf.getParameters().get(0).getType());
+    }
+
+    @Test
+    void build_nonRecordNonEnumTypesGetNoImplicitMembers() {
+        JType t = buildFirstType("package p;\nclass Foo {\n  void inc() {}\n}\n");
+        assertEquals(Set.of("<init>()", "inc()"), t.getCallables().keySet());
+        assertTrue(buildFirstType("package p;\ninterface I {\n  void m();\n}\n")
+                .getCallables().keySet().stream().noneMatch(s -> s.equals("values()")));
+    }
+
+    @Test
+    void build_enumConstantBodyGetsNoValuesOfItsOwn() {
+        // javac generates values() on the enum class, not on a constant's anonymous subclass. Emitting
+        // one here would invent a callable, and `Op.PLUS.values()` does not resolve to it anyway.
+        JType op = buildFirstType("package p;\nenum Op {\n  PLUS { int apply() { return 1; } };\n"
+                + "  int apply() { return 0; }\n}\n");
+        JType plus = op.getTypes().get("$enum$PLUS");
+        assertNotNull(plus, "got: " + op.getTypes().keySet());
+        assertEquals(Set.of("apply()"), plus.getCallables().keySet());
     }
 
     @Test

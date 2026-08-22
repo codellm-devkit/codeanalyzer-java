@@ -26,6 +26,7 @@ import com.ibm.cldk.javaee.EntrypointsFinderFactory;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JCallable;
 import com.ibm.cldk.schema.JMetrics;
+import com.ibm.cldk.schema.JParameter;
 import com.ibm.cldk.schema.JRefs;
 import com.ibm.cldk.schema.JType;
 import com.ibm.cldk.schema.JVariableDeclaration;
@@ -174,6 +175,37 @@ public final class CallableBuilder {
         callable.setId(CanId.childId(parentTypeId, signature));
         callable.setKind("constructor");
         callable.setImplicit(true);
+        return callable;
+    }
+
+    /**
+     * Build a method the language generates but the source never writes — a record component's accessor,
+     * an enum's {@code values()} and {@code valueOf(String)}.
+     *
+     * <p>Same purpose as {@link #buildImplicitConstructor}: the symbol solver reports these as members of
+     * the declaring type itself, so a call site resolving to one would otherwise name a callable absent
+     * from the tree — a target that can be neither named nor homed as external, since the type is
+     * in-project.
+     *
+     * <p>Unlike the implicit constructor this does carry a {@code return_type} and, for
+     * {@code valueOf}, a parameter: those are what distinguish the generated methods from each other,
+     * and both are dictated by the language rather than invented. Still no {@code span} — nothing was
+     * written — and {@code is_implicit} is what tells a consumer why.
+     */
+    public JCallable buildImplicitMethod(
+            String parentTypeId,
+            String signature,
+            String returnType,
+            List<String> modifiers,
+            List<JParameter> parameters) {
+        JCallable callable = new JCallable();
+        callable.setSignature(signature);
+        callable.setId(CanId.childId(parentTypeId, signature));
+        callable.setKind("method");
+        callable.setImplicit(true);
+        callable.setReturnType(returnType);
+        callable.setModifiers(modifiers);
+        callable.setParameters(parameters);
         return callable;
     }
 

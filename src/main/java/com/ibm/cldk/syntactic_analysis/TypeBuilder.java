@@ -20,6 +20,7 @@ import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JCallable;
 import com.ibm.cldk.schema.JEnumConstant;
 import com.ibm.cldk.schema.JField;
+import com.ibm.cldk.schema.JParameter;
 import com.ibm.cldk.schema.JRecordComponent;
 import com.ibm.cldk.schema.JType;
 import java.util.ArrayList;
@@ -109,7 +110,54 @@ public final class TypeBuilder {
         }
 
         synthesizeImplicitConstructor(type, td);
+        synthesizeImplicitMethods(type, td);
         return type;
+    }
+
+    /**
+     * Emit the methods the language generates for records and enums, so a call site resolving to one has
+     * a callable to name.
+     *
+     * <p>Which ones matter was settled by probing the symbol solver rather than by reading the JLS:
+     * {@code money.cents()}, {@code Op.values()} and {@code Op.valueOf(s)} all report the in-project type
+     * as their declaring type, which makes their absence unrecoverable — the target can be neither named
+     * nor homed as external. A record's generated {@code equals}/{@code hashCode}/{@code toString} do not
+     * resolve at all, so synthesizing them would add callables nothing points at.
+     *
+     * <p>Only named declarations reach here. Enum-constant class bodies and anonymous classes are built
+     * through {@link #populateMembers}, which is correct: javac generates {@code values()} on the enum
+     * class, not on a constant's subclass.
+     */
+    private void synthesizeImplicitMethods(JType type, TypeDeclaration<?> td) {
+        if (td instanceof RecordDeclaration) {
+            for (Parameter component : ((RecordDeclaration) td).getParameters()) {
+                String signature = component.getNameAsString() + "()";
+                // A record may override an accessor, and both occupy this one signature slot.
+                if (type.getCallables().containsKey(signature)) {
+                    continue;
+                }
+                // The component is declared `String...` but the field, and so the accessor's return, is
+                // `String[]` — the same asymmetry Signatures.erasedTypeOf handles on the parameter side.
+                String returnType = ctx.resolveType(component.getType()) + (component.isVarArgs() ? "[]" : "");
+                addCallable(type, callableBuilder.buildImplicitMethod(
+                        type.getId(), signature, returnType, List.of("public"), List.of()));
+            }
+        } else if (td instanceof EnumDeclaration) {
+            // Unconditional: declaring either of these is a compile error, so unlike the accessors there
+            // is nothing that could suppress them.
+            String enumFqn = typeFqnOf(td);
+            addCallable(type, callableBuilder.buildImplicitMethod(
+                    type.getId(), "values()", enumFqn + "[]", List.of("public", "static"), List.of()));
+            JParameter name = new JParameter();
+            name.setName("name");
+            name.setType("java.lang.String");
+            addCallable(type, callableBuilder.buildImplicitMethod(
+                    type.getId(),
+                    "valueOf(java.lang.String)",
+                    enumFqn,
+                    List.of("public", "static"),
+                    List.of(name)));
+        }
     }
 
     /**
