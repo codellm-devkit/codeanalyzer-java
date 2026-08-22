@@ -201,16 +201,17 @@ class L1ConformanceGateTest {
     @Test
     void typeParametersCarryTheBoundsThatDistinguishOverloads() throws IOException {
         // These three `copy` overloads differ ONLY in their type parameter's bound. The erased signature
-        // keeps them apart, but without `type_parameters` nothing in the output says why they differ.
+        // keeps them apart, but without `type_parameters` nothing in the output says why they differ:
+        // the key is fully erased, so the bound's own type arguments survive only here.
         JsonNode utils = typeIn(analyse(TEST_APPS.resolve("generics-varargs-duplicate-signature-test")),
                 "FunctorUtils");
         JsonNode callables = utils.path("callables");
         assertEquals("java.util.function.Consumer<?>",
-                soleBoundOf(callables.path("copy(java.util.function.Consumer<?>[])")));
+                soleBoundOf(callables.path("copy(java.util.function.Consumer[])")));
         assertEquals("java.util.function.Predicate<?>",
-                soleBoundOf(callables.path("copy(java.util.function.Predicate<?>[])")));
+                soleBoundOf(callables.path("copy(java.util.function.Predicate[])")));
         assertEquals("java.util.function.Function<?, ?>",
-                soleBoundOf(callables.path("copy(java.util.function.Function<?, ?>[])")));
+                soleBoundOf(callables.path("copy(java.util.function.Function[])")));
     }
 
     @Test
@@ -220,7 +221,7 @@ class L1ConformanceGateTest {
         JsonNode utils = typeIn(analyse(TEST_APPS.resolve("generics-varargs-duplicate-signature-test")),
                 "FunctorUtils");
         JsonNode params = utils.path("callables")
-                .path("coerce(java.util.function.Function<? super I, ? extends O>)")
+                .path("coerce(java.util.function.Function)")
                 .path("type_parameters");
         assertEquals(4, params.size());
         assertEquals("R", params.path(0).path("name").asText());

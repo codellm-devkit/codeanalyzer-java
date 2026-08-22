@@ -20,7 +20,41 @@ import java.util.List;
  */
 public final class Signatures {
 
+    /**
+     * Guards {@link #fullyErasedDescription} against a pathological bound chain. Erasing a type
+     * variable walks one link of its bound chain per pass, and bound chains cannot be cyclic (that is a
+     * compile error), so every real signature converges — the deepest case observed needs four passes.
+     */
+    private static final int ERASURE_PASS_LIMIT = 16;
+
     private Signatures() {}
+
+    /**
+     * The fully erased description of {@code type}, in the JLS sense.
+     *
+     * <p>JavaParser's {@code erasure()} is one level deep: a type variable erases to its declared bound,
+     * but that bound keeps its own type arguments. So {@code <T extends Consumer<?>> copy(T...)} yielded
+     * {@code copy(java.util.function.Consumer<?>[])}, and a self-referential bound was worse still —
+     * {@code <T extends Comparable<T>> inter(T)} leaked the variable {@code T} into a name that is
+     * supposed to be durable and joinable. Iterating to a fixpoint erases the bound too.
+     *
+     * <p>This matters because the other side of every join is a bytecode descriptor, which is always
+     * fully erased: WALA's call graph names that parameter {@code java.util.function.Consumer[]}, so a
+     * half-erased key silently misses and the real callable looks absent.
+     */
+    private static String fullyErasedDescription(ResolvedType type) {
+        ResolvedType erased = type.erasure();
+        String description = erased.describe();
+        for (int pass = 1; pass < ERASURE_PASS_LIMIT; pass++) {
+            erased = erased.erasure();
+            String further = erased.describe();
+            if (further.equals(description)) {
+                break;
+            }
+            description = further;
+        }
+        return description;
+    }
 
     /**
      * The type-erasure signature of an already-<em>resolved</em> method/constructor — used to name the
@@ -35,7 +69,7 @@ public final class Signatures {
         StringBuilder signature = new StringBuilder(name);
         List<String> erasureParameterTypes = new ArrayList<>();
         for (int i = 0; i < methodDecl.getNumberOfParams(); i++) {
-            erasureParameterTypes.add(methodDecl.getParam(i).getType().erasure().describe());
+            erasureParameterTypes.add(fullyErasedDescription(methodDecl.getParam(i).getType()));
         }
         signature.append("(");
         signature.append(String.join(", ", erasureParameterTypes));
@@ -66,6 +100,19 @@ public final class Signatures {
         return signature("<init>", components);
     }
 
+    /**
+     * The type-erasure signature of a record's <em>canonical</em> constructor, derived from the record
+     * header alone.
+     *
+     * <p>Every record has this constructor whether or not the source writes one, so this is what names it
+     * when it is implicit. It shares {@link #typeErasure(CompactConstructorDeclaration)}'s path
+     * deliberately: the two must mint the same string, or a record that declares a compact constructor
+     * and one that does not would be keyed differently for the same canonical constructor.
+     */
+    public static String typeErasure(RecordDeclaration record) {
+        return signature("<init>", record.getParameters());
+    }
+
     /** {@code <name>(<erased param types>)} — the durable signature format shared by every caller. */
     private static String signature(String name, List<Parameter> parameters) {
         List<String> erasureParameterTypes = new ArrayList<>();
@@ -87,11 +134,13 @@ public final class Signatures {
      * parameters that genuinely cannot be resolved keeps the rest joinable.
      */
     private static String erasedTypeOf(Parameter parameter) {
-        // A varargs parameter is an array at the call site; `type` alone is the element type.
+        // A varargs parameter is an array at the call site; `type` alone is the element type. The
+        // resolved side gets that array-ness from the type itself, so appending the suffix here is what
+        // keeps the two sides emitting the same string.
         String suffix = parameter.isVarArgs() ? "[]" : "";
         try {
             ResolvedType resolvedType = parameter.getType().resolve();
-            return resolvedType.erasure().describe() + suffix;
+            return fullyErasedDescription(resolvedType) + suffix;
         } catch (Throwable e) {
             Log.debug("Could not resolve parameter type " + parameter.getType().asString()
                     + "; falling back to the AST spelling");

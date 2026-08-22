@@ -297,4 +297,28 @@ class CallableBuilderTest {
         JCallable c = build("<V extends Number> void take(V v) {}");
         assertEquals("take(java.lang.Number)", c.getSignature());
     }
+
+    @Test
+    void build_signatureErasesTheBoundOfATypeVariableToo() {
+        // JavaParser's erasure() is one level deep: `T` becomes `Consumer<?>`, whose type arguments then
+        // survive into the id. The other side of every join is a bytecode descriptor, which is fully
+        // erased — WALA names this parameter `java.util.function.Consumer[]` — so a half-erased key
+        // misses and the real callable looks absent.
+        assertEquals("copy(java.util.function.Consumer[])",
+                build("<T extends java.util.function.Consumer<?>> T[] copy(T... cs) { return null; }")
+                        .getSignature());
+    }
+
+    @Test
+    void build_signatureOfASelfReferentialBoundLeaksNoTypeVariable() {
+        // `<T extends Comparable<T>>` erases once to `java.lang.Comparable<T>`, putting a name that means
+        // nothing outside this declaration into a supposedly durable id.
+        assertEquals("sort(java.lang.Comparable)",
+                build("<T extends Comparable<? super T>> void sort(T t) {}").getSignature());
+    }
+
+    @Test
+    void build_signatureErasesAnUnboundedTypeVariableToObject() {
+        assertEquals("hold(java.lang.Object)", build("<T> void hold(T t) {}").getSignature());
+    }
 }

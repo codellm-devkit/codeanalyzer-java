@@ -154,6 +154,30 @@ public final class CallableBuilder {
     }
 
     /**
+     * Build a constructor the language guarantees but the source never writes — a class with no declared
+     * constructor, a record's canonical constructor, an anonymous class's generated one.
+     *
+     * <p>It exists so a {@code new Foo()} call site has something to point at. Without it those sites
+     * name a callable that appears nowhere in the output, which is a dangling edge endpoint rather than
+     * an honest absence; v1 papered over the same gap by fabricating callables with
+     * {@code filePath: "<<implicit>>"}.
+     *
+     * <p>Nothing beyond identity is emitted. There is no source range, so no {@code span} or
+     * {@code body_span} — and no {@code parameters}, for the reason
+     * {@link #buildCompactConstructor} gives: a record's are already modelled as
+     * {@code type.record_components}, and fabricating spans for parameters that were never written would
+     * be inventing facts. {@code is_implicit} is what tells a consumer why the rest is missing.
+     */
+    public JCallable buildImplicitConstructor(String parentTypeId, String signature) {
+        JCallable callable = new JCallable();
+        callable.setSignature(signature);
+        callable.setId(CanId.childId(parentTypeId, signature));
+        callable.setKind("constructor");
+        callable.setImplicit(true);
+        return callable;
+    }
+
+    /**
      * Build an initializer block as a {@code callable} with {@code kind:"initializer"}. It has no
      * parameters, return type or declared throws; everything else (body call sites, locals, refs,
      * metrics, local classes) works exactly as for a method.

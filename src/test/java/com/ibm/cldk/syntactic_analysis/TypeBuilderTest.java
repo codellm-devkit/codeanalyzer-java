@@ -3,6 +3,7 @@ package com.ibm.cldk.syntactic_analysis;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.javaparser.JavaParser;
@@ -209,6 +210,32 @@ class TypeBuilderTest {
     }
 
     @Test
+    void build_anonymousClassImplementingAnInterfaceGetsAZeroArgConstructor() {
+        // An interface has no constructor, so the anonymous class's generated one chains to Object.
+        // Naming it on the anonymous class itself is what keeps `new Runnable() {...}` from having to
+        // point at java.lang.Runnable.<init>(), which cannot exist.
+        JType anon = buildFirstType("package p;\nclass Foo {\n"
+                + "  static final Runnable R = new Runnable() { public void run() {} };\n}\n")
+                .getTypes().get("$anon$0");
+        JCallable ctor = anon.getCallables().get("<init>()");
+        assertNotNull(ctor, "got: " + anon.getCallables().keySet());
+        assertTrue(ctor.isImplicit());
+        assertEquals(anon.getId() + "/<init>()", ctor.getId());
+    }
+
+    @Test
+    void build_anonymousSubclassConstructorTakesTheCreationArguments() {
+        // The generated constructor forwards the creation site's arguments to the superclass, so it is
+        // <init>(String) here — not <init>(). Assuming a no-arg constructor would misname every
+        // anonymous class built from a parameterised superclass.
+        JType anon = buildFirstType("package p;\nclass Foo {\n"
+                + "  static final Thread T = new Thread(\"x\") { public void run() {} };\n}\n")
+                .getTypes().get("$anon$0");
+        assertTrue(anon.getCallables().containsKey("<init>(java.lang.String)"),
+                "got: " + anon.getCallables().keySet());
+    }
+
+    @Test
     void build_numbersFieldInitializerAnonymousClassesSeparatelyFromNestedTypes() {
         JType t = buildFirstType("package p;\nclass Foo {\n"
                 + "  static final Runnable A = new Runnable() { public void run() {} };\n"
@@ -254,10 +281,73 @@ class TypeBuilderTest {
     }
 
     @Test
-    void build_plainRecordDeclaresNoConstructorCallable() {
-        // The implicit canonical constructor is not declared in source; L1 reads declarations only.
+    void build_plainRecordGetsItsImplicitCanonicalConstructor() {
+        // A `new Point(1, 2)` site has to name a callable. Reading declarations only left it naming one
+        // that appeared nowhere in the output — a dangling edge endpoint rather than an honest absence.
         JType t = buildFirstType("package p;\nrecord Point(int x, int y) {}\n");
-        assertTrue(t.getCallables().isEmpty(), "got: " + t.getCallables().keySet());
+        JCallable ctor = t.getCallables().get("<init>(int, int)");
+        assertNotNull(ctor, "got: " + t.getCallables().keySet());
+        assertEquals("constructor", ctor.getKind());
+        assertTrue(ctor.isImplicit());
+        assertEquals(t.getId() + "/<init>(int, int)", ctor.getId());
+        assertNull(ctor.getSpan(), "nothing was written, so there is no source range to point at");
+        assertNull(ctor.getBodySpan());
+    }
+
+    @Test
+    void build_recordWithANonCanonicalConstructorGetsTheCanonicalOneToo() {
+        // The trap: a non-canonical constructor does not suppress the canonical one. This really does
+        // compile to both <init>(int) and <init>(int, int).
+        JType t = buildFirstType("package p;\nrecord Point(int x, int y) {\n  Point(int x) { this(x, 0); }\n}\n");
+        assertEquals(Set.of("<init>(int)", "<init>(int, int)"), t.getCallables().keySet());
+        assertFalse(t.getCallables().get("<init>(int)").isImplicit(), "the declared one is not implicit");
+        assertTrue(t.getCallables().get("<init>(int, int)").isImplicit());
+    }
+
+    @Test
+    void build_recordDeclaringItsCanonicalConstructorGetsNoImplicitOne() {
+        JType t = buildFirstType("package p;\nrecord Point(int x, int y) {\n"
+                + "  Point(int x, int y) { this.x = x; this.y = y; }\n}\n");
+        assertEquals(Set.of("<init>(int, int)"), t.getCallables().keySet());
+        assertFalse(t.getCallables().get("<init>(int, int)").isImplicit());
+    }
+
+    @Test
+    void build_recordDeclaringACompactConstructorGetsNoImplicitOne() {
+        // The compact constructor IS the canonical one, and Signatures mints both keys the same way, so
+        // it must occupy the canonical slot rather than sitting beside a synthesized duplicate.
+        JType t = buildFirstType("package p;\nrecord Point(int x, int y) {\n  Point {\n    check(x);\n  }\n}\n");
+        assertEquals(Set.of("<init>(int, int)"), t.getCallables().keySet());
+        assertFalse(t.getCallables().get("<init>(int, int)").isImplicit());
+    }
+
+    @Test
+    void build_classWithNoDeclaredConstructorGetsTheImplicitNoArgOne() {
+        JType t = buildFirstType("package p;\nclass Foo {\n  void inc() {}\n}\n");
+        JCallable ctor = t.getCallables().get("<init>()");
+        assertNotNull(ctor, "got: " + t.getCallables().keySet());
+        assertTrue(ctor.isImplicit());
+    }
+
+    @Test
+    void build_classDeclaringAnyConstructorGetsNoImplicitOne() {
+        // Suppression is by *any* declared constructor, not just a no-arg one: `new Foo()` does not
+        // compile here, so emitting <init>() would invent a callable the language does not provide.
+        JType t = buildFirstType("package p;\nclass Foo {\n  Foo(int x) {}\n}\n");
+        assertEquals(Set.of("<init>(int)"), t.getCallables().keySet());
+    }
+
+    @Test
+    void build_enumWithNoDeclaredConstructorGetsTheImplicitOne() {
+        JType t = buildFirstType("package p;\nenum Color { RED, GREEN }\n");
+        assertTrue(t.getCallables().get("<init>()").isImplicit(), "got: " + t.getCallables().keySet());
+    }
+
+    @Test
+    void build_interfaceAndAnnotationGetNoImplicitConstructor() {
+        assertTrue(buildFirstType("package p;\ninterface I {\n  void m();\n}\n").getCallables()
+                .keySet().stream().noneMatch(s -> s.startsWith("<init>")));
+        assertTrue(buildFirstType("package p;\n@interface A {}\n").getCallables().isEmpty());
     }
 
     @Test

@@ -6,6 +6,7 @@ import com.github.javaparser.ast.body.BodyDeclaration;
 import com.github.javaparser.ast.body.CallableDeclaration;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.CompactConstructorDeclaration;
+import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.EnumConstantDeclaration;
 import com.github.javaparser.ast.body.EnumDeclaration;
 import com.github.javaparser.ast.body.FieldDeclaration;
@@ -26,6 +27,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
@@ -106,7 +108,47 @@ public final class TypeBuilder {
             populateEnumConstants(type, (EnumDeclaration) td, typeFqnOf(td));
         }
 
+        synthesizeImplicitConstructor(type, td);
         return type;
+    }
+
+    /**
+     * Emit the constructor the language guarantees when the source declares none, so a {@code new Foo()}
+     * call site has a callable to name.
+     *
+     * <p>The rule is the JLS's, checked against the compiler rather than inferred: a class or an enum gets
+     * one only when it declares <em>no</em> constructor at all, a record gets its canonical constructor
+     * unless a canonical one is declared, and an interface or annotation never gets one.
+     */
+    private void synthesizeImplicitConstructor(JType type, TypeDeclaration<?> td) {
+        if (td instanceof AnnotationDeclaration
+                || (td instanceof ClassOrInterfaceDeclaration && ((ClassOrInterfaceDeclaration) td).isInterface())) {
+            return;
+        }
+        String signature;
+        if (td instanceof RecordDeclaration) {
+            // A *non-canonical* constructor does not suppress the canonical one — `record R(int x, int y)
+            // { R(int x) {...} }` genuinely compiles to both. Testing for the canonical signature makes
+            // that fall out, and a declared compact constructor is already keyed under it.
+            signature = Signatures.typeErasure((RecordDeclaration) td);
+            if (type.getCallables().containsKey(signature)) {
+                return;
+            }
+        } else {
+            // A class or enum is suppressed by *any* declared constructor, not just a no-arg one.
+            if (td.getMembers().stream().anyMatch(m -> m instanceof ConstructorDeclaration)) {
+                return;
+            }
+            signature = "<init>()";
+        }
+        addCallable(type, callableBuilder.buildImplicitConstructor(type.getId(), signature));
+    }
+
+    /** Add a callable, keeping the signature-sorted ordering {@link #populateMembers} establishes. */
+    private static void addCallable(JType type, JCallable callable) {
+        Map<String, JCallable> merged = new TreeMap<>(type.getCallables());
+        merged.put(callable.getSignature(), callable);
+        type.setCallables(new LinkedHashMap<>(merged));
     }
 
     /**
@@ -143,6 +185,11 @@ public final class TypeBuilder {
                 body.setSpan(ctx.spanOf(ecd));
                 // The enum itself is the supertype the constant's body specialises.
                 body.setBaseTypes(List.of(typeFqn));
+                // No implicit constructor is synthesized here, unlike for an anonymous class. Which enum
+                // constructor a constant invokes is not recoverable: a resolved enum constant exposes only
+                // its name and type, so naming the generated constructor would mean reimplementing overload
+                // resolution over the constant's arguments. Nothing is lost — a constant is not a call site,
+                // so no edge could point at it (see the enum-constructor contract in the L2 design).
                 populateMembers(body, ecd.getClassBody(), typeFqn);
                 constantBodies.put(name, body);
             }
@@ -196,7 +243,32 @@ public final class TypeBuilder {
         }
 
         populateMembers(type, creation.getAnonymousClassBody().orElseGet(NodeList::new), supertype);
+        anonymousConstructor(creation)
+                .ifPresent(signature -> addCallable(type, callableBuilder.buildImplicitConstructor(type.getId(), signature)));
         return type;
+    }
+
+    /**
+     * The signature of an anonymous class's generated constructor, which forwards the creation site's
+     * arguments to the superclass.
+     *
+     * <p>Resolving the creation names it directly: {@code new Thread("x") { ... }} resolves to
+     * {@code Thread.<init>(java.lang.String)}, which is also the generated constructor's own signature.
+     * That is what lets a call site's {@code dst} be the anonymous class's own constructor rather than a
+     * composed {@code (receiver_type, callee_signature)} pair — which for {@code new Runnable() { ... }}
+     * would name {@code java.lang.Runnable.<init>()}, a constructor that cannot exist because interfaces
+     * have none.
+     *
+     * <p>An unresolvable creation yields nothing rather than a guess. {@code <init>()} would be wrong for
+     * every anonymous class that takes arguments, and the same site is unresolvable downstream too, so no
+     * edge will point here to dangle.
+     */
+    private static Optional<String> anonymousConstructor(ObjectCreationExpr creation) {
+        try {
+            return Optional.of(Signatures.typeErasure(creation.resolve()));
+        } catch (Throwable e) {
+            return Optional.empty();
+        }
     }
 
     private static boolean resolvesToInterface(ObjectCreationExpr creation) {
