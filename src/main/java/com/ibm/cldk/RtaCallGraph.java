@@ -78,6 +78,11 @@ public final class RtaCallGraph {
             AnalysisScope scope = ScopeUtils.createScope(input, dependencies, build);
             IClassHierarchy cha =
                     ClassHierarchyFactory.make(scope, new ECJClassLoaderFactory(scope.getExclusions()));
+            // Surface the application-class count: when it is far below the number of compiled classes,
+            // the WALA scope admitted only a fraction of the project (e.g. a dependency jar shadowing the
+            // project's own classes into the Extension loader), and the rta overlay will be thin.
+            Log.info("RTA class hierarchy: " + cha.getNumberOfClasses() + " total classes, "
+                    + AnalysisUtils.getNumberOfApplicationClasses(cha) + " application classes");
 
             AnalysisOptions options = new AnalysisOptions();
             options.setEntrypoints(AnalysisUtils.getEntryPoints(cha));

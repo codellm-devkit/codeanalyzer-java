@@ -22,15 +22,21 @@ import com.ibm.wala.types.ClassLoaderReference;
 import com.ibm.wala.util.config.FileOfClasses;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
+import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import org.apache.commons.io.FileUtils;
+import org.objectweb.asm.ClassReader;
 
 public class ScopeUtils {
 
@@ -79,25 +85,8 @@ public class ScopeUtils {
     }
     setStdLibs(stdlibs);
 
-    // -------------------------------------
-    // Add extra user provided JARS to scope
-    // -------------------------------------
-    if (!(applicationDeps == null)) {
-      Log.info("Loading user specified extra libs.");
-      Objects.requireNonNull(jarFilesStream(applicationDeps)).stream()
-          .forEach(
-              extraLibJar -> {
-                Log.info("-> Adding dependency " + extraLibJar + " to javaee scope.");
-                try {
-                  scope.addToScope(ClassLoaderReference.Extension, new JarFile(extraLibJar.toAbsolutePath().toFile()));
-                } catch (IOException e) {
-                  throw new RuntimeException(e);
-                }
-              });
-    } else {
-      Log.warn("No extra libraries to process.");
-    }
-
+    // Build the application classes first: their names are needed to keep a dependency jar from
+    // shadowing them (see below), so this must precede adding the dependency jars.
     Path path = Paths.get(FileUtils.getTempDirectory().getAbsolutePath(), UUID.randomUUID().toString());
     String tmpDirString = Files.createDirectories(path).toFile().getAbsolutePath();
     Path workDir = Paths.get(tmpDirString);
@@ -113,6 +102,36 @@ public class ScopeUtils {
           + "compiled classes. Check the build output above and that the input path is correct.");
       throw new RuntimeException("No application classes found.");
     }
+    Set<String> applicationClassNames = applicationClassInternalNames(applicationClassFiles);
+
+    // -------------------------------------
+    // Add extra user provided JARS to scope — but SKIP any jar that redefines an application class.
+    // WALA loads a class under whichever loader defines it, and a duplicate in the Extension (library)
+    // scope shadows the copy in the Application scope, dropping it from `isApplicationClass` and thus
+    // from the call graph / IRs. A project that depends on a released copy of itself (a common
+    // benchmark/comparison setup, e.g. commons-lang's test-scoped `commons-lang3`) would otherwise lose
+    // most of its own classes to the shadowing jar. Excluding such jars keeps the project's own bytecode
+    // authoritative.
+    // -------------------------------------
+    if (applicationDeps != null) {
+      Log.info("Loading user specified extra libs.");
+      for (Path extraLibJar : Objects.requireNonNull(jarFilesStream(applicationDeps))) {
+        if (shadowsApplicationClass(extraLibJar, applicationClassNames)) {
+          Log.warn("-> Skipping dependency " + extraLibJar
+              + " — it redefines application classes, which would shadow the project's own in analysis.");
+          continue;
+        }
+        Log.info("-> Adding dependency " + extraLibJar + " to javaee scope.");
+        try {
+          scope.addToScope(ClassLoaderReference.Extension, new JarFile(extraLibJar.toAbsolutePath().toFile()));
+        } catch (IOException e) {
+          throw new RuntimeException(e);
+        }
+      }
+    } else {
+      Log.warn("No extra libraries to process.");
+    }
+
     Log.info("Adding application classes to scope.");
     applicationClassFiles.forEach(
         applicationClassFile -> {
@@ -125,6 +144,36 @@ public class ScopeUtils {
         });
 
     return scope;
+  }
+
+  /** The internal names ({@code org/example/Foo}) of the compiled application classes, from their bytes. */
+  private static Set<String> applicationClassInternalNames(List<Path> classFiles) {
+    Set<String> names = new HashSet<>();
+    for (Path classFile : classFiles) {
+      try (InputStream in = Files.newInputStream(classFile)) {
+        names.add(new ClassReader(in).getClassName());
+      } catch (IOException e) {
+        Log.debug("Could not read class name from " + classFile + ": " + e.getMessage());
+      }
+    }
+    return names;
+  }
+
+  /** Whether {@code jar} defines any of {@code applicationClassNames} — i.e. would shadow the project. */
+  private static boolean shadowsApplicationClass(Path jar, Set<String> applicationClassNames) {
+    try (JarFile jarFile = new JarFile(jar.toAbsolutePath().toFile())) {
+      Enumeration<JarEntry> entries = jarFile.entries();
+      while (entries.hasMoreElements()) {
+        String name = entries.nextElement().getName();
+        if (name.endsWith(".class")
+            && applicationClassNames.contains(name.substring(0, name.length() - ".class".length()))) {
+          return true;
+        }
+      }
+    } catch (IOException e) {
+      Log.debug("Could not scan dependency jar " + jar + ": " + e.getMessage());
+    }
+    return false;
   }
 
   private static AnalysisScope addDefaultExclusions(AnalysisScope scope)
