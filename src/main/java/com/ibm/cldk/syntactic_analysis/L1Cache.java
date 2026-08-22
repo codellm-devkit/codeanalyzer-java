@@ -58,7 +58,7 @@ public final class L1Cache {
         }
         try (Reader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
             Envelope envelope =
-                    V2Json.compact().fromJson(reader, new TypeToken<Envelope>() {}.getType());
+                    V2Json.cache().fromJson(reader, new TypeToken<Envelope>() {}.getType());
             if (envelope == null || envelope.getModules() == null) {
                 return new LinkedHashMap<>();
             }
@@ -90,7 +90,7 @@ public final class L1Cache {
         try {
             Files.createDirectories(cacheDir);
             try (Writer writer = Files.newBufferedWriter(fileIn(cacheDir), StandardCharsets.UTF_8)) {
-                V2Json.compact().toJson(envelope, writer);
+                V2Json.cache().toJson(envelope, writer);
             }
         } catch (IOException e) {
             Log.warn("Could not write analysis cache to " + cacheDir + ": " + e.getMessage());

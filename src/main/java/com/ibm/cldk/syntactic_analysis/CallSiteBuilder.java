@@ -111,6 +111,7 @@ public final class CallSiteBuilder {
                 node.setCalleeSignature(Signatures.typeErasure(resolved));
                 node.setIsStaticCall(resolved.isStatic());
                 node.setAccessibility(accessibilityOf(resolved.accessSpecifier()));
+                node.setDeclaringTypeHint(BinaryNames.of(resolved.declaringType()));
             } catch (Throwable e) {
                 Log.debug("Could not resolve call: " + call + ": " + e.getMessage());
             }
@@ -126,6 +127,13 @@ public final class CallSiteBuilder {
                 ResolvedConstructorDeclaration resolved = creation.resolve();
                 node.setCalleeSignature(Signatures.typeErasure(resolved));
                 node.setAccessibility(accessibilityOf(resolved.accessSpecifier()));
+                // An anonymous creation resolves its declaring type to the named super/interface
+                // (java.lang.Runnable), but dst must be the anon class's OWN constructor (§1). Composing
+                // that declaring type would fabricate a Runnable.<init>() endpoint, so the hint is left
+                // for L2 to fill by AST-node identity; only a plain `new Foo()` gets it here.
+                if (creation.getAnonymousClassBody().isEmpty()) {
+                    node.setDeclaringTypeHint(BinaryNames.of(resolved.declaringType()));
+                }
             } catch (Throwable e) {
                 Log.debug("Could not resolve constructor call: " + creation + ": " + e.getMessage());
             }
@@ -138,6 +146,7 @@ public final class CallSiteBuilder {
                 node.setAccessibility(accessibilityOf(resolved.accessSpecifier()));
                 node.setReceiverType(resolved.declaringType().getQualifiedName());
                 node.setReturnType(resolved.declaringType().getQualifiedName());
+                node.setDeclaringTypeHint(BinaryNames.of(resolved.declaringType()));
             } catch (Throwable e) {
                 Log.debug("Could not resolve constructor invocation: " + site + ": " + e.getMessage());
             }

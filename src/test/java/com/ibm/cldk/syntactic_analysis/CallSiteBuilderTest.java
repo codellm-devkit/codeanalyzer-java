@@ -279,4 +279,52 @@ class CallSiteBuilderTest {
         assertNotNull(node.getComment());
         assertTrue(node.getComment().getContent().contains("delegate to the full constructor"));
     }
+
+    @Test
+    void build_recordsDeclaringTypeHintDistinctFromReceiverTypeOnInheritedCalls() {
+        // getClass() is declared on java.lang.Object though the receiver is a String. `dst` needs the
+        // DECLARING type, and this is exactly where it diverges from receiver_type (§Background) — so
+        // the hint captures Object, not String.
+        JBodyNode node = build("package p;\nclass Foo {\n  void m() {\n    \"abc\".getClass();\n  }\n}\n")
+                .get("4:11");
+        assertEquals("java.lang.String", node.getReceiverType());
+        assertEquals("java.lang.Object", node.getDeclaringTypeHint());
+    }
+
+    @Test
+    void build_declaringTypeHintUsesTheBinaryDollarNameForNestedTypes() {
+        // Map.Entry is nested; its binary name is java.util.Map$Entry — the spelling WALA emits and the
+        // L2 index keys on, so a dotted java.util.Map.Entry would never join.
+        String source = "package p;\nimport java.util.Map;\n"
+                + "class Foo {\n  void m(Map.Entry<String, String> e) {\n    e.getKey();\n  }\n}\n";
+        JBodyNode node = build(source).values().stream()
+                .filter(n -> "getKey".equals(n.getMethodName())).findFirst().orElseThrow();
+        assertEquals("java.util.Map$Entry", node.getDeclaringTypeHint());
+    }
+
+    @Test
+    void build_recordsDeclaringTypeHintForConstructorCalls() {
+        JBodyNode node = build("package p;\nclass Foo {\n  void m() {\n    new StringBuilder();\n  }\n}\n")
+                .get("4:9");
+        assertEquals("java.lang.StringBuilder", node.getDeclaringTypeHint());
+    }
+
+    @Test
+    void build_leavesDeclaringTypeHintAbsentForUnresolvedCalls() {
+        JBodyNode node = build("package p;\nclass Foo {\n  void m() {\n    mystery(x);\n  }\n}\n").get("4:5");
+        assertNull(node.getDeclaringTypeHint(), "no declaring type is known for an unresolved callee");
+    }
+
+    @Test
+    void build_leavesDeclaringTypeHintAbsentForAnonymousClassCreations() {
+        // new Runnable(){...} resolves its declaring type to java.lang.Runnable, but dst must be the
+        // anonymous class's OWN constructor (§1). Composing java.lang.Runnable.<init>() here would
+        // manufacture a false endpoint; L1 leaves the hint for L2 to fill by AST-node identity.
+        String source = "package p;\nclass Foo {\n  void m() {\n"
+                + "    Runnable r = new Runnable() { public void run() {} };\n  }\n}\n";
+        JBodyNode node = build(source).values().stream()
+                .filter(JBodyNode::isConstructorCall).findFirst().orElseThrow();
+        assertNull(node.getDeclaringTypeHint(),
+                "an anonymous creation's declaring-type hint is deferred to L2's node-identity match");
+    }
 }

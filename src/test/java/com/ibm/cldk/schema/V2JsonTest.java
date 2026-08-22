@@ -2,6 +2,7 @@ package com.ibm.cldk.schema;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.javaparser.JavaParser;
@@ -154,5 +155,38 @@ class V2JsonTest {
         // `line:col`, never the full `<callable-id>@line:col` form.
         String key = theMethod().getAsJsonObject("body").keySet().iterator().next();
         assertTrue(key.matches("\\d+:\\d+"), "expected a bare local id, got: " + key);
+    }
+
+    @Test
+    void declaringTypeHintIsExcludedFromThePayload() {
+        // The declaring-type hint is L2 backfill plumbing (§4), not schema surface. The strict gate
+        // (`additionalProperties: false`) would reject the payload outright if it leaked.
+        JBodyNode node = new JBodyNode();
+        node.setKind("call");
+        node.setDeclaringTypeHint("java.util.Map$Entry");
+        JsonObject json = V2Json.compact().toJsonTree(node).getAsJsonObject();
+        assertFalse(json.has("declaring_type_hint"), "the hint must never reach the emitted payload");
+    }
+
+    @Test
+    void declaringTypeHintIsRetainedByTheCacheGson() {
+        // The cache Gson keeps the hint, or a warm-cache `-c` run loses the L2 `callee` backfill —
+        // a bug that only appears on a second run.
+        JBodyNode node = new JBodyNode();
+        node.setKind("call");
+        node.setDeclaringTypeHint("java.util.Map$Entry");
+        JsonObject json = V2Json.cache().toJsonTree(node).getAsJsonObject();
+        assertTrue(json.has("declaring_type_hint"), "the cache must carry the hint");
+        assertEquals("java.util.Map$Entry", json.get("declaring_type_hint").getAsString());
+    }
+
+    @Test
+    void payloadGsonAlsoDropsTheDeclaringTypeHintOnRead() {
+        // An ExclusionStrategy skips a field in BOTH directions — which is precisely why L1Cache.load
+        // cannot use the payload Gson: it would read the hint back as absent even from a cache file
+        // that carries it. The cache round-trip test guards the pairing; this pins the mechanism.
+        String json = "{\"kind\":\"call\",\"declaring_type_hint\":\"java.util.Map$Entry\"}";
+        JBodyNode node = V2Json.compact().fromJson(json, JBodyNode.class);
+        assertNull(node.getDeclaringTypeHint(), "the payload Gson must not read the hint either");
     }
 }
