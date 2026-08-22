@@ -142,6 +142,9 @@ dependencies {
     testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.1'
 
     // SLF4J - for TestContainers logging
+    // Validates emitted analysis.json against the canonical v2 JSON Schema (the L1 conformance oracle
+    // until the SDK's v2 models exist).
+    testImplementation 'com.networknt:json-schema-validator:1.5.1'
     testImplementation 'org.slf4j:slf4j-api:2.0.9'
     testImplementation 'org.slf4j:slf4j-simple:2.0.9'
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
@@ -149,14 +152,38 @@ dependencies {
 }
 
 test {
-    useJUnitPlatform()
+    useJUnitPlatform {
+        // Whole-application conformance runs take minutes (full symbol resolution over real projects),
+        // so they are opt-in via `realWorldConformanceTest` rather than part of the inner loop.
+        excludeTags 'realworld'
+    }
     // Optional: Enable TestContainers reuse to speed up tests
     systemProperty 'testcontainers.reuse.enable', 'true'
 }
 
+// The L1 conformance gate over the real-world fixture applications (git submodules).
+tasks.register('realWorldConformanceTest', Test) {
+    description = 'Runs the L1 conformance gate over the real-world fixture applications.'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform {
+        includeTags 'realworld'
+    }
+    // These projects are large; give the JVM room and do not let a slow app fail the run spuriously.
+    maxHeapSize = '4g'
+    testLogging {
+        events 'passed', 'failed', 'skipped'
+        showStandardStreams = false
+    }
+}
+
 spotless {
     java {
-        target 'src/**/*.java'
+        // Format only the analyzer's own sources. Test-application fixtures under
+        // src/test/resources (vendored apps and git submodules) are third-party inputs and must
+        // not be reformatted — doing so mutates test inputs and dirties submodule working trees.
+        target 'src/main/java/**/*.java', 'src/test/java/**/*.java'
         trimTrailingWhitespace()
         endWithNewline()
         importOrder()

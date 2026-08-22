@@ -196,3 +196,6 @@ gradle-app.setting
 bin/
 etc/
 /src/test/resources/sample_apps/daytrader8/output/
+
+# Ad-hoc analysis output from manual v1/v2 comparison runs
+output/

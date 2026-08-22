@@ -1,0 +1,323 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codellm-devkit.info/schema/java/analysis.v2.schema.json",
+  "title": "CLDK canonical analysis schema v2 (Java, level 1)",
+  "description": "Conformance oracle for codeanalyzer-java's v2 output. Encodes the canonical CPG shape: an envelope carrying one application node, whose containment tree is named maps down to callable depth, with body nodes keyed by local id. Strict (additionalProperties: false) so an accidentally renamed or stray key fails the gate rather than silently reaching consumers. Replace with the SDK's v2 models once they exist.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "language", "max_level", "application"],
+  "properties": {
+    "schema_version": { "const": "2.0.0" },
+    "language": { "const": "java" },
+    "max_level": { "type": "integer", "minimum": 1, "maximum": 4 },
+    "k_limit": { "type": "integer", "minimum": 1 },
+    "analyzer": { "$ref": "#/$defs/analyzer" },
+    "application": { "$ref": "#/$defs/application" }
+  },
+  "$defs": {
+    "analyzer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string" }
+      }
+    },
+
+    "canId": {
+      "type": "string",
+      "pattern": "^can://java/",
+      "description": "Durable id for nodes at or above callable depth."
+    },
+
+    "localId": {
+      "type": "string",
+      "pattern": "^(\\d+:\\d+|@[A-Za-z0-9_:.$/-]+)$",
+      "description": "Body-node id within a callable: a line:col position, or an @tag for a synthetic vertex."
+    },
+
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end", "bytes"],
+      "properties": {
+        "start": { "$ref": "#/$defs/position" },
+        "end": { "$ref": "#/$defs/position" },
+        "bytes": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[from, to) UTF-8 offsets into module.source, so node text is an O(1) slice."
+        }
+      }
+    },
+    "position": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0 },
+      "minItems": 2,
+      "maxItems": 2
+    },
+
+    "comment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content"],
+      "properties": {
+        "content": { "type": "string" },
+        "span": { "$ref": "#/$defs/span" },
+        "is_javadoc": { "type": "boolean" }
+      }
+    },
+
+    "decorator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "span": { "$ref": "#/$defs/span" }
+      }
+    },
+
+    "import": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "name": { "type": "string" },
+        "path": { "type": "string", "minLength": 1 },
+        "span": { "$ref": "#/$defs/span" },
+        "is_static": { "type": "boolean" },
+        "is_wildcard": { "type": "boolean" }
+      }
+    },
+
+    "stringList": { "type": "array", "items": { "type": "string" } },
+
+    "application": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "symbol_table"],
+      "properties": {
+        "id": { "$ref": "#/$defs/canId" },
+        "kind": { "const": "application" },
+        "symbol_table": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^(?!/)(?!.*\\.\\.).*$",
+            "description": "Keys are project-relative paths: never absolute, never escaping the root."
+          },
+          "additionalProperties": { "$ref": "#/$defs/module" }
+        },
+        "call_graph": { "type": "array" },
+        "param_in": { "type": "array" },
+        "param_out": { "type": "array" }
+      }
+    },
+
+    "module": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "source"],
+      "properties": {
+        "id": { "$ref": "#/$defs/canId" },
+        "kind": { "const": "module" },
+        "span": { "$ref": "#/$defs/span" },
+        "package": { "type": "string" },
+        "source": { "type": "string" },
+        "comments": { "type": "array", "items": { "$ref": "#/$defs/comment" } },
+        "imports": { "type": "array", "items": { "$ref": "#/$defs/import" } },
+        "types": { "type": "object", "additionalProperties": { "$ref": "#/$defs/type" } },
+        "content_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+
+    "type": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/canId" },
+        "kind": { "enum": ["class", "interface", "enum", "record", "annotation"] },
+        "span": { "$ref": "#/$defs/span" },
+        "comments": { "type": "array", "items": { "$ref": "#/$defs/comment" } },
+        "modifiers": { "$ref": "#/$defs/stringList" },
+        "base_types": { "$ref": "#/$defs/stringList" },
+        "interfaces": { "$ref": "#/$defs/stringList" },
+        "decorators": { "type": "array", "items": { "$ref": "#/$defs/decorator" } },
+        "type_parameters": { "type": "array", "items": { "$ref": "#/$defs/typeParameter" } },
+        "is_entrypoint_class": { "type": "boolean" },
+        "enum_constants": { "type": "array", "items": { "$ref": "#/$defs/enumConstant" } },
+        "record_components": { "type": "array", "items": { "$ref": "#/$defs/recordComponent" } },
+        "fields": { "type": "object", "additionalProperties": { "$ref": "#/$defs/field" } },
+        "callables": { "type": "object", "additionalProperties": { "$ref": "#/$defs/callable" } },
+        "types": { "type": "object", "additionalProperties": { "$ref": "#/$defs/type" } }
+      }
+    },
+
+    "enumConstant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "arguments": { "$ref": "#/$defs/stringList" },
+        "span": { "$ref": "#/$defs/span" },
+        "comments": { "type": "array", "items": { "$ref": "#/$defs/comment" } },
+        "decorators": { "type": "array", "items": { "$ref": "#/$defs/decorator" } }
+      }
+    },
+
+    "recordComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "type": "string" },
+        "span": { "$ref": "#/$defs/span" },
+        "modifiers": { "$ref": "#/$defs/stringList" },
+        "decorators": { "type": "array", "items": { "$ref": "#/$defs/decorator" } },
+        "comments": { "type": "array", "items": { "$ref": "#/$defs/comment" } },
+        "is_variadic": { "type": "boolean" }
+      }
+    },
+
+    "typeParameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "bounds": { "$ref": "#/$defs/stringList" },
+        "span": { "$ref": "#/$defs/span" },
+        "decorators": { "type": "array", "items": { "$ref": "#/$defs/decorator" } }
+      }
+    },
+
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "name", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/canId" },
+        "kind": { "const": "field" },
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "type": "string" },
+        "span": { "$ref": "#/$defs/span" },
+        "modifiers": { "$ref": "#/$defs/stringList" },
+        "decorators": { "type": "array", "items": { "$ref": "#/$defs/decorator" } },
+        "comments": { "type": "array", "items": { "$ref": "#/$defs/comment" } },
+        "initializer": { "type": "string" }
+      }
+    },
+
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "span": { "$ref": "#/$defs/span" },
+        "modifiers": { "$ref": "#/$defs/stringList" },
+        "decorators": { "type": "array", "items": { "$ref": "#/$defs/decorator" } },
+        "is_variadic": { "type": "boolean" }
+      }
+    },
+
+    "callable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "signature"],
+      "properties": {
+        "id": { "$ref": "#/$defs/canId" },
+        "kind": { "enum": ["method", "constructor", "initializer", "lambda"] },
+        "signature": { "type": "string", "minLength": 1 },
+        "span": { "$ref": "#/$defs/span" },
+        "body_span": { "$ref": "#/$defs/span" },
+        "comments": { "type": "array", "items": { "$ref": "#/$defs/comment" } },
+        "parameters": { "type": "array", "items": { "$ref": "#/$defs/parameter" } },
+        "return_type": { "type": "string" },
+        "error_channel": { "$ref": "#/$defs/stringList" },
+        "modifiers": { "$ref": "#/$defs/stringList" },
+        "decorators": { "type": "array", "items": { "$ref": "#/$defs/decorator" } },
+        "type_parameters": { "type": "array", "items": { "$ref": "#/$defs/typeParameter" } },
+        "declaration": { "type": "string" },
+        "is_implicit": { "type": "boolean" },
+        "is_entrypoint": { "type": "boolean" },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "cyclomatic": { "type": "integer", "minimum": 1 } }
+        },
+        "refs": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "types": { "$ref": "#/$defs/stringList" },
+            "fields": { "$ref": "#/$defs/stringList" }
+          }
+        },
+        "local_variables": { "type": "array", "items": { "$ref": "#/$defs/variable" } },
+        "body": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/localId" },
+          "additionalProperties": { "$ref": "#/$defs/bodyNode" }
+        },
+        "cfg": { "type": "array" },
+        "cdg": { "type": "array" },
+        "ddg": { "type": "array" },
+        "summary": { "type": "array" },
+        "types": { "type": "object", "additionalProperties": { "$ref": "#/$defs/type" } }
+      }
+    },
+
+    "variable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "type": "string" },
+        "initializer": { "type": "string" },
+        "span": { "$ref": "#/$defs/span" },
+        "comments": { "type": "array", "items": { "$ref": "#/$defs/comment" } }
+      }
+    },
+
+    "bodyNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "call", "statement", "return", "branch", "loop", "switch",
+            "entry", "exit", "formal_in", "formal_out", "actual_in", "actual_out",
+            "expression", "block"
+          ]
+        },
+        "span": { "$ref": "#/$defs/span" },
+        "parent": { "$ref": "#/$defs/localId" },
+        "of": { "type": "string" },
+        "callee": { "$ref": "#/$defs/canId" },
+        "arguments": { "type": "array", "items": { "$ref": "#/$defs/localId" } },
+        "receiver_expr": { "type": "string" },
+        "receiver_type": { "type": "string" },
+        "argument_types": { "$ref": "#/$defs/stringList" },
+        "argument_expr": { "$ref": "#/$defs/stringList" },
+        "callee_signature": { "type": "string" },
+        "is_static_call": { "type": "boolean" },
+        "is_constructor_call": { "type": "boolean" },
+        "method_name": { "type": "string" },
+        "return_type": { "type": "string" },
+        "accessibility": { "enum": ["public", "protected", "private", "package_private"] },
+        "comment": { "$ref": "#/$defs/comment" }
+      }
+    }
+  }
+}

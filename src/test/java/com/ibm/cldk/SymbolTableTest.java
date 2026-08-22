@@ -78,8 +78,10 @@ public class SymbolTableTest {
         String javaCode = getJavaCodeForTestResource("test-applications/generics-varargs-duplicate-signature-test/Validate.java");
         Map<String, Type> typeDeclaration = SymbolTable.extractSingle(javaCode).getLeft()
                 .values().iterator().next().getTypeDeclarations();
+        // `<T extends Collection<?>>` erases to the raw bound, so the key carries no type arguments —
+        // which is what lets the WALA call graph's descriptor-derived signature find this callable.
         Callable callable = typeDeclaration.values().iterator().next().getCallableDeclarations()
-                .get("notEmpty(java.util.Collection<?>, java.lang.String, java.lang.Object[])");
+                .get("notEmpty(java.util.Collection, java.lang.String, java.lang.Object[])");
         Assertions.assertNotNull(callable);
         for (CallSite callSite : callable.getCallSites()) {
             if (callSite.getMethodName().equals("requireNonNull")) {
