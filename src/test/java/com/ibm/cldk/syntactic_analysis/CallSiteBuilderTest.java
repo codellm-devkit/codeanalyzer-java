@@ -316,15 +316,15 @@ class CallSiteBuilderTest {
     }
 
     @Test
-    void build_leavesDeclaringTypeHintAbsentForAnonymousClassCreations() {
+    void build_withoutAnAnonymousConstructorMapLeavesTheHintAbsentRatherThanFabricated() {
         // new Runnable(){...} resolves its declaring type to java.lang.Runnable, but dst must be the
-        // anonymous class's OWN constructor (§1). Composing java.lang.Runnable.<init>() here would
-        // manufacture a false endpoint; L1 leaves the hint for L2 to fill by AST-node identity.
+        // anonymous class's OWN constructor (§1), supplied via the anon-constructor map. This bare
+        // build() has no such map, so it emits nothing rather than composing a false Runnable endpoint.
         String source = "package p;\nclass Foo {\n  void m() {\n"
                 + "    Runnable r = new Runnable() { public void run() {} };\n  }\n}\n";
         JBodyNode node = build(source).values().stream()
                 .filter(JBodyNode::isConstructorCall).findFirst().orElseThrow();
         assertNull(node.getDeclaringTypeHint(),
-                "an anonymous creation's declaring-type hint is deferred to L2's node-identity match");
+                "with no anon-constructor mapping the hint stays absent, never a fabricated declaring type");
     }
 }

@@ -27,10 +27,12 @@ import java.util.TreeMap;
  * external symbol. Deriving the index from the payload rather than registering it during L1 keeps L1
  * free of cross-module state and makes a warm-cache run compute exactly what a cold run does.
  *
- * <p>Resolution order, first match wins (anonymous-creation node identity — the {@code can://}-prefixed
- * hint — is a later addition; today's hints are all binary type names or absent):
+ * <p>Resolution order, first match wins. The hint is a discriminated union — a {@code can://} id when
+ * L1 resolved the site locally (an anonymous creation), a binary type name otherwise:
  *
  * <ol>
+ *   <li><b>Node identity.</b> The hint is a {@code can://} id (an anonymous creation, resolved by L1 to
+ *       its own constructor) → that id, once confirmed present in the tree.
  *   <li><b>In-project hit.</b> The hint's binary name is an in-project type <em>and</em> the composed
  *       callable id is present in the tree → that callable's id. A {@code declared} edge.
  *   <li><b>Signature-miss.</b> The type is in-project but no such callable exists → nothing (homing it
@@ -184,9 +186,17 @@ public final class L2CallGraph {
             Set<String> callableIds,
             Map<String, JExternalSymbol> externalSymbols) {
         String hint = node.getDeclaringTypeHint();
+        if (hint == null) {
+            return null; // the site did not resolve
+        }
+        if (hint.startsWith(CanId.SCHEME)) {
+            // Case 1: L1 already resolved an anonymous creation to its own constructor by node identity
+            // and stored that can-id. Use it directly; the membership check keeps no-dangling structural.
+            return callableIds.contains(hint) ? hint : null;
+        }
         String signature = node.getCalleeSignature();
-        if (hint == null || signature == null) {
-            return null; // the site did not resolve, so there is nothing to compose
+        if (signature == null) {
+            return null; // resolved the type but not a signature to compose
         }
         String typeId = index.get(hint);
         if (typeId != null) {

@@ -53,6 +53,16 @@ public final class CallSiteBuilder {
     }
 
     public Map<String, JBodyNode> build(BlockStmt body) {
+        return build(body, Map.of());
+    }
+
+    /**
+     * As {@link #build(BlockStmt)}, but with the map from each anonymous {@code new} creation in this
+     * body to its own generated constructor's {@code can://} id. An anonymous creation's call site takes
+     * that id as its declaring-type hint — matched by AST node identity — so L2 points the edge at the
+     * anonymous class's constructor rather than fabricating one on the resolved super/interface (§1).
+     */
+    public Map<String, JBodyNode> build(BlockStmt body, Map<ObjectCreationExpr, String> anonymousConstructorIds) {
         List<Node> sites = new ArrayList<>();
         body.findAll(MethodCallExpr.class).stream().filter(n -> AstScopes.belongsDirectlyTo(n, body)).forEach(sites::add);
         body.findAll(ObjectCreationExpr.class).stream().filter(n -> AstScopes.belongsDirectlyTo(n, body)).forEach(sites::add);
@@ -79,7 +89,7 @@ public final class CallSiteBuilder {
             node.setArgumentExpr(args.stream().map(Object::toString).collect(Collectors.toList()));
             node.setArgumentTypes(
                     args.stream().map(ctx::resolveExpressionType).collect(Collectors.toList()));
-            enrich(node, site);
+            enrich(node, site, anonymousConstructorIds);
             nodes.put(localId(site), node);
         }
         return nodes;
@@ -89,7 +99,7 @@ public final class CallSiteBuilder {
      * Fill in the resolved call-site facts, degrading silently when resolution fails (a missing
      * dependency must thin the node's data, never drop the node or fail the build).
      */
-    private void enrich(JBodyNode node, Node site) {
+    private void enrich(JBodyNode node, Node site, Map<ObjectCreationExpr, String> anonymousConstructorIds) {
         commentOn(site).ifPresent(c -> node.setComment(ctx.comment(c)));
 
         if (site instanceof MethodCallExpr) {
@@ -127,11 +137,17 @@ public final class CallSiteBuilder {
                 ResolvedConstructorDeclaration resolved = creation.resolve();
                 node.setCalleeSignature(Signatures.typeErasure(resolved));
                 node.setAccessibility(accessibilityOf(resolved.accessSpecifier()));
-                // An anonymous creation resolves its declaring type to the named super/interface
-                // (java.lang.Runnable), but dst must be the anon class's OWN constructor (§1). Composing
-                // that declaring type would fabricate a Runnable.<init>() endpoint, so the hint is left
-                // for L2 to fill by AST-node identity; only a plain `new Foo()` gets it here.
-                if (creation.getAnonymousClassBody().isEmpty()) {
+                if (creation.getAnonymousClassBody().isPresent()) {
+                    // dst is the anon class's OWN constructor, keyed to this creation by node identity
+                    // (§1). L1 stores that can-id directly — a discriminated-union hint L2 dispatches on
+                    // the can:// prefix; composing the resolved super/interface would fabricate an
+                    // endpoint (java.lang.Runnable has no constructor). Absent when the creation did not
+                    // resolve to a synthesized constructor, so the site honestly stays unresolved.
+                    String anonymousConstructorId = anonymousConstructorIds.get(creation);
+                    if (anonymousConstructorId != null) {
+                        node.setDeclaringTypeHint(anonymousConstructorId);
+                    }
+                } else {
                     node.setDeclaringTypeHint(BinaryNames.of(resolved.declaringType()));
                 }
             } catch (Throwable e) {
