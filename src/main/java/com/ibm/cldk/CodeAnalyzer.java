@@ -147,6 +147,12 @@ public class CodeAnalyzer implements Runnable {
                     + "emitting declared-only call edges without building the application.")
     private boolean noRta = false;
 
+    @Option(names = {
+            "--external-calls" }, description = "Home out-of-project call targets as external_symbols at "
+                    + "--schema v2 --analysis-level 2. Off by default, matching v1's application-only call "
+                    + "graph; when on, edges to library/JDK targets are emitted so no edge dangles.")
+    private boolean externalCalls = false;
+
     /** Handle used to report flag-validation errors as clean, non-zero picocli failures. */
     @Spec
     private CommandSpec spec;
@@ -416,7 +422,7 @@ public class CodeAnalyzer implements Runnable {
 
         Analysis analysis;
         if (analysisLevel >= 2) {
-            L2CallGraph.Result l2 = L2CallGraph.build(application, modules, rtaEndpoints);
+            L2CallGraph.Result l2 = L2CallGraph.build(application, modules, rtaEndpoints, externalCalls);
             analysis = V2Emitter.emit(
                     application, analysisLevel, modules, version, l2.callGraph(), l2.externalSymbols());
         } else {

@@ -146,6 +146,35 @@ class L2CallGraphTest {
     }
 
     @Test
+    void externalCallsOffDropsOutOfProjectTargetsButKeepsInProjectEdges() {
+        // --external-calls off (v1 parity): a call resolving outside the project is dropped entirely —
+        // no edge, no external symbol — while in-project edges are untouched.
+        String src = "package p;\nclass Foo {\n  void a() {\n    b();\n    \"x\".trim();\n  }\n  void b() {}\n}\n";
+        String a = FOO + "/a()";
+        String b = FOO + "/b()";
+        String trim = "can://java/app/@external/java.lang.String/trim()";
+
+        L2CallGraph.Result off = L2CallGraph.build(APP, modulesFrom(src), null, false);
+        assertTrue(hasEdge(off, a, b), "in-project edges are unaffected by --external-calls");
+        assertFalse(hasEdge(off, a, trim), "the external target is dropped when external calls are off");
+        assertTrue(off.externalSymbols().isEmpty(), "no external symbols emitted when off (v1 parity)");
+
+        L2CallGraph.Result on = L2CallGraph.build(APP, modulesFrom(src), null, true);
+        assertTrue(hasEdge(on, a, trim), "the external target is homed when external calls are on");
+        assertTrue(on.externalSymbols().containsKey(trim));
+    }
+
+    @Test
+    void externalCallsOffDropsRtaLibraryTargets() {
+        List<RtaEndpoint> rta = List.of(
+                new RtaEndpoint(true, "p.Foo", "a()", false, "java.util.List", "add(java.lang.Object)"));
+        L2CallGraph.Result off = L2CallGraph.build(APP, twoMethodModule(), rta, false);
+        assertTrue(off.externalSymbols().isEmpty(), "rta library targets are dropped when external calls are off");
+        assertFalse(off.callGraph().stream().anyMatch(e -> e.getDst().contains("/@external/")),
+                "no external edges when off");
+    }
+
+    @Test
     void selfRecursionEdgeIsKept() {
         // v1 dropped self-edges via a !source.equals(target) guard; direct recursion is a real edge.
         Map<String, JModule> modules = modulesFrom(

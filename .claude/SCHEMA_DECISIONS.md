@@ -358,6 +358,18 @@ them). A record's generated `equals`/`hashCode`/`toString` are a stated blind sp
 resolve those sites, so no `callee` is ever set and synthesizing them would add callables nothing points
 at.
 
+### D24 — External call edges are opt-in (`--external-calls`), off by default for v1 parity
+v1's L2 call graph kept only edges whose target is an application class; calls into the JDK or a
+library were dropped. To keep the default v2 `-a 2` output at parity during the migration,
+`external_symbols` and the edges reaching them are gated behind `--external-calls` (off by default).
+When off, a call resolving out of the project is dropped exactly like an unresolved one — no
+{@code callee}, no edge, no {@code external_symbols} entry — so no-dangling holds trivially and the
+default graph matches v1's application-only shape. When on (the design's §2 posture, D19) they are
+homed so no edge dangles. The gate is threaded through both the `declared` pass and the `rta` join;
+an empty `external_symbols`/`call_graph` is omitted rather than emitted as `{}`/`[]` (absence = no
+fact, D10), so parity is a *missing* key, not an empty one. The `L2CallGraph.build` library default
+keeps external on (it is intrinsic to L2); only the CLI defaults it off.
+
 ### Scope guard
 The analyzer is a **pure graph provider**: it emits the CFG/PDG/SDG substrate and
 stops. Slicing, taint, and reachability are **SDK queries** over the emitted graph

@@ -47,8 +47,14 @@ public final class V2Emitter {
             sorted.put(fileKey, modules.get(fileKey));
         }
         application.setSymbolTable(sorted);
-        application.setCallGraph(callGraph);
-        application.setExternalSymbols(externalSymbols);
+        // Absence means "no fact": an empty overlay is omitted, not emitted as [] / {}. This is what
+        // lets --external-calls off match v1 (no external_symbols key at all) rather than an empty map.
+        if (callGraph != null && !callGraph.isEmpty()) {
+            application.setCallGraph(callGraph);
+        }
+        if (externalSymbols != null && !externalSymbols.isEmpty()) {
+            application.setExternalSymbols(externalSymbols);
+        }
 
         Analysis analysis = new Analysis();
         analysis.setSchemaVersion("2.0.0");

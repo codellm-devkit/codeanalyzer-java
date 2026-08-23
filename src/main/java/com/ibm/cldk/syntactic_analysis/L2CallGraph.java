@@ -110,17 +110,29 @@ public final class L2CallGraph {
         }
     }
 
-    /** Declared-only: backfill {@code callee} and produce {@code declared} edges + external symbols. */
+    /** Declared-only, with out-of-project targets homed as external symbols. */
     public static Result build(String appName, Map<String, JModule> modules) {
-        return build(appName, modules, null);
+        return build(appName, modules, null, true);
+    }
+
+    /** Declared + rta overlay, with out-of-project targets homed as external symbols. */
+    public static Result build(String appName, Map<String, JModule> modules, List<RtaEndpoint> rtaEdges) {
+        return build(appName, modules, rtaEdges, true);
     }
 
     /**
-     * As {@link #build(String, Map)}, additionally joining a WALA RTA call graph (as {@link RtaEndpoint}
-     * pairs) into the edges as an {@code rta} overlay. {@code rtaEdges} may be {@code null} (declared
-     * only). The overlay never mutates {@code callee} — that is a declared-analysis refinement.
+     * The full pass: backfill {@code callee}, produce {@code declared} edges, optionally join a WALA RTA
+     * call graph (as {@link RtaEndpoint} pairs; {@code null} for declared-only) as an {@code rta}
+     * overlay, and home out-of-project targets.
+     *
+     * <p>{@code includeExternal} gates the external targets. When {@code false}, a call resolving outside
+     * the project is dropped — no {@code callee}, no edge, no {@code external_symbols} entry — matching
+     * v1's application-only call graph; the CLI defaults this off and {@code --external-calls} opts in.
+     * When {@code true} (the design's §2 posture) they are homed so no edge dangles. The overlay never
+     * mutates {@code callee} — that is a declared-analysis refinement.
      */
-    public static Result build(String appName, Map<String, JModule> modules, List<RtaEndpoint> rtaEdges) {
+    public static Result build(
+            String appName, Map<String, JModule> modules, List<RtaEndpoint> rtaEdges, boolean includeExternal) {
         // The type index (named types only) and the set of every callable id in the tree. The latter
         // turns no-dangling, the signature-miss case, and the RTA drop rules into O(1) membership checks.
         Map<String, String> typeIdByBinaryName = new HashMap<>();
@@ -141,14 +153,16 @@ public final class L2CallGraph {
         Map<String, Map<String, Integer>> declaredWeights = new TreeMap<>();
         for (JModule module : modules.values()) {
             for (JType type : module.getTypes().values()) {
-                backfillTree(type, appName, typeIdByBinaryName, callableIds, declaredWeights, externalSymbols);
+                backfillTree(type, appName, typeIdByBinaryName, callableIds, declaredWeights, externalSymbols,
+                        includeExternal);
             }
         }
 
         Map<String, Map<String, Integer>> rtaWeights = new TreeMap<>();
         if (rtaEdges != null) {
             for (RtaEndpoint edge : rtaEdges) {
-                joinRtaEdge(edge, appName, typeIdByBinaryName, callableIds, rtaWeights, externalSymbols);
+                joinRtaEdge(edge, appName, typeIdByBinaryName, callableIds, rtaWeights, externalSymbols,
+                        includeExternal);
             }
         }
 
@@ -193,14 +207,15 @@ public final class L2CallGraph {
             Map<String, String> index,
             Set<String> callableIds,
             Map<String, Map<String, Integer>> weightBySrcDst,
-            Map<String, JExternalSymbol> externalSymbols) {
+            Map<String, JExternalSymbol> externalSymbols,
+            boolean includeExternal) {
         for (JCallable callable : type.getCallables().values()) {
-            backfillCallable(callable, appName, index, callableIds, weightBySrcDst, externalSymbols);
-            callable.getTypes().values().forEach(
-                    local -> backfillTree(local, appName, index, callableIds, weightBySrcDst, externalSymbols));
+            backfillCallable(callable, appName, index, callableIds, weightBySrcDst, externalSymbols, includeExternal);
+            callable.getTypes().values().forEach(local ->
+                    backfillTree(local, appName, index, callableIds, weightBySrcDst, externalSymbols, includeExternal));
         }
-        type.getTypes().values().forEach(
-                nested -> backfillTree(nested, appName, index, callableIds, weightBySrcDst, externalSymbols));
+        type.getTypes().values().forEach(nested ->
+                backfillTree(nested, appName, index, callableIds, weightBySrcDst, externalSymbols, includeExternal));
     }
 
     private static void backfillCallable(
@@ -209,13 +224,14 @@ public final class L2CallGraph {
             Map<String, String> index,
             Set<String> callableIds,
             Map<String, Map<String, Integer>> weightBySrcDst,
-            Map<String, JExternalSymbol> externalSymbols) {
+            Map<String, JExternalSymbol> externalSymbols,
+            boolean includeExternal) {
         String src = callable.getId();
         for (JBodyNode node : callable.getBody().values()) {
             if (!"call".equals(node.getKind())) {
                 continue;
             }
-            String dst = resolveCallee(node, appName, index, callableIds, externalSymbols);
+            String dst = resolveCallee(node, appName, index, callableIds, externalSymbols, includeExternal);
             if (dst == null) {
                 continue; // signature-miss or unresolved: callee stays absent, no edge
             }
@@ -233,7 +249,8 @@ public final class L2CallGraph {
             String appName,
             Map<String, String> index,
             Set<String> callableIds,
-            Map<String, JExternalSymbol> externalSymbols) {
+            Map<String, JExternalSymbol> externalSymbols,
+            boolean includeExternal) {
         String hint = node.getDeclaringTypeHint();
         if (hint == null) {
             return null; // the site did not resolve
@@ -247,9 +264,11 @@ public final class L2CallGraph {
         if (signature == null) {
             return null; // resolved the type but not a signature to compose
         }
-        String inProject = inProjectId(hint, signature, index, callableIds);
         if (index.containsKey(hint)) {
-            return inProject; // in-project hit (case 2) or signature-miss (case 3, null)
+            return inProjectId(hint, signature, index, callableIds); // in-project hit (case 2) or signature-miss
+        }
+        if (!includeExternal) {
+            return null; // case 4 gated off: match v1's application-only graph
         }
         String externalId = CanId.externalId(appName, hint, signature); // case 4
         externalSymbols.computeIfAbsent(externalId, k -> externalSymbol(signature, hint, node.isConstructorCall()));
@@ -267,7 +286,8 @@ public final class L2CallGraph {
             Map<String, String> index,
             Set<String> callableIds,
             Map<String, Map<String, Integer>> rtaWeights,
-            Map<String, JExternalSymbol> externalSymbols) {
+            Map<String, JExternalSymbol> externalSymbols,
+            boolean includeExternal) {
         if (!edge.srcAppClass) {
             return; // a library caller has no in-project node to attribute the edge to
         }
@@ -282,6 +302,9 @@ public final class L2CallGraph {
                 return; // in-project but absent from the tree — drop rather than fabricate
             }
         } else {
+            if (!includeExternal) {
+                return; // external target gated off: match v1's application-only graph
+            }
             dst = CanId.externalId(appName, edge.dstType, edge.dstSignature);
             externalSymbols.computeIfAbsent(
                     dst, k -> externalSymbol(edge.dstSignature, edge.dstType, edge.dstSignature.startsWith("<init>")));
