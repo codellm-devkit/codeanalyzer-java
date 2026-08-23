@@ -106,6 +106,8 @@ Keep JavaParser (L1) and WALA RTA (L2) as the compute layer; add a **v2 emitter*
 
 ## 8. L3 — intraprocedural (CFG / CDG / DDG)
 
+> **Detailed design:** [`l3-intraprocedural-dataflow-design.md`](./l3-intraprocedural-dataflow-design.md). It refines this section into **two interchangeable engines** (`--l3-engine ast|wala`, AST default), which **revises D5** (WALA-engine / AST-fallback → AST-default / WALA-opt-in) as D28. The sketch below stands; the detailed doc is authoritative on engine posture and edge representation.
+
 **Body node kinds:** `statement`, `call` (L1), `return`, `branch`, `loop`, `switch`, + synthetic `entry`/`exit` (one each per callable, no span).
 
 **CFG construction (D5):** WALA `SSACFG` + `ISSABasicBlock` as the engine; project each SSA instruction to its enclosing **source statement** (`IMethod.getSourcePosition(iindex)` → `line:col`, grouped by the JavaParser statement span from L1). Multi-exit normalized to a single `@exit`. Every node reachable from `@entry` and reaching `@exit`.
