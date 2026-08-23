@@ -36,4 +36,14 @@ public final class CanId {
     public static String ordinalId(String callableId, String tag) {
         return callableId + "@" + tag;
     }
+
+    /**
+     * {@code can://java/<app>/@external/<binary-type>/<signature>} — a callable outside the project.
+     * Positionally parallel to an in-project callable id with {@code @external} in the file slot (D19);
+     * the type is a <em>binary</em> name ({@code java.util.Map$Entry}) so the id is unambiguous and
+     * joins WALA natively.
+     */
+    public static String externalId(String appName, String binaryType, String signature) {
+        return applicationId(appName) + "/@external/" + binaryType + "/" + signature;
+    }
 }

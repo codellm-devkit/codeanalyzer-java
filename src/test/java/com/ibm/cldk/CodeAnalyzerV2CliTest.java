@@ -28,8 +28,12 @@ class CodeAnalyzerV2CliTest {
     private static Path project(Path root) throws IOException {
         Path pkg = root.resolve("src/main/java/com/example");
         Files.createDirectories(pkg);
+        // size() has an in-project call (count()) and an out-of-project call (Math.max), so level-2
+        // output carries an in-project edge always and an external edge only under --external-calls.
         Files.writeString(pkg.resolve("Widget.java"),
-                "package com.example;\npublic class Widget {\n  public int size() { return 1; }\n}\n",
+                "package com.example;\npublic class Widget {\n"
+                        + "  public int size() { return Math.max(count(), 0); }\n"
+                        + "  private int count() { return 1; }\n}\n",
                 StandardCharsets.UTF_8);
         return root;
     }
@@ -196,10 +200,46 @@ class CodeAnalyzerV2CliTest {
     }
 
     @Test
-    void v2WithAnalysisLevelAboveOneFailsLoudly(@TempDir Path tmp) throws IOException {
+    void v2AtAnalysisLevelTwoEmitsTheCallGraphOverlay(@TempDir Path tmp) throws IOException {
         Path in = project(tmp.resolve("app"));
-        assertNotEquals(0, run("-i", in.toString(), "--schema", "v2", "-a", "2"),
-                "v2 has no call graph yet; asking for level 2 must be an error, not a level-1 payload");
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "--schema", "v2", "-a", "2"),
+                "level 2 is supported: declared edges need only the dependency jars, never a build");
+        JsonObject root = JsonParser.parseString(Files.readString(out.resolve("analysis.json"))).getAsJsonObject();
+        assertEquals(2, root.get("max_level").getAsInt());
+        assertTrue(root.getAsJsonObject("application").has("call_graph"),
+                "level 2 attaches the call_graph overlay");
+    }
+
+    @Test
+    void v2WithAnalysisLevelAboveTwoFailsLoudly(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        assertNotEquals(0, run("-i", in.toString(), "--schema", "v2", "-a", "3"),
+                "L3/L4 are not implemented; asking for a level beyond 2 must be an error, not an L2 payload");
+    }
+
+    @Test
+    void v2ExternalCallsAreOffByDefaultForV1Parity(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "--schema", "v2", "-a", "2"));
+        JsonObject app = JsonParser.parseString(Files.readString(out.resolve("analysis.json")))
+                .getAsJsonObject().getAsJsonObject("application");
+        assertFalse(app.has("external_symbols"),
+                "external calls are off by default (v1 parity): no external_symbols key");
+        assertTrue(app.has("call_graph"), "in-project edges are still emitted");
+    }
+
+    @Test
+    void v2ExternalCallsFlagHomesOutOfProjectTargets(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(),
+                "--schema", "v2", "-a", "2", "--external-calls"));
+        JsonObject app = JsonParser.parseString(Files.readString(out.resolve("analysis.json")))
+                .getAsJsonObject().getAsJsonObject("application");
+        assertTrue(app.has("external_symbols"),
+                "--external-calls homes out-of-project targets (e.g. java.lang.Math)");
     }
 
     @Test

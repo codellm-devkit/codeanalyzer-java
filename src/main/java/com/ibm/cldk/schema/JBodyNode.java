@@ -67,4 +67,15 @@ public class JBodyNode {
 
     /** Syntactically evident (a {@code new} expression or {@code this(...)}/{@code super(...)}). */
     private boolean isConstructorCall;
+
+    /**
+     * L2 backfill plumbing (§4): the binary name of the resolved callee's <em>declaring</em> type
+     * ({@code java.util.Map$Entry}) — the fact {@code dst} needs but {@code receiver_type} cannot
+     * supply, since they diverge on every inherited call. L1 records it per resolved site so L2's tree
+     * walk can map it through the in-project index to a {@code can://} id or an {@code @external} one,
+     * then set {@link #callee}. It is {@link CacheOnly}: carried through the cache but excluded from the
+     * emitted payload, so it never becomes schema surface. Absent when the site does not resolve.
+     */
+    @CacheOnly
+    private String declaringTypeHint;
 }

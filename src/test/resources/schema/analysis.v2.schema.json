@@ -112,9 +112,56 @@
           },
           "additionalProperties": { "$ref": "#/$defs/module" }
         },
-        "call_graph": { "type": "array" },
+        "call_graph": { "type": "array", "items": { "$ref": "#/$defs/callEdge" } },
+        "external_symbols": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/externalCanId" },
+          "additionalProperties": { "$ref": "#/$defs/externalSymbol" }
+        },
         "param_in": { "type": "array" },
         "param_out": { "type": "array" }
+      }
+    },
+
+    "callEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["src", "dst", "prov", "weight"],
+      "properties": {
+        "src": { "$ref": "#/$defs/canId" },
+        "dst": { "$ref": "#/$defs/canId" },
+        "prov": {
+          "type": "array",
+          "items": { "enum": ["declared", "rta"] },
+          "minItems": 1,
+          "description": "Every analysis attesting this edge, sorted. A closed enum: L3/L4 extend it when their edge types land, so until then only what is actually produced validates."
+        },
+        "weight": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Call sites in src reaching dst. An edge with no site behind it is not emitted."
+        }
+      }
+    },
+
+    "externalCanId": {
+      "type": "string",
+      "pattern": "^can://java/[^/]+/@external/",
+      "description": "Id of a symbol outside the project, so an in-project id landing in the external map fails the gate instead of validating happily."
+    },
+
+    "externalSymbol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "signature", "declaring_type"],
+      "properties": {
+        "kind": { "enum": ["method", "constructor"] },
+        "signature": { "type": "string", "minLength": 1 },
+        "declaring_type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Dotted source spelling; the id carries the binary name."
+        }
       }
     },
 

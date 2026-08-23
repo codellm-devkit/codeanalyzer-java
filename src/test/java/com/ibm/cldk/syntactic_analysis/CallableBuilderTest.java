@@ -11,6 +11,7 @@ import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.CallableDeclaration;
 import com.ibm.cldk.schema.CanId;
+import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.schema.JCallable;
 import com.ibm.cldk.schema.JType;
 import com.ibm.cldk.schema.JTypeParameter;
@@ -234,6 +235,18 @@ class CallableBuilderTest {
                 + " r(new Runnable() { public void run() {} }); }");
         assertTrue(c.getTypes().containsKey("$anon$0"));
         assertTrue(c.getTypes().containsKey("$anon$1"));
+    }
+
+    @Test
+    void build_anonymousCreationHintsTheAnonymousConstructorNotTheInterface() {
+        // The `new Runnable(){}` call site's dst must be the anon class's OWN constructor (§1),
+        // matched by AST-node identity. L1 records that can-id directly (a discriminated-union hint),
+        // never java.lang.Runnable — an interface has no constructor, so composing one would fabricate
+        // an endpoint the overlay forbids.
+        JCallable c = build("void m() { Runnable r = new Runnable() { public void run() {} }; }");
+        JBodyNode creation = c.getBody().values().stream()
+                .filter(JBodyNode::isConstructorCall).findFirst().orElseThrow();
+        assertEquals(c.getId() + "/$anon$0/<init>()", creation.getDeclaringTypeHint());
     }
 
     @Test

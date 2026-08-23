@@ -59,7 +59,7 @@ One structure — a CPG — in two projections that must agree.
 | Level | Grows (nodes) | Adds (edges) | Engine | Flag |
 | --- | --- | --- | --- | --- |
 | **L1** | tree to callable depth + `call` nodes in `body` (`callee:null`); `source`; byte spans; `can://` ids | — | JavaParser (existing) | `-a 1` |
-| **L2** | backfill `callee` (`null→id`) | `call_graph` (callable→callable, identity-only) | WALA RTA (existing) | `-a 2` |
+| **L2** | backfill `callee` (`null→id`) | `call_graph` (callable→callable, identity-only; `prov:["declared","rta"]`) + `external_symbols` | JavaParser declares (`declared`); WALA RTA attests + extends (`rta`) | `-a 2` |
 | **L3** | rest of `body` (statements) + `@entry`/`@exit` | `cfg`, `cdg`, `ddg` (syntactic, `prov:["ssa"]`) | WALA `SSACFG`/dominance/SSA def-use | `-a 3` |
 | **L4** | `formal_in/out`, `actual_in/out` synthetic vertices | `param_in`, `param_out`, `summary`; semantic `ddg` (`prov:["points-to"]`) | WALA `SDG`+`ModRef`+pointer analysis + own summary pass | `-a 4` |
 
@@ -100,7 +100,7 @@ Keep JavaParser (L1) and WALA RTA (L2) as the compute layer; add a **v2 emitter*
 
 **Callable/param kinds (Java):** `method`, `constructor`, `initializer` (static/instance init blocks), `lambda`. Parameters ordered; `is_variadic` for varargs.
 
-**Precision posture (L2):** WALA RTA is the call-graph producer (Java's only call graph is WALA's). Unresolved sites keep `callee:null`, skip the edge, never crash.
+**Precision posture (L2):** the call graph has two producers, distinguished by `prov` (see D18). JavaParser's symbol solver *declares* every edge to a resolved target (`prov:["declared"]`, needs only dependency jars, no build); WALA RTA *attests and extends* it with dynamic-dispatch fan-out (`prov:["rta"]`, needs a build). This inverts the earlier "Java's only call graph is WALA's" posture. Unresolved sites keep `callee:null`, skip the edge, never crash; `--no-rta` or a failed build degrades to `declared`-only rather than failing the level.
 
 ---
 
@@ -142,7 +142,7 @@ Global/static state modeled as **extra** formal/actual vertices (rides the same 
 
 **Engine:** WALA `SDG<InstanceKey>(callGraph, pointerAnalysis, new ModRef<>(), dataOpts, controlOpts)`, pruned to application scope with `GraphSlicer.prune`. WALA `Statement.Kind`s (`PARAM_CALLER/CALLEE`, `*_RET_*`, `HEAP_*`) map to the synthetic vertices / edges.
 
-**Points-to precision (D6):** default **RTA** (reuse the L2 builder's pointer analysis); `--precision {rta,0-cfa,0-1-cfa}` opts into richer analysis (0-CFA/0-1-CFA rebuild the graph for L4).
+**Points-to precision (D6):** default **RTA** (reuse the L2 `rta` overlay's pointer analysis). The dependency is on that overlay specifically, not on L2 as such — so a future decision to make RTA optional at L2 (`--no-rta`, D18) must not silently strand L4, which would then need to build its own RTA. `--precision {rta,0-cfa,0-1-cfa}` opts into richer analysis (0-CFA/0-1-CFA rebuild the graph for L4).
 
 **Semantic DDG:** `DataDependenceOptions.FULL` + `ModRef` yields alias/heap-derived def-use, emitted as **additional** `ddg` edges tagged `prov:["points-to"]`. L3's `prov:["ssa"]` edges are untouched — this preserves `L3 ⊆ L4` (weak-update / over-approximate posture; no strong updates that would remove an edge).
 

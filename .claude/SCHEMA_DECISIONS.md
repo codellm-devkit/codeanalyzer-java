@@ -287,6 +287,89 @@ this is a new fact, not a reshaping of an existing one.
 Existing convention (`J_CALLS`, …); dual-label `JSymbol` merge pattern retained.
 `SchemaCatalog` takes a major bump (families rename v1→v2).
 
+### D17 — L2 call edges: one edge per `(src, dst)`, `prov` set-union, self-edges kept
+The `call_graph` carries one edge per ordered `(src, dst)` callable pair, not one per call site:
+`weight` counts the sites behind it and `prov` is the set-union of the analyses that attest it
+(`["declared"]`, `["rta"]`, or both), sorted alphabetically. Where `declared` and `rta` disagree the
+`dst` differs, so they are different edges — not parallel edge sets. **Self-edges are kept**: direct
+recursion is a real edge; v1 dropped it via a `!source.equals(target)` guard. When both analyses attest
+an edge the `declared` count wins, because those are the sites a consumer can navigate to.
+
+### D18 — Call-graph production: JavaParser declares, WALA RTA attests (inverts spec line 103)
+The earlier spec made WALA the sole call-graph producer. L2 inverts this: JavaParser's symbol solver
+produces the *declared* graph — every edge to a resolved target, needing only the dependency jars, no
+build — and WALA RTA is an *overlay* that attests those edges and adds dynamic-dispatch fan-out. The
+measured payoff is decisive on library code (on `commons-lang` WALA RTA resolves 37 in-project edges to
+JavaParser's 16,605) and complementary on dispatch-heavy code (on `daytrader8` RTA adds more in-project
+edges than declared). So `-a 2` never fails for want of a build: `--no-rta`, or a build failure,
+degrades to `declared`-only rather than failing the level. The overlay adds external symbols but never
+in-project nodes — a WALA endpoint absent from the tree (a bridge/`access$`/`lambda$` synthetic, or an
+`$anon$N`-vs-`Outer$1` identity-join failure) is dropped, not fabricated.
+
+### D19 — `external_symbols`: flat map keyed by binary-name `@external` can-id
+Out-of-project call targets are homed in an application-scope `external_symbols{}` map so no edge
+dangles, keyed by an `@external` can-id (`can://java/<app>/@external/<binary-type>/<signature>`),
+positionally parallel to an in-project callable id with `@external` in the file slot. The key carries
+the **binary** type name (`java.util.Map$Entry`) — unambiguous about where the package ends, and the
+spelling WALA emits natively so the `rta` overlay joins — while the `declaring_type` field carries the
+legible dotted form. v1 dropped external targets entirely (it filtered its graph to application
+classes); v2 homes 5,265 distinct symbols across the ten fixtures and keeps the 32,644 edges reaching
+them.
+
+### D20 — Signature erasure: true recursive erasure, replacing `erasure().describe()`
+`Signatures` erases parameter types to a fixpoint rather than one level: JavaParser's
+`ResolvedType.erasure()` erases a type variable to its bound but leaves the bound's own type arguments,
+so a generic parameter leaked them into a durable id (`copy(java.util.function.Consumer<?>[])`), which
+no WALA descriptor (`java.util.function.Consumer[]`) could ever join. Iterating to a fixpoint erases the
+bound too. This is provably collision-free (two methods in one class cannot share a JVM erasure —
+0 collisions measured across 10,989 signatures), information-neutral (`type_parameters`/D16 preserves
+the bounds), and required by the `rta` join. Landed in #188, before any id became durable.
+
+### D21 — L1 synthesizes implicit constructors under the JLS rule
+A `new Foo()` where `Foo` declares no constructor needs a callable to point at, so L1 emits the
+compiler-guaranteed constructor with `is_implicit:true` and no `body_span`. The rule follows the
+language, not a guess: a class or enum gets `<init>()` iff it declares **zero** constructors; a record
+gets the canonical `<init>(components…)` unless a *canonical* constructor is declared (a non-canonical
+one does **not** suppress it — `record R(int x,int y){ R(int x){…} }` compiles to both); interfaces and
+annotations never; an anonymous class always gets exactly one matching the creation site's resolved
+arguments. This replaces v1's fabricated `filePath:"<<implicit>>"` vertices (164 across the ten
+fixtures) with real tree nodes an edge can land on.
+
+### D22 — Backfill plumbing: declaring-type hint, cache-serialized but payload-excluded
+`dst` needs the callee's *declaring* type, which diverges from the emitted `receiver_type` on every
+inherited call and exists only during L1's per-module resolution. L1 records it once per resolved call
+site as a hint on the `call` node — a binary type name, or, for an anonymous creation, the `can://` id
+of the anon's own constructor (a discriminated union L2 dispatches on the `can://` prefix, matched by
+AST node identity). L2 then maps it through a type index derived from the emitted tree (keyed by binary
+name, so one index serves both the JavaParser hint and WALA's native names). The hint must survive the
+incremental cache but never reach the payload, so it is marked `@CacheOnly`: `V2Json.cache()` keeps it
+while `V2Json.compact()`/`pretty()` exclude it in both directions, and **both** `L1Cache` paths use the
+cache writer — a `transient` field would have been dropped by the cache too, silently losing the
+backfill on a warm-cache run.
+
+### D23 — L1 synthesizes implicit record accessors and enum `values()`/`valueOf(java.lang.String)`
+The symbol solver resolves `money.cents()` and `Op.values()` to the in-project declaring type itself,
+so without the generated member in the tree the call would resolve to a callable that is neither
+nameable nor homable as external (the type is ours). L1 therefore synthesizes, on **named** types only,
+one accessor per record component (suppressed by a declared accessor of that name; a varargs
+component's accessor returns an array) and, on every enum, `values()` and
+`valueOf(java.lang.String)` unconditionally (declaring either is a compile error, so nothing suppresses
+them). A record's generated `equals`/`hashCode`/`toString` are a stated blind spot — JavaParser cannot
+resolve those sites, so no `callee` is ever set and synthesizing them would add callables nothing points
+at.
+
+### D24 — External call edges are opt-in (`--external-calls`), off by default for v1 parity
+v1's L2 call graph kept only edges whose target is an application class; calls into the JDK or a
+library were dropped. To keep the default v2 `-a 2` output at parity during the migration,
+`external_symbols` and the edges reaching them are gated behind `--external-calls` (off by default).
+When off, a call resolving out of the project is dropped exactly like an unresolved one — no
+{@code callee}, no edge, no {@code external_symbols} entry — so no-dangling holds trivially and the
+default graph matches v1's application-only shape. When on (the design's §2 posture, D19) they are
+homed so no edge dangles. The gate is threaded through both the `declared` pass and the `rta` join;
+an empty `external_symbols`/`call_graph` is omitted rather than emitted as `{}`/`[]` (absence = no
+fact, D10), so parity is a *missing* key, not an empty one. The `L2CallGraph.build` library default
+keeps external on (it is intrinsic to L2); only the CLI defaults it off.
+
 ### Scope guard
 The analyzer is a **pure graph provider**: it emits the CFG/PDG/SDG substrate and
 stops. Slicing, taint, and reachability are **SDK queries** over the emitted graph

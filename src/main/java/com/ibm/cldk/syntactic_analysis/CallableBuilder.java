@@ -26,11 +26,13 @@ import com.ibm.cldk.javaee.EntrypointsFinderFactory;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JCallable;
 import com.ibm.cldk.schema.JMetrics;
+import com.ibm.cldk.schema.JParameter;
 import com.ibm.cldk.schema.JRefs;
 import com.ibm.cldk.schema.JType;
 import com.ibm.cldk.schema.JVariableDeclaration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -105,8 +107,12 @@ public final class CallableBuilder {
         body.ifPresent(b -> callable.setBodySpan(ctx.spanOf(b)));
         callable.setRefs(refs(body, typeFqn, classFieldNames));
         body.ifPresent(b -> callable.setLocalVariables(localVariables(b)));
-        body.ifPresent(b -> callable.setBody(callSiteBuilder.build(b)));
-        body.ifPresent(b -> callable.setTypes(localClasses(b, callable.getId())));
+        body.ifPresent(b -> {
+            // Local classes first: they carry the anon-constructor ids the call sites hint against.
+            LocalTypes locals = localClasses(b, callable.getId());
+            callable.setBody(callSiteBuilder.build(b, locals.anonymousConstructorIds));
+            callable.setTypes(locals.types);
+        });
         return callable;
     }
 
@@ -148,8 +154,9 @@ public final class CallableBuilder {
         callable.setBodySpan(ctx.spanOf(body));
         callable.setRefs(refs(Optional.of(body), typeFqn, classFieldNames));
         callable.setLocalVariables(localVariables(body));
-        callable.setBody(callSiteBuilder.build(body));
-        callable.setTypes(localClasses(body, callable.getId()));
+        LocalTypes locals = localClasses(body, callable.getId());
+        callable.setBody(callSiteBuilder.build(body, locals.anonymousConstructorIds));
+        callable.setTypes(locals.types);
         return callable;
     }
 
@@ -174,6 +181,37 @@ public final class CallableBuilder {
         callable.setId(CanId.childId(parentTypeId, signature));
         callable.setKind("constructor");
         callable.setImplicit(true);
+        return callable;
+    }
+
+    /**
+     * Build a method the language generates but the source never writes — a record component's accessor,
+     * an enum's {@code values()} and {@code valueOf(String)}.
+     *
+     * <p>Same purpose as {@link #buildImplicitConstructor}: the symbol solver reports these as members of
+     * the declaring type itself, so a call site resolving to one would otherwise name a callable absent
+     * from the tree — a target that can be neither named nor homed as external, since the type is
+     * in-project.
+     *
+     * <p>Unlike the implicit constructor this does carry a {@code return_type} and, for
+     * {@code valueOf}, a parameter: those are what distinguish the generated methods from each other,
+     * and both are dictated by the language rather than invented. Still no {@code span} — nothing was
+     * written — and {@code is_implicit} is what tells a consumer why.
+     */
+    public JCallable buildImplicitMethod(
+            String parentTypeId,
+            String signature,
+            String returnType,
+            List<String> modifiers,
+            List<JParameter> parameters) {
+        JCallable callable = new JCallable();
+        callable.setSignature(signature);
+        callable.setId(CanId.childId(parentTypeId, signature));
+        callable.setKind("method");
+        callable.setImplicit(true);
+        callable.setReturnType(returnType);
+        callable.setModifiers(modifiers);
+        callable.setParameters(parameters);
         return callable;
     }
 
@@ -211,8 +249,9 @@ public final class CallableBuilder {
         callable.setBodySpan(ctx.spanOf(body));
         callable.setRefs(refs(Optional.of(body), typeFqn, classFieldNames));
         callable.setLocalVariables(localVariables(body));
-        callable.setBody(callSiteBuilder.build(body));
-        callable.setTypes(localClasses(body, callable.getId()));
+        LocalTypes locals = localClasses(body, callable.getId());
+        callable.setBody(callSiteBuilder.build(body, locals.anonymousConstructorIds));
+        callable.setTypes(locals.types);
         return callable;
     }
 
@@ -246,7 +285,7 @@ public final class CallableBuilder {
      * Both are attributed here rather than to the enclosing type, so their members, locals and call
      * sites belong to the code that actually declares them (D4 containment).
      */
-    private Map<String, JType> localClasses(BlockStmt body, String callableId) {
+    private LocalTypes localClasses(BlockStmt body, String callableId) {
         TypeBuilder typeBuilder = new TypeBuilder(ctx);
         Map<String, JType> locals = new TreeMap<>();
         body.findAll(TypeDeclaration.class).stream()
@@ -254,6 +293,7 @@ public final class CallableBuilder {
                 .forEach(td -> locals.put(td.getNameAsString(), typeBuilder.build(td, callableId)));
 
         // Anonymous classes have no name, so they are numbered in declaration order.
+        Map<ObjectCreationExpr, String> anonymousConstructorIds = new IdentityHashMap<>();
         List<ObjectCreationExpr> anonymous = body.findAll(ObjectCreationExpr.class).stream()
                 .filter(oce -> oce.getAnonymousClassBody().isPresent())
                 .filter(oce -> AstScopes.belongsDirectlyTo(oce, body))
@@ -262,10 +302,38 @@ public final class CallableBuilder {
                         .thenComparingInt(oce -> oce.getBegin().map(pos -> pos.column).orElse(0)))
                 .collect(Collectors.toList());
         for (int i = 0; i < anonymous.size(); i++) {
+            ObjectCreationExpr creation = anonymous.get(i);
             String name = "$anon$" + i;
-            locals.put(name, typeBuilder.buildAnonymous(anonymous.get(i), callableId, name));
+            JType anonType = typeBuilder.buildAnonymous(creation, callableId, name);
+            locals.put(name, anonType);
+            // Its creation is a call site whose dst is this anon's own constructor; capture that id so
+            // CallSiteBuilder can record it as the site's hint (matched by node identity, §1).
+            constructorId(anonType).ifPresent(id -> anonymousConstructorIds.put(creation, id));
         }
-        return new LinkedHashMap<>(locals);
+        return new LocalTypes(new LinkedHashMap<>(locals), anonymousConstructorIds);
+    }
+
+    /** A named type's constructor callable id, if it has one (an anonymous class has at most one). */
+    private static Optional<String> constructorId(JType type) {
+        return type.getCallables().values().stream()
+                .filter(c -> "constructor".equals(c.getKind()))
+                .map(JCallable::getId)
+                .findFirst();
+    }
+
+    /**
+     * The local and anonymous types declared directly in a body, plus the map from each anonymous
+     * creation to its constructor id — the two facts a callable's {@code body} and {@code types} are
+     * built from, computed together so both see the same anon numbering.
+     */
+    private static final class LocalTypes {
+        final Map<String, JType> types;
+        final Map<ObjectCreationExpr, String> anonymousConstructorIds;
+
+        LocalTypes(Map<String, JType> types, Map<ObjectCreationExpr, String> anonymousConstructorIds) {
+            this.types = types;
+            this.anonymousConstructorIds = anonymousConstructorIds;
+        }
     }
 
     /**

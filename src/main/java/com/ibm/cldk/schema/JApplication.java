@@ -1,6 +1,7 @@
 package com.ibm.cldk.schema;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import lombok.Data;
 
@@ -10,4 +11,16 @@ public class JApplication {
     private String id;
     private String kind = "application";
     private Map<String, JModule> symbolTable = new LinkedHashMap<>();
+
+    /**
+     * The L2 {@code call_graph}: one edge per {@code (src, dst)} callable pair. Left {@code null} at L1
+     * so the key is omitted (absence means "no fact", never an empty array).
+     */
+    private List<JCallEdge> callGraph;
+
+    /**
+     * Out-of-project callables that call sites target, keyed by their {@code @external} can-id, so no
+     * edge dangles. Left {@code null} at L1 so the key is omitted.
+     */
+    private Map<String, JExternalSymbol> externalSymbols;
 }
