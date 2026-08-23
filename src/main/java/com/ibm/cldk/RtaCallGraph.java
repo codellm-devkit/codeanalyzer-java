@@ -72,17 +72,24 @@ public final class RtaCallGraph {
         if (CodeAnalyzer.projectRootPom == null) {
             CodeAnalyzer.projectRootPom = input;
         }
+        // WALA, ECJ, and the project build all write to stdout, which is our JSON data channel in
+        // --stdout mode — so mute stdout/stderr across the WHOLE phase (scope build, class hierarchy,
+        // entrypoints, call graph), not just call-graph construction. Counts are captured here and logged
+        // only after the streams are restored, so the diagnostic never lands on the data channel.
         PrintStream originalOut = System.out;
         PrintStream originalErr = System.err;
+        int totalClasses = 0;
+        long applicationClasses = 0;
+        List<RtaEndpoint> endpoints = List.of();
+        String failure = null;
+        System.setOut(new PrintStream(NullOutputStream.INSTANCE));
+        System.setErr(new PrintStream(NullOutputStream.INSTANCE));
         try {
             AnalysisScope scope = ScopeUtils.createScope(input, dependencies, build);
             IClassHierarchy cha =
                     ClassHierarchyFactory.make(scope, new ECJClassLoaderFactory(scope.getExclusions()));
-            // Surface the application-class count: when it is far below the number of compiled classes,
-            // the WALA scope admitted only a fraction of the project (e.g. a dependency jar shadowing the
-            // project's own classes into the Extension loader), and the rta overlay will be thin.
-            Log.info("RTA class hierarchy: " + cha.getNumberOfClasses() + " total classes, "
-                    + AnalysisUtils.getNumberOfApplicationClasses(cha) + " application classes");
+            totalClasses = cha.getNumberOfClasses();
+            applicationClasses = AnalysisUtils.getNumberOfApplicationClasses(cha);
 
             AnalysisOptions options = new AnalysisOptions();
             options.setEntrypoints(AnalysisUtils.getEntryPoints(cha));
@@ -91,25 +98,24 @@ public final class RtaCallGraph {
             IAnalysisCacheView cache =
                     new AnalysisCacheImpl(AstIRFactory.makeDefaultFactory(), options.getSSAOptions());
 
-            CallGraph callGraph;
-            try {
-                // WALA writes progress to stdout/stderr; stdout is our JSON data channel, so mute both.
-                System.setOut(new PrintStream(NullOutputStream.INSTANCE));
-                System.setErr(new PrintStream(NullOutputStream.INSTANCE));
-                CallGraphBuilder<InstanceKey> builder = Util.makeRTABuilder(options, cache, cha);
-                callGraph = builder.makeCallGraph(options, null);
-            } finally {
-                System.setOut(originalOut);
-                System.setErr(originalErr);
-            }
-            return toEndpoints(callGraph);
+            CallGraphBuilder<InstanceKey> builder = Util.makeRTABuilder(options, cache, cha);
+            endpoints = toEndpoints(builder.makeCallGraph(options, null));
         } catch (Throwable t) {
+            failure = t.getClass().getSimpleName() + ": " + t.getMessage();
+        } finally {
             System.setOut(originalOut);
             System.setErr(originalErr);
-            Log.warn("RTA call graph unavailable (" + t.getClass().getSimpleName() + ": " + t.getMessage()
-                    + "); emitting declared edges only");
+        }
+
+        if (failure != null) {
+            Log.warn("RTA call graph unavailable (" + failure + "); emitting declared edges only");
             return List.of();
         }
+        // A count far below the compiled-class total means the WALA scope admitted only a fraction of the
+        // project (e.g. a dependency jar shadowing the project's own classes), and the overlay will be thin.
+        Log.info("RTA class hierarchy: " + totalClasses + " total classes, "
+                + applicationClasses + " application classes");
+        return endpoints;
     }
 
     /** One endpoint pair per resolved (caller, call site, target) occurrence, sourced from app classes. */

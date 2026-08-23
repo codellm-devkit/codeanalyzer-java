@@ -2,10 +2,12 @@ package com.ibm.cldk.syntactic_analysis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.javaparser.ast.CompilationUnit;
 import com.ibm.cldk.schema.CanId;
+import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.schema.JCallEdge;
 import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.syntactic_analysis.L2CallGraph.RtaEndpoint;
@@ -172,6 +174,35 @@ class L2CallGraphTest {
         assertTrue(off.externalSymbols().isEmpty(), "rta library targets are dropped when external calls are off");
         assertFalse(off.callGraph().stream().anyMatch(e -> e.getDst().contains("/@external/")),
                 "no external edges when off");
+    }
+
+    @Test
+    void localClassCallIsUnresolvedAndNeverHomedExternal() {
+        // JavaParser does not resolve a local class's instantiation/calls, so no declaring-type hint is
+        // produced: the site is dropped (no callee, no edge) rather than mis-homed as external — even
+        // with external homing on. This pins that safety property.
+        Map<String, JModule> modules = modulesFrom(
+                "package p;\nclass Foo {\n  void m() {\n    class Local { void run() {} }\n"
+                        + "    new Local().run();\n  }\n}\n");
+        L2CallGraph.Result r = L2CallGraph.build(APP, modules, null, true); // external ON: the risky mode
+        assertTrue(r.externalSymbols().keySet().stream().noneMatch(k -> k.contains("Foo")),
+                "a local class must never be homed as an external symbol");
+        JBodyNode run = modules.get(FILE).getTypes().get("Foo").getCallables().get("m()").getBody().values()
+                .stream().filter(n -> "run".equals(n.getMethodName())).findFirst().orElseThrow();
+        assertNull(run.getCallee(), "an unresolved local-class call carries no callee");
+    }
+
+    @Test
+    void buildClearsAStaleExternalCalleeOnReuse() {
+        // build() mutates callee; re-running with external off on the same tree must clear an @external
+        // callee the external-on run set, or the payload carries a callee with no edge/external symbol.
+        Map<String, JModule> modules = modulesFrom(
+                "package p;\nclass Foo {\n  void m() {\n    \"x\".trim();\n  }\n}\n");
+        L2CallGraph.build(APP, modules, null, true);   // sets callee = @external String.trim()
+        L2CallGraph.build(APP, modules, null, false);  // external off: must clear it
+        JBodyNode node = modules.get(FILE).getTypes().get("Foo").getCallables().get("m()")
+                .getBody().values().iterator().next();
+        assertNull(node.getCallee(), "the stale @external callee must be cleared on the re-run");
     }
 
     @Test

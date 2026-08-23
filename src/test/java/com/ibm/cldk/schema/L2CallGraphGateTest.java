@@ -70,6 +70,12 @@ class L2CallGraphGateTest {
         return application(payload).getAsJsonArray("call_graph");
     }
 
+    /** The {@code external_symbols} map, or an empty object when the key is absent (external calls off). */
+    private static JsonObject externalSymbols(JsonObject payload) {
+        JsonObject external = application(payload).getAsJsonObject("external_symbols");
+        return external == null ? new JsonObject() : external;
+    }
+
     private static boolean hasEdge(JsonArray edges, String src, String dst) {
         for (JsonElement e : edges) {
             JsonObject edge = e.getAsJsonObject();
@@ -158,7 +164,7 @@ class L2CallGraphGateTest {
     void item1_noEdgeEndpointDangles() throws IOException {
         JsonObject payload = analyseL2();
         Set<String> callableIds = allCallableIds(payload);
-        Set<String> externalKeys = application(payload).getAsJsonObject("external_symbols").keySet();
+        Set<String> externalKeys = externalSymbols(payload).keySet();
         for (JsonElement e : callGraph(payload)) {
             JsonObject edge = e.getAsJsonObject();
             String src = edge.get("src").getAsString();
@@ -207,7 +213,7 @@ class L2CallGraphGateTest {
     @Test
     void item7_noExternalSymbolHomesAnInProjectType() throws IOException {
         JsonObject payload = analyseL2();
-        JsonObject external = application(payload).getAsJsonObject("external_symbols");
+        JsonObject external = externalSymbols(payload);
         for (String key : external.keySet()) {
             String declaring = external.getAsJsonObject(key).get("declaring_type").getAsString();
             assertFalse(declaring.equals("org.example.User") || declaring.equals("org.example.greeting.Greeter"),
@@ -220,7 +226,7 @@ class L2CallGraphGateTest {
         // Greeter.greet calls String.trim(): an out-of-project target homed so its edge does not dangle.
         JsonObject payload = analyseL2();
         assertTrue(hasEdge(callGraph(payload), GREET, TRIM), "expected greet(String) -> String.trim()");
-        JsonObject external = application(payload).getAsJsonObject("external_symbols");
+        JsonObject external = externalSymbols(payload);
         assertTrue(external.has(TRIM), "the external target must be homed under its @external can-id");
         JsonObject sym = external.getAsJsonObject(TRIM);
         assertEquals("method", sym.get("kind").getAsString());

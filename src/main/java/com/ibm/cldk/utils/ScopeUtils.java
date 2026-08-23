@@ -151,9 +151,17 @@ public class ScopeUtils {
     Set<String> names = new HashSet<>();
     for (Path classFile : classFiles) {
       try (InputStream in = Files.newInputStream(classFile)) {
-        names.add(new ClassReader(in).getClassName());
-      } catch (IOException e) {
-        Log.debug("Could not read class name from " + classFile + ": " + e.getMessage());
+        String name = new ClassReader(in).getClassName();
+        // `module-info`/`package-info` are per-module synthetic descriptors, not real types — every
+        // modular jar carries its own `module-info`, so counting them here would make
+        // shadowsApplicationClass reject every modular dependency and starve WALA of the whole library.
+        if (!name.endsWith("module-info") && !name.endsWith("package-info")) {
+          names.add(name);
+        }
+      } catch (Throwable t) {
+        // A class the ASM reader cannot parse (e.g. an unsupported class-file version) is skipped, not
+        // fatal: one unreadable class must not sink the shadow check or the whole scope.
+        Log.debug("Could not read class name from " + classFile + ": " + t.getMessage());
       }
     }
     return names;

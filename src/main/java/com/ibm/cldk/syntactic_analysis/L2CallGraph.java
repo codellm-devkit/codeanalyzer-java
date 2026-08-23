@@ -190,6 +190,11 @@ public final class L2CallGraph {
                 indexNamedTypes(binaryName + "$" + entry.getKey(), entry.getValue(), index);
             }
         }
+        // Named local classes (declared in method bodies) are deliberately NOT indexed: JavaParser does
+        // not resolve local-class instantiation/calls, so no declaring-type hint is ever produced for
+        // them — the site falls to the unresolved case and is dropped, never homed as external. Indexing
+        // them would be speculative dead weight (and javac's per-method counter Outer$1Local is not
+        // reconstructable from the tree anyway).
     }
 
     /** Every callable id reachable from {@code type} — through member, local, anonymous and enum-body types. */
@@ -233,7 +238,11 @@ public final class L2CallGraph {
             }
             String dst = resolveCallee(node, appName, index, callableIds, externalSymbols, includeExternal);
             if (dst == null) {
-                continue; // signature-miss or unresolved: callee stays absent, no edge
+                // Signature-miss, unresolved, or (with external off) a dropped external target. Clear any
+                // prior value so build() is idempotent on a reused tree and no stale callee dangles when
+                // a second run (e.g. different includeExternal) resolves this site to nothing.
+                node.setCallee(null);
+                continue;
             }
             node.setCallee(dst);
             weightBySrcDst.computeIfAbsent(src, k -> new TreeMap<>()).merge(dst, 1, Integer::sum);
