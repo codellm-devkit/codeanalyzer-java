@@ -144,6 +144,51 @@
       }
     },
 
+    "cfgEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["src", "dst", "kind"],
+      "properties": {
+        "src": { "$ref": "#/$defs/localId" },
+        "dst": { "$ref": "#/$defs/localId" },
+        "kind": {
+          "enum": ["fallthrough", "true", "false", "switch_case", "loop_back", "exception", "return", "break", "continue"],
+          "description": "Control-flow edge kind. Endpoints are body-node local ids within the callable, not can:// ids."
+        }
+      }
+    },
+
+    "cdgEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["src", "dst"],
+      "properties": {
+        "src": { "$ref": "#/$defs/localId" },
+        "dst": { "$ref": "#/$defs/localId" }
+      }
+    },
+
+    "ddgEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["src", "dst", "var", "prov"],
+      "properties": {
+        "src": { "$ref": "#/$defs/localId" },
+        "dst": { "$ref": "#/$defs/localId" },
+        "var": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The k-limited access path carried on this def-use edge."
+        },
+        "prov": {
+          "type": "array",
+          "items": { "enum": ["ssa"] },
+          "minItems": 1,
+          "description": "L3 data dependence is syntactic (ssa). A closed enum: L4 extends it with points-to when the semantic overlay lands."
+        }
+      }
+    },
+
     "externalCanId": {
       "type": "string",
       "pattern": "^can://java/[^/]+/@external/",
@@ -315,9 +360,9 @@
           "propertyNames": { "$ref": "#/$defs/localId" },
           "additionalProperties": { "$ref": "#/$defs/bodyNode" }
         },
-        "cfg": { "type": "array" },
-        "cdg": { "type": "array" },
-        "ddg": { "type": "array" },
+        "cfg": { "type": "array", "items": { "$ref": "#/$defs/cfgEdge" } },
+        "cdg": { "type": "array", "items": { "$ref": "#/$defs/cdgEdge" } },
+        "ddg": { "type": "array", "items": { "$ref": "#/$defs/ddgEdge" } },
         "summary": { "type": "array" },
         "types": { "type": "object", "additionalProperties": { "$ref": "#/$defs/type" } }
       }
