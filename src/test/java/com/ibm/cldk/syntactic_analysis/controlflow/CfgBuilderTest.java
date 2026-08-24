@@ -120,6 +120,44 @@ class CfgBuilderTest {
                 "both arms rejoin at the following statement");
     }
 
+    @Test
+    void whileLoopHasTrueIntoBodyLoopBackAndFalseToExit() {
+        ControlFlowGraph g = build("{ while (a()) { b(); }\n c(); }");
+        String loop = nodeOfKind(g, "loop");
+        assertTrue(hasEdge(g, loop, "true"), "true edge enters the body");
+        assertTrue(g.toCfgEdges().stream().anyMatch(e -> e.getDst().equals(loop) && e.getKind().equals("loop_back")),
+                "the body loops back to the loop test");
+        assertTrue(hasEdge(g, loop, "false"), "false edge leaves the loop");
+    }
+
+    @Test
+    void forLoopProducesALoopNodeWithABackEdge() {
+        ControlFlowGraph g = build("{ for (int i = 0; i < 3; i++) { b(); } }");
+        String loop = nodeOfKind(g, "loop");
+        assertTrue(g.toCfgEdges().stream().anyMatch(e -> e.getDst().equals(loop) && e.getKind().equals("loop_back")));
+    }
+
+    @Test
+    void forEachLoopProducesALoopNodeWithABackEdge() {
+        ControlFlowGraph g = build("{ for (String s : items()) { b(); } }");
+        String loop = nodeOfKind(g, "loop");
+        assertTrue(g.toCfgEdges().stream().anyMatch(e -> e.getDst().equals(loop) && e.getKind().equals("loop_back")));
+    }
+
+    @Test
+    void doWhileEntersTheBodyBeforeTheTest() {
+        // The do-while's entry is the body, not the loop test; the test sits below and loops back up.
+        ControlFlowGraph g = build("{ do { b(); } while (a());\n c(); }");
+        String loop = nodeOfKind(g, "loop");
+        String entry = g.successors("@entry").get(0);
+        assertNotEquals(loop, entry, "the loop test is not the do-while's entry");
+        assertTrue(g.toCfgEdges().stream().anyMatch(e -> e.getSrc().equals(loop) && e.getKind().equals("loop_back")));
+    }
+
+    private static boolean hasEdge(ControlFlowGraph g, String src, String kind) {
+        return g.toCfgEdges().stream().anyMatch(e -> e.getSrc().equals(src) && e.getKind().equals(kind));
+    }
+
     /** The destination of the (single) edge leaving {@code src} with the given kind. */
     private static String edgeDst(ControlFlowGraph g, String src, String kind) {
         return g.toCfgEdges().stream()

@@ -5,9 +5,13 @@ import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.ast.stmt.BlockStmt;
+import com.github.javaparser.ast.stmt.DoStmt;
 import com.github.javaparser.ast.stmt.ExpressionStmt;
+import com.github.javaparser.ast.stmt.ForEachStmt;
+import com.github.javaparser.ast.stmt.ForStmt;
 import com.github.javaparser.ast.stmt.IfStmt;
 import com.github.javaparser.ast.stmt.Statement;
+import com.github.javaparser.ast.stmt.WhileStmt;
 import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.syntactic_analysis.L1BuildContext;
 import java.util.List;
@@ -18,77 +22,131 @@ import java.util.Map;
  * source statement to a body node keyed by its {@code line:col} anchor. Control-flow structure is
  * derived syntactically from the AST (the "ast" L3 engine): the edges are exact, no build required.
  *
- * <p>This is the structured-CFG core — a recursive {@code link} that wires a statement into the graph
- * and connects its normal exit to a {@code next} target. Later tasks add cases (conditionals, loops,
- * switch, break/continue, exceptions); this revision handles straight-line sequences and treats every
- * other statement as a single opaque node.
+ * <p>The core is a recursive {@code link} that wires a statement into the graph and connects its
+ * normal exit to a {@code next} target with a caller-chosen edge kind ({@code fallthrough} in a plain
+ * sequence, {@code loop_back} for a loop body's tail). An instance holds the graph and context so the
+ * recursion stays readable; later tasks add switch, break/continue, and exception handling.
  */
 public final class CfgBuilder {
 
-    private CfgBuilder() {}
+    private final ControlFlowGraph g = new ControlFlowGraph();
+    private final L1BuildContext ctx;
 
-    public static ControlFlowGraph build(BlockStmt body, Map<String, JBodyNode> existingBody, L1BuildContext ctx) {
-        ControlFlowGraph g = new ControlFlowGraph();
-        // Seed the L1 call nodes so a bare-call statement reuses its call node rather than duplicating it.
-        existingBody.forEach(g::seed);
-        String first = linkSequence(g, body.getStatements(), ControlFlowGraph.EXIT, ctx);
-        g.addEdge(ControlFlowGraph.ENTRY, first, "fallthrough");
-        return g;
+    private CfgBuilder(L1BuildContext ctx) {
+        this.ctx = ctx;
     }
 
-    /** Link a sequence of statements so each falls through to the next; return the sequence's entry id. */
-    private static String linkSequence(ControlFlowGraph g, List<Statement> stmts, String next, L1BuildContext ctx) {
+    public static ControlFlowGraph build(BlockStmt body, Map<String, JBodyNode> existingBody, L1BuildContext ctx) {
+        CfgBuilder b = new CfgBuilder(ctx);
+        // Seed the L1 call nodes so a bare-call statement reuses its call node rather than duplicating it.
+        existingBody.forEach(b.g::seed);
+        String first = b.linkSequence(body.getStatements(), ControlFlowGraph.EXIT, "fallthrough");
+        b.g.addEdge(ControlFlowGraph.ENTRY, first, "fallthrough");
+        return b.g;
+    }
+
+    /**
+     * Link a sequence so each statement falls through to the next; only the last connects to
+     * {@code next}, with {@code kindToNext}. Returns the sequence's entry id.
+     */
+    private String linkSequence(List<Statement> stmts, String next, String kindToNext) {
         String cur = next;
+        String kind = kindToNext;
         for (int i = stmts.size() - 1; i >= 0; i--) {
-            cur = link(g, stmts.get(i), cur, ctx);
+            cur = link(stmts.get(i), cur, kind);
+            kind = "fallthrough";
         }
         return cur;
     }
 
     /**
      * Wire statement {@code s} into the graph and connect its normal exit to {@code next}. Returns the
-     * entry node id of {@code s}. The generic case (here) is a single node that falls through to
-     * {@code next}; later tasks branch on the statement kind before this fallthrough.
+     * entry node id of {@code s}. {@code kindToNext} is the edge kind used for the terminal connection
+     * of straight-line control (a loop body's tail passes {@code loop_back}); constructs with their own
+     * exit semantics (loops, return/throw) ignore it.
      */
-    private static String link(ControlFlowGraph g, Statement s, String next, L1BuildContext ctx) {
+    private String link(Statement s, String next, String kindToNext) {
         if (s.isBlockStmt()) {
-            return linkSequence(g, s.asBlockStmt().getStatements(), next, ctx);
+            return linkSequence(s.asBlockStmt().getStatements(), next, kindToNext);
         }
         if (s.isIfStmt()) {
-            return linkIf(g, s.asIfStmt(), next, ctx);
+            return linkIf(s.asIfStmt(), next, kindToNext);
+        }
+        if (s.isWhileStmt()) {
+            return linkWhile(s.asWhileStmt(), next);
+        }
+        if (s.isForStmt()) {
+            return linkFor(s.asForStmt(), next);
+        }
+        if (s.isForEachStmt()) {
+            return linkForEach(s.asForEachStmt(), next);
+        }
+        if (s.isDoStmt()) {
+            return linkDo(s.asDoStmt(), next);
         }
         if (s.isReturnStmt()) {
-            String id = ensure(g, s, "return", ctx);
+            String id = ensure(s, "return");
             g.addEdge(id, ControlFlowGraph.EXIT, "return");
             return id;
         }
         if (s.isThrowStmt()) {
             // A throw with no enclosing handler abruptly exits the method; handler routing (to the
             // nearest catch/finally) is added with the exception / try-catch work.
-            String id = ensure(g, s, "statement", ctx);
+            String id = ensure(s, "statement");
             g.addEdge(id, ControlFlowGraph.EXIT, "exception");
             return id;
         }
         // ensureNode never overwrites: a seeded call node keeps its "call" kind and identity.
-        String id = ensure(g, s, "statement", ctx);
-        g.addEdge(id, next, "fallthrough");
+        String id = ensure(s, "statement");
+        g.addEdge(id, next, kindToNext);
         return id;
     }
 
     /** An {@code if}: a branch node whose true/false edges enter the arms, both rejoining at {@code next}. */
-    private static String linkIf(ControlFlowGraph g, IfStmt s, String next, L1BuildContext ctx) {
-        String id = ensure(g, s, "branch", ctx);
-        g.addEdge(id, link(g, s.getThenStmt(), next, ctx), "true");
+    private String linkIf(IfStmt s, String next, String kindToNext) {
+        String id = ensure(s, "branch");
+        g.addEdge(id, link(s.getThenStmt(), next, kindToNext), "true");
         if (s.getElseStmt().isPresent()) {
-            g.addEdge(id, link(g, s.getElseStmt().get(), next, ctx), "false");
+            g.addEdge(id, link(s.getElseStmt().get(), next, kindToNext), "false");
         } else {
             g.addEdge(id, next, "false");
         }
         return id;
     }
 
+    /** A top-tested loop ({@code while}/{@code for}/for-each): true into the body, body tail loops back. */
+    private String linkTopTestedLoop(Statement s, Statement body, String next) {
+        String loop = ensure(s, "loop");
+        g.addEdge(loop, link(body, loop, "loop_back"), "true");
+        g.addEdge(loop, next, "false");
+        return loop;
+    }
+
+    private String linkWhile(WhileStmt s, String next) {
+        return linkTopTestedLoop(s, s.getBody(), next);
+    }
+
+    // The for's init/update are expressions folded onto the loop node (they run before entry and on the
+    // back-edge); L3's statement-granularity CFG does not give them their own nodes.
+    private String linkFor(ForStmt s, String next) {
+        return linkTopTestedLoop(s, s.getBody(), next);
+    }
+
+    private String linkForEach(ForEachStmt s, String next) {
+        return linkTopTestedLoop(s, s.getBody(), next);
+    }
+
+    /** A {@code do}/{@code while}: the body runs first, then the bottom test loops back up to it. */
+    private String linkDo(DoStmt s, String next) {
+        String loop = ensure(s, "loop"); // the bottom while-condition test
+        String bodyEntry = link(s.getBody(), loop, "fallthrough");
+        g.addEdge(loop, bodyEntry, "loop_back");
+        g.addEdge(loop, next, "false");
+        return bodyEntry; // a do-while is entered through its body
+    }
+
     /** Materialise the node for {@code s} at its anchor with the given kind (never overwriting). */
-    private static String ensure(ControlFlowGraph g, Statement s, String kind, L1BuildContext ctx) {
+    private String ensure(Statement s, String kind) {
         String id = nodeIdFor(s);
         g.ensureNode(id, kind, ctx.spanOf(s));
         return id;
