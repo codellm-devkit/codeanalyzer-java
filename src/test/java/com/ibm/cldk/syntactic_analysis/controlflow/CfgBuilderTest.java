@@ -258,6 +258,44 @@ class CfgBuilderTest {
         assertWellFormed(build("{ while (true) { b(); } }"));
     }
 
+    @Test
+    void returnInsideTryRunsTheFinallyBeforeLeaving() {
+        ControlFlowGraph g = build("{ try { return; } finally { cleanup(); } }");
+        String ret = nodeOfKind(g, "return");
+        String afterReturn = edgeDst(g, ret, "return");
+        assertNotEquals("@exit", afterReturn, "the return runs the finally before leaving the method");
+        assertTrue(reachable(g, afterReturn, true).contains("@exit"),
+                "after the finally, control continues to the return's target (@exit)");
+    }
+
+    @Test
+    void breakInsideTryRunsTheFinallyThenExitsTheLoop() {
+        ControlFlowGraph g = build("{ while (a()) { try { break; } finally { cleanup(); } }\n c(); }");
+        String brk = g.toCfgEdges().stream()
+                .filter(e -> e.getKind().equals("break"))
+                .map(JCfgEdge::getSrc)
+                .findFirst()
+                .orElseThrow();
+        String afterBreak = edgeDst(g, brk, "break");
+        String loop = nodeOfKind(g, "loop");
+        String loopExit = edgeDst(g, loop, "false");
+        assertNotEquals(loopExit, afterBreak, "the break routes through the finally, not directly to the loop exit");
+        assertTrue(reachable(g, afterBreak, true).contains(loopExit),
+                "after the finally, the break reaches the loop exit");
+    }
+
+    @Test
+    void nestedFinalliesRunInnermostFirst() {
+        ControlFlowGraph g = build("{ try { try { return; } finally { inner(); } } finally { outer(); } }");
+        String ret = nodeOfKind(g, "return");
+        String innerFinally = edgeDst(g, ret, "return");
+        assertNotEquals("@exit", innerFinally, "the return runs the inner finally first");
+        assertFalse(g.successors(innerFinally).contains("@exit"),
+                "the inner finally continues to the outer finally, not straight to @exit");
+        assertTrue(reachable(g, innerFinally, true).contains("@exit"),
+                "both finallies run, then control reaches @exit");
+    }
+
     /** The edges entering {@code n}. */
     private static List<JCfgEdge> inEdges(ControlFlowGraph g, String n) {
         return g.toCfgEdges().stream().filter(e -> e.getDst().equals(n)).collect(Collectors.toList());

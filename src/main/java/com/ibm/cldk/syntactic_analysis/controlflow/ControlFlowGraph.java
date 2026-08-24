@@ -5,6 +5,7 @@ import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.schema.JCfgEdge;
 import com.ibm.cldk.schema.Span;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -109,9 +110,39 @@ public final class ControlFlowGraph {
     }
 
     public void addEdge(String src, String dst, String kind) {
-        edges.add(new Edge(src, dst, kind));
-        succ.computeIfAbsent(src, k -> new ArrayList<>()).add(dst);
-        pred.computeIfAbsent(dst, k -> new ArrayList<>()).add(src);
+        Edge e = new Edge(src, dst, kind);
+        edges.add(e);
+        index(e);
+    }
+
+    private void index(Edge e) {
+        succ.computeIfAbsent(e.src(), k -> new ArrayList<>()).add(e.dst());
+        pred.computeIfAbsent(e.dst(), k -> new ArrayList<>()).add(e.src());
+    }
+
+    /**
+     * Replace every edge into {@code from} with an edge (of {@code kind}) to each of {@code tos}. Used to
+     * fan a finally block's completion out to the union of its continuations without a synthetic node:
+     * the finally is linked to a temporary sentinel, then that sentinel is redirected here.
+     */
+    public void redirect(String from, Collection<String> tos, String kind) {
+        List<Edge> kept = new ArrayList<>();
+        List<Edge> removed = new ArrayList<>();
+        for (Edge e : edges) {
+            (e.dst().equals(from) ? removed : kept).add(e);
+        }
+        edges.clear();
+        succ.clear();
+        pred.clear();
+        for (Edge e : kept) {
+            edges.add(e);
+            index(e);
+        }
+        for (Edge e : removed) {
+            for (String to : tos) {
+                addEdge(e.src(), to, kind);
+            }
+        }
     }
 
     /** Associate a node id with the JavaParser statement it was built from (first wins). */

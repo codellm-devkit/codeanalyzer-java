@@ -65,11 +65,17 @@ Exactly one `@entry` and one `@exit` per callable; every node reachable from `@e
 Each construct has a documented expected CFG shape **and a fixture**; the differential gate checks the two engines agree.
 
 - **Checked exceptions** — an `exception` edge per `throws` type / per potentially-throwing call to the nearest enclosing handler, else `@exit`. Over-approximate (no exception-type refinement at L3).
-- **`try`/`catch`/`finally`** — incl. **`finally` duplication** (finally reached on both normal and exceptional exit of the try) and **try-with-resources** (implicit `close()` in a synthetic finally).
+- **`try`/`catch`/`finally`** — the `finally` runs on **every** exit from the try: normal completion, each catch, and abrupt exits (`return`/`break`/`continue`) and uncaught `throw`s that leave the region. It is modeled as a **single `finally` node** whose completion fans out to the *union* of every exit's continuation (a sound over-approximation); abrupt exits inside the try are rerouted through the enclosing `finally`(ies), innermost first. **Try-with-resources** analyses like a plain try (the implicit `close()` has no source position, so no distinct node).
 - **`synchronized`** — monitor-enter/exit regions.
 - **Static / instance initializer blocks** — their own CFGs (callable `kind:"initializer"`).
 - **`switch`** — classic fall-through (`switch_case` edges) and arrow form (no fall-through).
 - **Labeled `break`/`continue`** — edges to the labeled target (`break`/`continue` kinds).
+
+#### 4.4.1 `finally` modeling and engine parity
+
+The single-node fan-out is not merely the AST engine's compromise — it is the fixed point *both* engines reach under `line:col` identity. `javac` compiles `finally` by **duplicating** the block along each exit path (plus a catch-all handler that runs it and rethrows), so WALA's *bytecode* CFG holds several precise, single-successor copies. But the WALA engine projects instructions back to source `line:col` (§5.2 B.1), and every copy shares the original source positions — so the copies **collapse to one node** and their edges merge, yielding the same union fan-out. Neither engine can be more precise than the other on `finally` at source granularity, so the differential gate (§7.2) can *require* they agree on the `finally` node and its reachability. The one expected difference is **exception-edge density**: WALA's catch-all lets any instruction throw into the `finally`, whereas the AST engine only edges from statements that syntactically contain a call/allocation — a pinned divergence.
+
+The precise per-path model (distinct `finally` copies, each with one successor) is recoverable **only if the one-node-per-`line:col` invariant is relaxed** — e.g. suffixed ids like `@line:col#return` — at the cost of complicating DDG, CDG, and every consumer that joins on body-node ids. Recorded as a deliberate non-choice: doable if a future need for path-precise `finally` outweighs the identity simplicity.
 
 ### 4.5 DDG semantics (syntactic — identical for both engines)
 
@@ -119,7 +125,7 @@ int x = a.f;        // use of a.f     ← U   (truly reads 2)
 
 Pure source analysis; no build, no WALA. Three passes on the callable's statement AST.
 
-- **A.1 Statement-body + CFG.** Walk the callable's body AST; emit a body node per statement at its `line:col` (kind by construct); build CFG edges from structured control-flow semantics — sequential → `fallthrough`; `if` → `true`/`false`; loops → body + `loop_back` + exit; `switch` → `switch_case` (classic) or arrow edges; `return`/`throw` → `@exit`; labeled `break`/`continue` → the loop/label target; `try`/`catch`/`finally` with finally duplication; try-with-resources synthetic close; `synchronized` regions; exceptional edges per §4.4. Columns come straight from JavaParser spans — exact, no recovery.
+- **A.1 Statement-body + CFG.** Walk the callable's body AST; emit a body node per statement at its `line:col` (kind by construct); build CFG edges from structured control-flow semantics — sequential → `fallthrough`; `if` → `true`/`false`; loops → body + `loop_back` + exit; `switch` → `switch_case` (classic) or arrow edges; `return`/`throw` → `@exit`; labeled `break`/`continue` → the loop/label target; `try`/`catch`/`finally` with a single `finally` node and abrupt exits rerouted through it (§4.4.1); try-with-resources; `synchronized` regions; exceptional edges per §4.4. Columns come straight from JavaParser spans — exact, no recovery.
 - **A.2 CDG.** Post-dominator tree rooted at `@exit` (Cooper–Harper–Kennedy); control dependence via Ferrante–Ottenstein–Warren; emit `cdg` edges. Infinite loops get the synthetic `@exit` edge first, so post-dominance is total.
 - **A.3 DDG.** Classic monotone reaching-definitions worklist: per-statement gen/kill over the k-limited access-path domain, iterated to a fixpoint over the CFG; emit a `ddg` edge (with `var`) per def that may reach a use. Prefix-kill on base reassignment; `[*]` for arrays; `prov:["ssa"]`. Operates directly on statement nodes, so endpoints are native `line:col` — no mapping.
 
@@ -136,7 +142,7 @@ Reuses WALA IR; needs a build (like L2 `rta`) and inherits WALA's coverage (the 
   4. **Still ambiguous** — attach to the innermost covering statement and log an over-approximation count.
 
   This mapping is the component L4's semantic DDG reuses, and the sole source of the within-line ambiguity risk — contained by steps 3–4 plus the differential gate against the exact AST engine.
-- **B.2 CFG / CDG / DDG.** CFG from WALA `SSACFG` + `ISSABasicBlock`, each instruction projected to its statement via B.1, normalized to one `@exit`, edge `kind` recovered from block terminators. CDG from WALA dominators/post-dominators on the reverse CFG. DDG from WALA SSA def-use (`DefUse`), each def/use mapped via B.1, `var` from the SSA value's source variable + access path, `prov:["ssa"]`; heap def-use beyond scalars is **not** resolved (no points-to) — same syntactic contract as Engine A.
+- **B.2 CFG / CDG / DDG.** CFG from WALA `SSACFG` + `ISSABasicBlock`, each instruction projected to its statement via B.1, normalized to one `@exit`, edge `kind` recovered from block terminators. `javac`'s duplicated `finally` copies all project to the same source `line:col`, so they collapse to the one `finally` node the AST engine also produces (§4.4.1) — the engines converge there rather than diverge. CDG from WALA dominators/post-dominators on the reverse CFG. DDG from WALA SSA def-use (`DefUse`), each def/use mapped via B.1, `var` from the SSA value's source variable + access path, `prov:["ssa"]`; heap def-use beyond scalars is **not** resolved (no points-to) — same syntactic contract as Engine A.
 
 **Properties:** reuses mature WALA passes; node-derivation aligned with L4. **Cost:** build dependency; columns recovered via B.1; within-line ambiguity; WALA coverage/version limits.
 
@@ -190,7 +196,7 @@ A best-of-both *composition* — WALA edges per-callable where it analysed one, 
 
 ### 7.2 Differential gate
 
-On the fixtures, run both engines and assert they agree where they must — CFG node set + reachability, `cdg` edges, and `ddg` edges on constructs where the syntactic semantics coincide. **Pinned, documented divergences:** exceptional-edge shape (WALA infers from bytecode handlers; AST over-approximates from `throws`/throwing calls), and within-line attribution on multi-statement lines (AST exact; WALA via B.1). The AST engine is the reference. The gate *uses* the divergence as a cross-check rather than merging it away.
+On the fixtures, run both engines and assert they agree where they must — CFG node set + reachability (including the single `finally` node and that it is reached on every exit path, §4.4.1), `cdg` edges, and `ddg` edges on constructs where the syntactic semantics coincide. **Pinned, documented divergences:** exceptional-edge shape and density (WALA's catch-all lets any instruction throw into a handler/`finally`; the AST engine edges only from statements that syntactically throw), and within-line attribution on multi-statement lines (AST exact; WALA via B.1). The AST engine is the reference. The gate *uses* the divergence as a cross-check rather than merging it away.
 
 ## 8. CLI contract
 

@@ -25,8 +25,10 @@ import com.ibm.cldk.syntactic_analysis.L1BuildContext;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Builds a {@link ControlFlowGraph} from a callable's JavaParser {@code BlockStmt}, projecting each
@@ -43,7 +45,11 @@ public final class CfgBuilder {
     private final ControlFlowGraph g = new ControlFlowGraph();
     private final L1BuildContext ctx;
 
-    /** Enclosing loop/switch targets for break/continue; innermost first (Deque head). */
+    /**
+     * Enclosing scopes, innermost first (Deque head): loops and switches (break/continue targets) and
+     * finally regions (abrupt exits are rerouted through them). One stack so an abrupt exit knows which
+     * finally regions lie between it and its target.
+     */
     private final Deque<Frame> frames = new ArrayDeque<>();
 
     /** A label seen on a {@code LabeledStmt}, consumed by the loop/switch it immediately precedes. */
@@ -56,16 +62,48 @@ public final class CfgBuilder {
      */
     private final Deque<List<String>> handlers = new ArrayDeque<>();
 
-    /** A break/continue target: where {@code break} and {@code continue} go, plus the construct's label. */
-    private static final class Frame {
-        private final String breakTarget;
-        private final String continueTarget; // null for a switch or labeled block (no continue target)
-        private final String label; // null when unlabeled
+    /** Distinguishes the temporary sentinel targets used to fan a finally's completion out. */
+    private int sentinelSeq;
 
-        Frame(String breakTarget, String continueTarget, String label) {
+    /**
+     * An enclosing scope: a loop/switch (a break/continue target) or a finally region (which abrupt
+     * exits pass through). A finally frame accumulates the {@code continuations} its completion must
+     * reach — the union of the normal-next and every abrupt exit's next hop.
+     */
+    private static final class Frame {
+        private enum Kind {
+            LOOP,
+            SWITCH,
+            FINALLY
+        }
+
+        private final Kind kind;
+        private final String breakTarget; // LOOP/SWITCH
+        private final String continueTarget; // LOOP only (null otherwise)
+        private final String label; // LOOP/SWITCH; null when unlabeled
+        private final String finallyEntry; // FINALLY
+        private final Set<String> continuations; // FINALLY (mutable, insertion-ordered)
+
+        private Frame(Kind kind, String breakTarget, String continueTarget, String label,
+                String finallyEntry, Set<String> continuations) {
+            this.kind = kind;
             this.breakTarget = breakTarget;
             this.continueTarget = continueTarget;
             this.label = label;
+            this.finallyEntry = finallyEntry;
+            this.continuations = continuations;
+        }
+
+        static Frame loop(String breakTarget, String continueTarget, String label) {
+            return new Frame(Kind.LOOP, breakTarget, continueTarget, label, null, null);
+        }
+
+        static Frame switchScope(String breakTarget, String label) {
+            return new Frame(Kind.SWITCH, breakTarget, null, label, null, null);
+        }
+
+        static Frame finallyScope(String finallyEntry) {
+            return new Frame(Kind.FINALLY, null, null, null, finallyEntry, new LinkedHashSet<>());
         }
     }
 
@@ -143,7 +181,12 @@ public final class CfgBuilder {
         }
         if (s.isReturnStmt()) {
             String id = ensure(s, "return");
-            g.addEdge(id, ControlFlowGraph.EXIT, "return");
+            routeAbrupt(id, "return", ControlFlowGraph.EXIT, null); // through enclosing finallies, then exit
+            if (canThrow(s)) {
+                for (String h : currentHandlers()) {
+                    g.addEdge(id, h, "exception"); // the returned expression may throw first
+                }
+            }
             return id;
         }
         if (s.isThrowStmt()) {
@@ -182,7 +225,7 @@ public final class CfgBuilder {
     /** A top-tested loop ({@code while}/{@code for}/for-each): true into the body, body tail loops back. */
     private String linkTopTestedLoop(Statement s, Statement body, String next) {
         String loop = ensure(s, "loop");
-        frames.push(new Frame(next, loop, takeLabel()));
+        frames.push(Frame.loop(next, loop, takeLabel()));
         try {
             g.addEdge(loop, link(body, loop, "loop_back"), "true");
         } finally {
@@ -209,7 +252,7 @@ public final class CfgBuilder {
     /** A {@code do}/{@code while}: the body runs first, then the bottom test loops back up to it. */
     private String linkDo(DoStmt s, String next) {
         String loop = ensure(s, "loop"); // the bottom while-condition test
-        frames.push(new Frame(next, loop, takeLabel()));
+        frames.push(Frame.loop(next, loop, takeLabel()));
         String bodyEntry;
         try {
             bodyEntry = link(s.getBody(), loop, "fallthrough");
@@ -229,7 +272,7 @@ public final class CfgBuilder {
      */
     private String linkSwitch(SwitchStmt s, String next) {
         String sw = ensure(s, "switch");
-        frames.push(new Frame(next, null, takeLabel())); // break -> join; a switch has no continue
+        frames.push(Frame.switchScope(next, takeLabel())); // break -> join; a switch has no continue
         try {
             List<SwitchEntry> entries = s.getEntries();
             String[] heads = new String[entries.size()];
@@ -255,42 +298,104 @@ public final class CfgBuilder {
     }
 
     /**
-     * A {@code try}/{@code catch}/{@code finally} (and try-with-resources). Normal completion of the try
-     * body and of each catch flows through the finally (if any) to {@code next}. A thrown exception in
-     * the try body routes to every catch entry (type-based dispatch is over-approximated at L3), else to
-     * the finally, else to the enclosing handler. The finally block is a single node reached on both the
-     * normal and the exceptional paths (duplication is impossible under line:col identity). A
+     * A {@code try}/{@code catch}/{@code finally} (and try-with-resources). Every exit from the try —
+     * normal completion, each catch, and abrupt exits (return/break/continue) and uncaught throws — runs
+     * the finally first. The finally is a single node copy (line:col identity precludes per-path copies);
+     * its completion fans out to the <em>union</em> of every continuation that flows through it (the
+     * normal next, each abrupt exit's next hop, the enclosing handler for a propagated exception). This
+     * is a sound over-approximation: it may add infeasible edges but never omits a real one, and it makes
+     * the finally post-dominate the try body (so CDG is correct). A thrown exception in the try body
+     * routes to every catch entry (type dispatch is over-approximated), else to the finally. A
      * try-with-resources analyses like a plain try; its implicit {@code close()} has no source position,
      * so it is not a distinct node.
      */
     private String linkTry(TryStmt s, String next) {
-        boolean hasFinally = s.getFinallyBlock().isPresent();
-        String finallyEntry = hasFinally ? link(s.getFinallyBlock().get(), next, "fallthrough") : next;
-        String normalNext = finallyEntry;
+        if (!s.getFinallyBlock().isPresent()) {
+            return linkTryWithoutFinally(s, next);
+        }
+        // Link the finally body to a temporary sentinel so its real entry is known (abrupt exits route
+        // into it) and its completion can be fanned out to the collected continuations afterwards.
+        String sentinel = " finally" + sentinelSeq++;
+        String finallyEntry = link(s.getFinallyBlock().get(), sentinel, "fallthrough");
+        Frame fin = Frame.finallyScope(finallyEntry);
+        fin.continuations.add(next); // normal completion continues after the finally
 
-        // Link catches before pushing this try's handler: a throw inside a catch uses the enclosing one.
+        frames.push(fin); // the finally applies to abrupt exits in the catches and the try body
+        try {
+            List<String> catchEntries = new ArrayList<>();
+            for (CatchClause cc : s.getCatchClauses()) {
+                catchEntries.add(link(cc.getBody(), finallyEntry, "fallthrough"));
+            }
+            List<String> tryHandlers;
+            if (!catchEntries.isEmpty()) {
+                tryHandlers = catchEntries;
+            } else {
+                // No catch: an uncaught exception runs the finally, then propagates to the enclosing
+                // handler (or the method exit).
+                tryHandlers = List.of(finallyEntry);
+                fin.continuations.addAll(
+                        currentHandlers().isEmpty() ? List.of(ControlFlowGraph.EXIT) : currentHandlers());
+            }
+            handlers.push(tryHandlers);
+            String tryEntry;
+            try {
+                tryEntry = link(s.getTryBlock(), finallyEntry, "fallthrough");
+            } finally {
+                handlers.pop();
+            }
+            g.redirect(sentinel, fin.continuations, "fallthrough");
+            return tryEntry;
+        } finally {
+            frames.pop();
+        }
+    }
+
+    /** A {@code try} with catches but no finally: catches and normal completion flow to {@code next}. */
+    private String linkTryWithoutFinally(TryStmt s, String next) {
         List<String> catchEntries = new ArrayList<>();
         for (CatchClause cc : s.getCatchClauses()) {
-            catchEntries.add(link(cc.getBody(), normalNext, "fallthrough"));
+            catchEntries.add(link(cc.getBody(), next, "fallthrough"));
         }
-
-        List<String> tryHandlers;
-        if (!catchEntries.isEmpty()) {
-            tryHandlers = catchEntries;
-        } else if (hasFinally) {
-            tryHandlers = List.of(finallyEntry);
-        } else {
-            tryHandlers = currentHandlers().isEmpty() ? List.of(ControlFlowGraph.EXIT) : currentHandlers();
-        }
-
+        List<String> tryHandlers = !catchEntries.isEmpty() ? catchEntries
+                : currentHandlers().isEmpty() ? List.of(ControlFlowGraph.EXIT) : currentHandlers();
         handlers.push(tryHandlers);
-        String tryEntry;
         try {
-            tryEntry = link(s.getTryBlock(), normalNext, "fallthrough");
+            return link(s.getTryBlock(), next, "fallthrough");
         } finally {
             handlers.pop();
         }
-        return tryEntry;
+    }
+
+    /**
+     * Route an abrupt exit ({@code from}, kind {@code return}/{@code break}/{@code continue}) to its
+     * {@code target}, threading it through every enclosing finally between the exit and {@code stopAt}
+     * (the loop/switch frame it targets, or {@code null} for a return, which passes through them all).
+     * Each finally on the way records its next hop as a continuation.
+     */
+    private void routeAbrupt(String from, String kind, String target, Frame stopAt) {
+        List<Frame> fins = enclosingFinallies(stopAt);
+        if (fins.isEmpty()) {
+            g.addEdge(from, target, kind);
+            return;
+        }
+        g.addEdge(from, fins.get(0).finallyEntry, kind);
+        for (int i = 0; i < fins.size(); i++) {
+            fins.get(i).continuations.add(i + 1 < fins.size() ? fins.get(i + 1).finallyEntry : target);
+        }
+    }
+
+    /** The finally frames between the current point and {@code stopAt} (all of them when {@code null}). */
+    private List<Frame> enclosingFinallies(Frame stopAt) {
+        List<Frame> fins = new ArrayList<>();
+        for (Frame f : frames) {
+            if (f == stopAt) {
+                break;
+            }
+            if (f.kind == Frame.Kind.FINALLY) {
+                fins.add(f);
+            }
+        }
+        return fins;
     }
 
     /** Where a thrown exception goes: the enclosing handler set, or the method exit when unhandled. */
@@ -319,7 +424,7 @@ public final class CfgBuilder {
             pendingLabel = label;
             return link(inner, next, kindToNext);
         }
-        frames.push(new Frame(next, null, label));
+        frames.push(Frame.switchScope(next, label)); // a labeled block is a break-only target
         try {
             return link(inner, next, kindToNext);
         } finally {
@@ -330,20 +435,23 @@ public final class CfgBuilder {
     private String linkBreak(BreakStmt s) {
         String id = ensure(s, "statement");
         Frame f = targetFrame(s.getLabel().map(l -> l.asString()).orElse(null), false);
-        g.addEdge(id, f.breakTarget, "break");
+        routeAbrupt(id, "break", f.breakTarget, f); // through any finallies between here and the target
         return id;
     }
 
     private String linkContinue(ContinueStmt s) {
         String id = ensure(s, "statement");
         Frame f = targetFrame(s.getLabel().map(l -> l.asString()).orElse(null), true);
-        g.addEdge(id, f.continueTarget, "continue");
+        routeAbrupt(id, "continue", f.continueTarget, f);
         return id;
     }
 
-    /** Resolve the break/continue target: the named frame, or the innermost matching one. */
+    /** Resolve the break/continue target: the named loop/switch, or the innermost one (finallies skipped). */
     private Frame targetFrame(String label, boolean needsContinue) {
         for (Frame f : frames) {
+            if (f.kind == Frame.Kind.FINALLY) {
+                continue; // a finally is passed through, never a break/continue target
+            }
             boolean labelOk = label == null || label.equals(f.label);
             boolean kindOk = !needsContinue || f.continueTarget != null;
             if (labelOk && kindOk) {
@@ -351,7 +459,7 @@ public final class CfgBuilder {
             }
         }
         // Compilable source always has an enclosing target; degrade to @exit rather than throwing.
-        return new Frame(ControlFlowGraph.EXIT, ControlFlowGraph.EXIT, null);
+        return Frame.loop(ControlFlowGraph.EXIT, ControlFlowGraph.EXIT, null);
     }
 
     private String takeLabel() {
