@@ -17,9 +17,11 @@ import com.networknt.schema.SpecVersion;
 import com.networknt.schema.ValidationMessage;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayDeque;
+import java.util.Collection;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -27,7 +29,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * The L3 conformance gate: run the real producer over a control-flow fixture and assert the structural
@@ -59,16 +65,30 @@ class L3DataflowGateTest {
 
     @Test
     void everyCallableWithACfgIsWellFormed() throws IOException {
-        Map<String, JModule> modules = modules(3);
+        assertTrue(assertAllCfgsWellFormed(modules(3)) > 0, "the fixture yields callables with a cfg");
+    }
+
+    /** Assert well-formedness for every callable with a cfg (nested/local types included); return the count. */
+    private static int assertAllCfgsWellFormed(Map<String, JModule> modules) {
+        int count = 0;
         for (JModule m : modules.values()) {
-            for (JType t : m.getTypes().values()) {
-                for (JCallable c : t.getCallables().values()) {
-                    if (c.getCfg() != null) {
-                        assertWellFormed(c);
-                    }
+            count += assertCfgsWellFormed(m.getTypes().values());
+        }
+        return count;
+    }
+
+    private static int assertCfgsWellFormed(Collection<JType> types) {
+        int count = 0;
+        for (JType t : types) {
+            for (JCallable c : t.getCallables().values()) {
+                if (c.getCfg() != null) {
+                    assertWellFormed(c);
+                    count++;
                 }
             }
+            count += assertCfgsWellFormed(t.getTypes().values());
         }
+        return count;
     }
 
     private static void assertWellFormed(JCallable c) {
@@ -215,13 +235,42 @@ class L3DataflowGateTest {
 
     @Test
     void conformsToTheCanonicalSchemaAtLevelThree() throws IOException {
-        Set<ValidationMessage> problems;
+        Set<ValidationMessage> problems = validateSchema(V2Json.compact().toJson(analyse(3)));
+        assertTrue(problems.isEmpty(), "level-3 output must conform to the schema, but got:\n  "
+                + problems.stream().map(ValidationMessage::getMessage).collect(Collectors.joining("\n  ")));
+    }
+
+    private static Set<ValidationMessage> validateSchema(String json) throws IOException {
         try (InputStream in = L3DataflowGateTest.class.getResourceAsStream("/schema/analysis.v2.schema.json")) {
             assertNotNull(in, "the canonical v2 schema must be on the test classpath");
             JsonSchema schema = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012).getSchema(in);
-            problems = schema.validate(MAPPER.readTree(V2Json.compact().toJson(analyse(3))));
+            return schema.validate(MAPPER.readTree(json));
         }
-        assertTrue(problems.isEmpty(), "level-3 output must conform to the schema, but got:\n  "
-                + problems.stream().map(ValidationMessage::getMessage).collect(Collectors.joining("\n  ")));
+    }
+
+    static boolean submodulesCheckedOut() {
+        return Files.isDirectory(FIXTURE.getParent().resolve("spring-petclinic/src"));
+    }
+
+    /**
+     * Run the AST L3 engine over the real-world fixture applications (no build — L3 is source-only) and
+     * assert every callable's cfg is well-formed and the whole payload conforms to the schema. This is
+     * where constructs the small fixtures miss — lambdas, switch expressions, deep generics, nested and
+     * anonymous types — get exercised at scale.
+     */
+    @Tag("realworld")
+    @ParameterizedTest(name = "L3 gate on real-world app: {0}")
+    @EnabledIf("submodulesCheckedOut")
+    @ValueSource(strings = {"spring-petclinic", "quarkuscoffeeshop-counter", "quarkuscoffeeshop-domain", "commons-lang"})
+    void realWorldApplicationsConformAtLevelThree(String app) throws IOException {
+        Path project = FIXTURE.getParent().resolve(app);
+        Map<String, JModule> modules = L1Extractor.extractAll(project, app, null, new LinkedHashMap<>(), 3, 3);
+        assertTrue(assertAllCfgsWellFormed(modules) > 0, app + " must yield callables with a cfg at level 3");
+
+        L2CallGraph.Result l2 = L2CallGraph.build(app, modules);
+        String json = V2Json.compact().toJson(V2Emitter.emit(app, 3, modules, "test", l2.callGraph(), l2.externalSymbols()));
+        Set<ValidationMessage> problems = validateSchema(json);
+        assertTrue(problems.isEmpty(), () -> app + " level-3 output must conform to the schema, first issues:\n  "
+                + problems.stream().map(ValidationMessage::getMessage).limit(8).collect(Collectors.joining("\n  ")));
     }
 }
