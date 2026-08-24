@@ -1,6 +1,7 @@
 package com.ibm.cldk.syntactic_analysis.controlflow;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -12,7 +13,9 @@ import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.schema.JCfgEdge;
 import com.ibm.cldk.syntactic_analysis.L3TestSupport;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
 class CfgBuilderTest {
@@ -181,6 +184,45 @@ class CfgBuilderTest {
                 .findFirst()
                 .orElseThrow();
         assertEquals(outerLoop, contDst, "continue outer targets the outer loop test, not the inner");
+    }
+
+    @Test
+    void classicSwitchFallsThroughBetweenCases() {
+        // A default clause suppresses the implicit no-match edge, so caseTargets are exactly the bodies.
+        ControlFlowGraph g = build(
+                "{ switch (a()) { case 1: b();\n case 2: d(); break;\n default: e(); }\n c(); }");
+        String sw = nodeOfKind(g, "switch");
+        List<String> cases = caseTargets(g, sw);
+        assertTrue(cases.size() >= 2, "each case is selected by a switch_case edge");
+        assertTrue(g.toCfgEdges().stream().anyMatch(e -> e.getKind().equals("fallthrough")
+                && cases.contains(e.getSrc()) && cases.contains(e.getDst())),
+                "a classic case falls through to the next");
+    }
+
+    @Test
+    void arrowSwitchHasNoInterCaseFallthrough() {
+        ControlFlowGraph g = build(
+                "{ switch (a()) { case 1 -> b();\n case 2 -> d();\n default -> e(); }\n c(); }");
+        String sw = nodeOfKind(g, "switch");
+        List<String> cases = caseTargets(g, sw);
+        assertFalse(g.toCfgEdges().stream().anyMatch(e -> e.getKind().equals("fallthrough")
+                && cases.contains(e.getSrc()) && cases.contains(e.getDst())),
+                "arrow cases do not fall through to one another");
+    }
+
+    @Test
+    void switchBreakEdgesOutOfTheSwitch() {
+        ControlFlowGraph g = build("{ switch (a()) { case 1: break;\n default: d(); }\n c(); }");
+        assertTrue(g.toCfgEdges().stream().anyMatch(e -> e.getKind().equals("break")),
+                "a case break edges out of the switch to the join");
+    }
+
+    /** The switch_case targets leaving the switch node. */
+    private static List<String> caseTargets(ControlFlowGraph g, String sw) {
+        return g.toCfgEdges().stream()
+                .filter(e -> e.getSrc().equals(sw) && e.getKind().equals("switch_case"))
+                .map(JCfgEdge::getDst)
+                .collect(Collectors.toList());
     }
 
     private static boolean hasEdge(ControlFlowGraph g, String src, String kind) {

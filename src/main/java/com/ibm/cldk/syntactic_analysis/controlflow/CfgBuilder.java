@@ -14,6 +14,8 @@ import com.github.javaparser.ast.stmt.ForStmt;
 import com.github.javaparser.ast.stmt.IfStmt;
 import com.github.javaparser.ast.stmt.LabeledStmt;
 import com.github.javaparser.ast.stmt.Statement;
+import com.github.javaparser.ast.stmt.SwitchEntry;
+import com.github.javaparser.ast.stmt.SwitchStmt;
 import com.github.javaparser.ast.stmt.WhileStmt;
 import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.syntactic_analysis.L1BuildContext;
@@ -111,6 +113,9 @@ public final class CfgBuilder {
         if (s.isDoStmt()) {
             return linkDo(s.asDoStmt(), next);
         }
+        if (s.isSwitchStmt()) {
+            return linkSwitch(s.asSwitchStmt(), next);
+        }
         if (s.isBreakStmt()) {
             return linkBreak(s.asBreakStmt());
         }
@@ -190,6 +195,39 @@ public final class CfgBuilder {
     }
 
     /**
+     * A {@code switch}: a switch node with a {@code switch_case} edge to each case's entry. Classic
+     * ({@code case 1:}) cases fall through to the next case's entry; arrow ({@code case 1 ->}) cases do
+     * not. {@code break} inside a case exits to the join (the switch's frame breakTarget). With no
+     * {@code default}, an extra {@code switch_case} edge models the no-match path out of the switch.
+     */
+    private String linkSwitch(SwitchStmt s, String next) {
+        String sw = ensure(s, "switch");
+        frames.push(new Frame(next, null, takeLabel())); // break -> join; a switch has no continue
+        try {
+            List<SwitchEntry> entries = s.getEntries();
+            String[] heads = new String[entries.size()];
+            boolean hasDefault = false;
+            // Right-to-left so a classic case's tail falls through to the next case's entry.
+            String fallInto = next;
+            for (int i = entries.size() - 1; i >= 0; i--) {
+                SwitchEntry e = entries.get(i);
+                heads[i] = linkSequence(e.getStatements(), fallInto, "fallthrough");
+                fallInto = e.getType() == SwitchEntry.Type.STATEMENT_GROUP ? heads[i] : next;
+                hasDefault |= e.getLabels().isEmpty();
+            }
+            for (String head : heads) {
+                g.addEdge(sw, head, "switch_case");
+            }
+            if (!hasDefault) {
+                g.addEdge(sw, next, "switch_case");
+            }
+        } finally {
+            frames.pop();
+        }
+        return sw;
+    }
+
+    /**
      * A labeled statement. A labeled loop's label rides on the loop's own frame (so {@code continue
      * <label>} can find it); any other labeled statement gets a break-only frame so {@code break
      * <label>} exits to {@code next}.
@@ -197,7 +235,7 @@ public final class CfgBuilder {
     private String linkLabeled(LabeledStmt s, String next, String kindToNext) {
         String label = s.getLabel().asString();
         Statement inner = s.getStatement();
-        if (isLoop(inner)) {
+        if (isLoop(inner) || inner.isSwitchStmt()) {
             pendingLabel = label;
             return link(inner, next, kindToNext);
         }
