@@ -6,6 +6,7 @@ import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.ast.stmt.BlockStmt;
 import com.github.javaparser.ast.stmt.BreakStmt;
+import com.github.javaparser.ast.stmt.CatchClause;
 import com.github.javaparser.ast.stmt.ContinueStmt;
 import com.github.javaparser.ast.stmt.DoStmt;
 import com.github.javaparser.ast.stmt.ExpressionStmt;
@@ -16,10 +17,13 @@ import com.github.javaparser.ast.stmt.LabeledStmt;
 import com.github.javaparser.ast.stmt.Statement;
 import com.github.javaparser.ast.stmt.SwitchEntry;
 import com.github.javaparser.ast.stmt.SwitchStmt;
+import com.github.javaparser.ast.stmt.SynchronizedStmt;
+import com.github.javaparser.ast.stmt.TryStmt;
 import com.github.javaparser.ast.stmt.WhileStmt;
 import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.syntactic_analysis.L1BuildContext;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +48,13 @@ public final class CfgBuilder {
 
     /** A label seen on a {@code LabeledStmt}, consumed by the loop/switch it immediately precedes. */
     private String pendingLabel;
+
+    /**
+     * Enclosing exception-handler targets; innermost first (Deque head). Each {@code try} pushes the set
+     * of nodes a thrown exception in its body may reach (all its catch entries, or the finally, or the
+     * enclosing handler). A throwing statement edges to every target in the innermost set.
+     */
+    private final Deque<List<String>> handlers = new ArrayDeque<>();
 
     /** A break/continue target: where {@code break} and {@code continue} go, plus the construct's label. */
     private static final class Frame {
@@ -116,6 +127,14 @@ public final class CfgBuilder {
         if (s.isSwitchStmt()) {
             return linkSwitch(s.asSwitchStmt(), next);
         }
+        if (s.isTryStmt()) {
+            return linkTry(s.asTryStmt(), next);
+        }
+        if (s.isSynchronizedStmt()) {
+            // Monitor enter/exit are not distinct L3 nodes; the body carries the flow (and its throws
+            // route to the enclosing handler like any other statement).
+            return link(s.asSynchronizedStmt().getBody(), next, kindToNext);
+        }
         if (s.isBreakStmt()) {
             return linkBreak(s.asBreakStmt());
         }
@@ -128,15 +147,23 @@ public final class CfgBuilder {
             return id;
         }
         if (s.isThrowStmt()) {
-            // A throw with no enclosing handler abruptly exits the method; handler routing (to the
-            // nearest catch/finally) is added with the exception / try-catch work.
             String id = ensure(s, "statement");
-            g.addEdge(id, ControlFlowGraph.EXIT, "exception");
+            for (String h : throwTargets()) {
+                g.addEdge(id, h, "exception");
+            }
             return id;
         }
         // ensureNode never overwrites: a seeded call node keeps its "call" kind and identity.
         String id = ensure(s, "statement");
         g.addEdge(id, next, kindToNext);
+        // A statement that can throw (contains a call/allocation) routes to the enclosing handler(s), if
+        // any. Outside a try there is no explicit edge: the exceptional path is the method exit already
+        // reached by normal flow, and edging every call to @exit would swamp the graph.
+        if (canThrow(s)) {
+            for (String h : currentHandlers()) {
+                g.addEdge(id, h, "exception");
+            }
+        }
         return id;
     }
 
@@ -225,6 +252,59 @@ public final class CfgBuilder {
             frames.pop();
         }
         return sw;
+    }
+
+    /**
+     * A {@code try}/{@code catch}/{@code finally} (and try-with-resources). Normal completion of the try
+     * body and of each catch flows through the finally (if any) to {@code next}. A thrown exception in
+     * the try body routes to every catch entry (type-based dispatch is over-approximated at L3), else to
+     * the finally, else to the enclosing handler. The finally block is a single node reached on both the
+     * normal and the exceptional paths (duplication is impossible under line:col identity). A
+     * try-with-resources analyses like a plain try; its implicit {@code close()} has no source position,
+     * so it is not a distinct node.
+     */
+    private String linkTry(TryStmt s, String next) {
+        boolean hasFinally = s.getFinallyBlock().isPresent();
+        String finallyEntry = hasFinally ? link(s.getFinallyBlock().get(), next, "fallthrough") : next;
+        String normalNext = finallyEntry;
+
+        // Link catches before pushing this try's handler: a throw inside a catch uses the enclosing one.
+        List<String> catchEntries = new ArrayList<>();
+        for (CatchClause cc : s.getCatchClauses()) {
+            catchEntries.add(link(cc.getBody(), normalNext, "fallthrough"));
+        }
+
+        List<String> tryHandlers;
+        if (!catchEntries.isEmpty()) {
+            tryHandlers = catchEntries;
+        } else if (hasFinally) {
+            tryHandlers = List.of(finallyEntry);
+        } else {
+            tryHandlers = currentHandlers().isEmpty() ? List.of(ControlFlowGraph.EXIT) : currentHandlers();
+        }
+
+        handlers.push(tryHandlers);
+        String tryEntry;
+        try {
+            tryEntry = link(s.getTryBlock(), normalNext, "fallthrough");
+        } finally {
+            handlers.pop();
+        }
+        return tryEntry;
+    }
+
+    /** Where a thrown exception goes: the enclosing handler set, or the method exit when unhandled. */
+    private List<String> throwTargets() {
+        return currentHandlers().isEmpty() ? List.of(ControlFlowGraph.EXIT) : currentHandlers();
+    }
+
+    private List<String> currentHandlers() {
+        return handlers.isEmpty() ? List.of() : handlers.peek();
+    }
+
+    /** A statement can throw (for exception edges) when it contains a call or an allocation. */
+    private static boolean canThrow(Statement s) {
+        return s.findFirst(MethodCallExpr.class).isPresent() || s.findFirst(ObjectCreationExpr.class).isPresent();
     }
 
     /**

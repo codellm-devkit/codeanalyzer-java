@@ -12,9 +12,13 @@ import com.github.javaparser.ast.stmt.BlockStmt;
 import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.schema.JCfgEdge;
 import com.ibm.cldk.syntactic_analysis.L3TestSupport;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
@@ -215,6 +219,79 @@ class CfgBuilderTest {
         ControlFlowGraph g = build("{ switch (a()) { case 1: break;\n default: d(); }\n c(); }");
         assertTrue(g.toCfgEdges().stream().anyMatch(e -> e.getKind().equals("break")),
                 "a case break edges out of the switch to the join");
+    }
+
+    @Test
+    void tryCatchRoutesAnExceptionEdgeToTheCatch() {
+        ControlFlowGraph g = build("{ try { risky(); } catch (Exception e) { handle(); }\n c(); }");
+        assertTrue(g.toCfgEdges().stream().anyMatch(e -> e.getKind().equals("exception")),
+                "a throwing statement in the try body routes an exception edge to the catch");
+    }
+
+    @Test
+    void finallyIsReachedOnNormalAndExceptionalPaths() {
+        ControlFlowGraph g = build("{ try { risky(); } finally { cleanup(); }\n c(); }");
+        boolean reachedBothWays = g.nodes().keySet().stream().anyMatch(n ->
+                inEdges(g, n).stream().anyMatch(e -> e.getKind().equals("exception"))
+                        && inEdges(g, n).stream().anyMatch(e -> !e.getKind().equals("exception")));
+        assertTrue(reachedBothWays, "the finally block is reached on both normal and exceptional paths");
+    }
+
+    @Test
+    void tryWithResourcesRoutesAnExceptionEdgeToTheCatch() {
+        ControlFlowGraph g = build(
+                "{ try (AutoCloseable r = open()) { risky(); } catch (Exception e) { handle(); }\n c(); }");
+        assertTrue(g.toCfgEdges().stream().anyMatch(e -> e.getKind().equals("exception")),
+                "try-with-resources routes exceptions like a plain try");
+    }
+
+    @Test
+    void synchronizedLinksItsBodyIntoTheFlow() {
+        ControlFlowGraph g = build("{ synchronized (lock) { b(); }\n c(); }");
+        assertNotEquals("@exit", g.successors("@entry").get(0), "the synchronized body is on the path");
+        assertWellFormed(g);
+    }
+
+    @Test
+    void infiniteLoopStillReachesExit() {
+        // while(true) has no normal exit, but the false edge keeps @exit reachable (post-dominance total).
+        assertWellFormed(build("{ while (true) { b(); } }"));
+    }
+
+    /** The edges entering {@code n}. */
+    private static List<JCfgEdge> inEdges(ControlFlowGraph g, String n) {
+        return g.toCfgEdges().stream().filter(e -> e.getDst().equals(n)).collect(Collectors.toList());
+    }
+
+    /** Every CFG-edge endpoint is reachable from @entry and reaches @exit. */
+    private static void assertWellFormed(ControlFlowGraph g) {
+        Set<String> endpoints = new HashSet<>();
+        g.toCfgEdges().forEach(e -> {
+            endpoints.add(e.getSrc());
+            endpoints.add(e.getDst());
+        });
+        Set<String> fromEntry = reachable(g, "@entry", true);
+        Set<String> toExit = reachable(g, "@exit", false);
+        for (String n : endpoints) {
+            assertTrue(fromEntry.contains(n), n + " is unreachable from @entry");
+            assertTrue(toExit.contains(n), n + " does not reach @exit");
+        }
+    }
+
+    private static Set<String> reachable(ControlFlowGraph g, String start, boolean forward) {
+        Set<String> seen = new HashSet<>();
+        Deque<String> queue = new ArrayDeque<>();
+        queue.add(start);
+        seen.add(start);
+        while (!queue.isEmpty()) {
+            String x = queue.poll();
+            for (String y : forward ? g.successors(x) : g.predecessors(x)) {
+                if (seen.add(y)) {
+                    queue.add(y);
+                }
+            }
+        }
+        return seen;
     }
 
     /** The switch_case targets leaving the switch node. */
