@@ -5,6 +5,7 @@ import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.schema.JCdgEdge;
 import com.ibm.cldk.schema.JCfgEdge;
 import com.ibm.cldk.schema.JDdgEdge;
+import com.ibm.cldk.syntactic_analysis.controlflow.CdgBuilder;
 import com.ibm.cldk.syntactic_analysis.controlflow.CfgBuilder;
 import com.ibm.cldk.syntactic_analysis.controlflow.ControlFlowGraph;
 import java.util.List;
@@ -57,7 +58,7 @@ public final class L3Overlays {
     public static L3Result build(BlockStmt body, Map<String, JBodyNode> existingBody, L1BuildContext ctx,
             int fieldDepth) {
         ControlFlowGraph cfg = CfgBuilder.build(body, existingBody, ctx);
-        List<JCdgEdge> cdg = List.of(); // control dependence lands in a later task
+        List<JCdgEdge> cdg = CdgBuilder.build(cfg);
         List<JDdgEdge> ddg = List.of(); // data dependence lands in a later task
         return new L3Result(cfg.nodes(), cfg.toCfgEdges(), cdg, ddg);
     }
