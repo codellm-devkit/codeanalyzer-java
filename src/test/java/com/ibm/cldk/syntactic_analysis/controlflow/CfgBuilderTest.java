@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.stmt.BlockStmt;
 import com.ibm.cldk.schema.JBodyNode;
+import com.ibm.cldk.schema.JCfgEdge;
 import com.ibm.cldk.syntactic_analysis.L3TestSupport;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -96,6 +97,36 @@ class CfgBuilderTest {
         assertSame(callNode, g.nodes().get(callId), "the L1 call node object is reused, not replaced");
         assertEquals("call", g.nodes().get(callId).getKind(), "kind stays 'call' (additive invariant)");
         assertTrue(g.successors("@entry").contains(callId), "the call node is wired into the CFG");
+    }
+
+    @Test
+    void ifWithoutElseBranchesTrueToThenAndFalseToJoin() {
+        ControlFlowGraph g = build("{ if (a()) { b(); }\n c(); }");
+        String br = nodeOfKind(g, "branch");
+        String trueDst = edgeDst(g, br, "true"); // the then-body (b)
+        String falseDst = edgeDst(g, br, "false"); // the join (c), no else
+        assertEquals(falseDst, g.successors(trueDst).get(0),
+                "the then-arm falls through to the same following statement the false edge targets");
+    }
+
+    @Test
+    void ifElseJoinsBothArmsAtTheFollowingStatement() {
+        ControlFlowGraph g = build("{ if (a()) { b(); } else { d(); }\n c(); }");
+        String br = nodeOfKind(g, "branch");
+        String trueDst = edgeDst(g, br, "true"); // b
+        String falseDst = edgeDst(g, br, "false"); // d
+        assertNotEquals(trueDst, falseDst, "the two arms start at distinct statements");
+        assertEquals(g.successors(trueDst).get(0), g.successors(falseDst).get(0),
+                "both arms rejoin at the following statement");
+    }
+
+    /** The destination of the (single) edge leaving {@code src} with the given kind. */
+    private static String edgeDst(ControlFlowGraph g, String src, String kind) {
+        return g.toCfgEdges().stream()
+                .filter(e -> e.getSrc().equals(src) && e.getKind().equals(kind))
+                .map(JCfgEdge::getDst)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no " + kind + " edge from " + src));
     }
 
     /** The id of the (single) non-synthetic node with the given kind. */

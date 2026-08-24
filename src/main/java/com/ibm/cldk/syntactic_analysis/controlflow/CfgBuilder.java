@@ -6,6 +6,7 @@ import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.ast.stmt.BlockStmt;
 import com.github.javaparser.ast.stmt.ExpressionStmt;
+import com.github.javaparser.ast.stmt.IfStmt;
 import com.github.javaparser.ast.stmt.Statement;
 import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.syntactic_analysis.L1BuildContext;
@@ -50,24 +51,47 @@ public final class CfgBuilder {
      * {@code next}; later tasks branch on the statement kind before this fallthrough.
      */
     private static String link(ControlFlowGraph g, Statement s, String next, L1BuildContext ctx) {
-        String id = nodeIdFor(s);
-        // ensureNode never overwrites: a seeded call node keeps its "call" kind and identity.
-        g.ensureNode(id, kindOf(s), ctx.spanOf(s));
+        if (s.isBlockStmt()) {
+            return linkSequence(g, s.asBlockStmt().getStatements(), next, ctx);
+        }
+        if (s.isIfStmt()) {
+            return linkIf(g, s.asIfStmt(), next, ctx);
+        }
         if (s.isReturnStmt()) {
+            String id = ensure(g, s, "return", ctx);
             g.addEdge(id, ControlFlowGraph.EXIT, "return");
-        } else if (s.isThrowStmt()) {
+            return id;
+        }
+        if (s.isThrowStmt()) {
             // A throw with no enclosing handler abruptly exits the method; handler routing (to the
             // nearest catch/finally) is added with the exception / try-catch work.
+            String id = ensure(g, s, "statement", ctx);
             g.addEdge(id, ControlFlowGraph.EXIT, "exception");
+            return id;
+        }
+        // ensureNode never overwrites: a seeded call node keeps its "call" kind and identity.
+        String id = ensure(g, s, "statement", ctx);
+        g.addEdge(id, next, "fallthrough");
+        return id;
+    }
+
+    /** An {@code if}: a branch node whose true/false edges enter the arms, both rejoining at {@code next}. */
+    private static String linkIf(ControlFlowGraph g, IfStmt s, String next, L1BuildContext ctx) {
+        String id = ensure(g, s, "branch", ctx);
+        g.addEdge(id, link(g, s.getThenStmt(), next, ctx), "true");
+        if (s.getElseStmt().isPresent()) {
+            g.addEdge(id, link(g, s.getElseStmt().get(), next, ctx), "false");
         } else {
-            g.addEdge(id, next, "fallthrough");
+            g.addEdge(id, next, "false");
         }
         return id;
     }
 
-    /** The body-node kind for a statement. Branch/loop/switch kinds arrive with their edge logic. */
-    private static String kindOf(Statement s) {
-        return s.isReturnStmt() ? "return" : "statement";
+    /** Materialise the node for {@code s} at its anchor with the given kind (never overwriting). */
+    private static String ensure(ControlFlowGraph g, Statement s, String kind, L1BuildContext ctx) {
+        String id = nodeIdFor(s);
+        g.ensureNode(id, kind, ctx.spanOf(s));
+        return id;
     }
 
     /** The body-node local id ({@code line:col}) at a statement's addressing anchor. */
