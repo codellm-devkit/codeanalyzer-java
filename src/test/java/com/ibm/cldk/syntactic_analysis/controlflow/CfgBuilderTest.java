@@ -3,11 +3,15 @@ package com.ibm.cldk.syntactic_analysis.controlflow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.stmt.BlockStmt;
+import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.syntactic_analysis.L3TestSupport;
 import java.util.LinkedHashMap;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class CfgBuilderTest {
@@ -54,5 +58,52 @@ class CfgBuilderTest {
         String one = build("{ int x = 1;\n int y = 2; }").toCfgEdges().toString();
         String two = build("{ int x = 1;\n int y = 2; }").toCfgEdges().toString();
         assertEquals(one, two);
+    }
+
+    @Test
+    void returnStatementEdgesToExitWithReturnKind() {
+        ControlFlowGraph g = build("{ int x = 1;\n return; }");
+        String ret = nodeOfKind(g, "return");
+        assertEquals("return", g.nodes().get(ret).getKind());
+        assertTrue(edge(g, ret, "@exit", "return"), "return edges to exit with kind 'return'");
+    }
+
+    @Test
+    void throwStatementEdgesToExit() {
+        ControlFlowGraph g = build("{ throw new RuntimeException(); }");
+        assertTrue(g.predecessors("@exit").stream().anyMatch(id -> !id.equals("@entry")),
+                "an uncaught throw connects to @exit");
+    }
+
+    @Test
+    void bareCallStatementReusesTheL1CallNodeAndKeepsKindCall() {
+        // A receiver call: the statement begins at `this`, but its L1 call node is keyed at the `foo`
+        // name token — so this only reuses if the CFG keys the statement at the call anchor, not begin.
+        String src = "class Foo { void m(){ this.foo(); } void foo(){} }";
+        BlockStmt b = L3TestSupport.methodBody(src, "m");
+        MethodCallExpr call = b.findFirst(MethodCallExpr.class).orElseThrow();
+        int line = call.getName().getRange().orElseThrow().begin.line;
+        int col = call.getName().getRange().orElseThrow().begin.column;
+        String callId = line + ":" + col;
+
+        Map<String, JBodyNode> existing = new LinkedHashMap<>();
+        JBodyNode callNode = new JBodyNode();
+        callNode.setKind("call");
+        existing.put(callId, callNode);
+
+        ControlFlowGraph g = CfgBuilder.build(b, existing, L3TestSupport.ctx(src));
+
+        assertSame(callNode, g.nodes().get(callId), "the L1 call node object is reused, not replaced");
+        assertEquals("call", g.nodes().get(callId).getKind(), "kind stays 'call' (additive invariant)");
+        assertTrue(g.successors("@entry").contains(callId), "the call node is wired into the CFG");
+    }
+
+    /** The id of the (single) non-synthetic node with the given kind. */
+    private static String nodeOfKind(ControlFlowGraph g, String kind) {
+        return g.nodes().entrySet().stream()
+                .filter(e -> kind.equals(e.getValue().getKind()))
+                .map(Map.Entry::getKey)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no node of kind " + kind));
     }
 }
