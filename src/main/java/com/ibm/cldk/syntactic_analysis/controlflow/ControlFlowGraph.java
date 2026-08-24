@@ -1,5 +1,6 @@
 package com.ibm.cldk.syntactic_analysis.controlflow;
 
+import com.github.javaparser.ast.Node;
 import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.schema.JCfgEdge;
 import com.ibm.cldk.schema.Span;
@@ -64,6 +65,8 @@ public final class ControlFlowGraph {
     private final List<Edge> edges = new ArrayList<>();
     private final Map<String, List<String>> succ = new LinkedHashMap<>();
     private final Map<String, List<String>> pred = new LinkedHashMap<>();
+    /** The JavaParser statement each node was built from — the data-dependence pass reads defs/uses off it. */
+    private final Map<String, Node> ast = new LinkedHashMap<>();
 
     public ControlFlowGraph() {
         JBodyNode entry = new JBodyNode();
@@ -109,6 +112,16 @@ public final class ControlFlowGraph {
         edges.add(new Edge(src, dst, kind));
         succ.computeIfAbsent(src, k -> new ArrayList<>()).add(dst);
         pred.computeIfAbsent(dst, k -> new ArrayList<>()).add(src);
+    }
+
+    /** Associate a node id with the JavaParser statement it was built from (first wins). */
+    public void recordAst(String id, Node node) {
+        ast.putIfAbsent(id, node);
+    }
+
+    /** The JavaParser statement for a node, or {@code null} for synthetics and seeded call nodes. */
+    public Node astNode(String id) {
+        return ast.get(id);
     }
 
     public List<String> successors(String id) {

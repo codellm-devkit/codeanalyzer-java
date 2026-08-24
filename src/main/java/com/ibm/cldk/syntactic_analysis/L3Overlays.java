@@ -8,6 +8,7 @@ import com.ibm.cldk.schema.JDdgEdge;
 import com.ibm.cldk.syntactic_analysis.controlflow.CdgBuilder;
 import com.ibm.cldk.syntactic_analysis.controlflow.CfgBuilder;
 import com.ibm.cldk.syntactic_analysis.controlflow.ControlFlowGraph;
+import com.ibm.cldk.syntactic_analysis.dataflow.DdgBuilder;
 import java.util.List;
 import java.util.Map;
 
@@ -59,7 +60,7 @@ public final class L3Overlays {
             int fieldDepth) {
         ControlFlowGraph cfg = CfgBuilder.build(body, existingBody, ctx);
         List<JCdgEdge> cdg = CdgBuilder.build(cfg);
-        List<JDdgEdge> ddg = List.of(); // data dependence lands in a later task
+        List<JDdgEdge> ddg = DdgBuilder.build(cfg, fieldDepth);
         return new L3Result(cfg.nodes(), cfg.toCfgEdges(), cdg, ddg);
     }
 }

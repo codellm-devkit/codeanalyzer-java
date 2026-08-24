@@ -368,6 +368,7 @@ public final class CfgBuilder {
     private String ensure(Statement s, String kind) {
         String id = nodeIdFor(s);
         g.ensureNode(id, kind, ctx.spanOf(s));
+        g.recordAst(id, s); // the data-dependence pass reads defs/uses off this statement
         return id;
     }
 
