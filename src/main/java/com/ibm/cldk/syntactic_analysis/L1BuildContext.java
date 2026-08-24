@@ -31,6 +31,12 @@ public final class L1BuildContext {
     private final String fileKey;
     private final String source;
 
+    /** The requested analysis level; the L3 dataflow pass runs at parse time when this is {@code >= 3}. */
+    private final int analysisLevel;
+
+    /** The DDG access-path bound k (the {@code --graph-field-depth} flag), used only at level 3. */
+    private final int graphFieldDepth;
+
     /**
      * Memoized *type* resolution failures. Safe because a declared type spelling resolves consistently
      * within one file (this context is per-file), and retrying an unresolvable spelling is expensive.
@@ -40,9 +46,16 @@ public final class L1BuildContext {
     private final Set<String> unresolvedTypes = new HashSet<>();
 
     public L1BuildContext(String applicationId, String fileKey, String source) {
+        this(applicationId, fileKey, source, 1, 3);
+    }
+
+    public L1BuildContext(String applicationId, String fileKey, String source, int analysisLevel,
+            int graphFieldDepth) {
         this.applicationId = applicationId;
         this.fileKey = fileKey;
         this.source = source;
+        this.analysisLevel = analysisLevel;
+        this.graphFieldDepth = graphFieldDepth;
     }
 
     /** The {@code can://java/<app>/<file>} id for this module. */

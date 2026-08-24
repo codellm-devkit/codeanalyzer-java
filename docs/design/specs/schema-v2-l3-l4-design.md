@@ -106,6 +106,8 @@ Keep JavaParser (L1) and WALA RTA (L2) as the compute layer; add a **v2 emitter*
 
 ## 8. L3 — intraprocedural (CFG / CDG / DDG)
 
+> **Detailed design:** [`l3-intraprocedural-dataflow-design.md`](./l3-intraprocedural-dataflow-design.md). It refines this section into **two interchangeable engines** (`--l3-engine ast|wala`, AST default), which **revises D5** (WALA-engine / AST-fallback → AST-default / WALA-opt-in) as D28. The sketch below stands; the detailed doc is authoritative on engine posture and edge representation.
+
 **Body node kinds:** `statement`, `call` (L1), `return`, `branch`, `loop`, `switch`, + synthetic `entry`/`exit` (one each per callable, no span).
 
 **CFG construction (D5):** WALA `SSACFG` + `ISSABasicBlock` as the engine; project each SSA instruction to its enclosing **source statement** (`IMethod.getSourcePosition(iindex)` → `line:col`, grouped by the JavaParser statement span from L1). Multi-exit normalized to a single `@exit`. Every node reachable from `@entry` and reaching `@exit`.
@@ -196,7 +198,7 @@ Slice/taint gates are **frontend** gates (SDK), not analyzer gates.
 
 **Live tracking is the epic, not this spec.** Filed as an **Epic + 8-child sub-issue stack** in [codellm-devkit/.github#42](https://github.com/codellm-devkit/.github/issues/42) — one PR per child across `codeanalyzer-java` and `python-sdk`. The epic is the single source of truth for scope and status; the shape below is a snapshot for orientation only.
 
-Shape (snapshot): L1 tree → L2 `call_graph` → Neo4j base → L3 (`cfg`/`cdg`/`ddg`) → L4 SDG (`param_in`/`param_out` + semantic `ddg`) → L4 summary pass → python-sdk v2 views → SDK slice/taint queries. Each level emits **both** projections (L3/L4 carry their Neo4j overlay in-PR); L3 can ship/tag before L4; the summary pass lands after the rest of L4.
+Shape (snapshot): L1 tree → L2 `call_graph` → L3 (`cfg`/`cdg`/`ddg`) → L4 SDG (`param_in`/`param_out` + semantic `ddg`) → L4 summary pass → **consolidated Neo4j projection** → python-sdk v2 views → SDK slice/taint queries. The JSON levels land first; **all Neo4j projection work — the base relabel plus the L3/L4 overlays — is one consolidated pass after L4** (issue #182), so the graph schema is mapped once against the fully-stabilized JSON schema rather than reworked per level. L3 can ship/tag before L4; the summary pass lands after the rest of L4. **Consequence:** the v2 default-output flip (below), gated on the Neo4j projection, moves to post-L4; the analyzer major can still be cut on the JSON levels beforehand.
 
 **Release / lockstep (enduring):**
 - Analyzer = **major** release (breaking output; CHANGELOG *Changed/Breaking*). L1–L4 are independently shippable behind `-a`, so cut the major once L1/L2 v2 (± L3) are green and grow L4 in a follow-up minor.

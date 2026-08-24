@@ -45,12 +45,14 @@ containment subsumes it, matching how `codeanalyzer-python` models it
 (`PyClass.types` for inner classes, `PyCallable.types` for local classes).
 
 ### D5 — L3 CFG engine & granularity: WALA engine → source-statement nodes
+**Revised by D28** (AST engine is now the default; WALA is opt-in). The original decision:
 Use WALA as the analysis engine (`SSACFG` + dominance + SSA def-use — heap-ready for
 L4), but emit **source-statement-level** body nodes keyed by `line:col`: project each
 SSA instruction to its enclosing source statement via `IMethod.getSourcePosition` +
 JavaParser statement spans; fold/drop synthetic phi/pi nodes.
 **Fallback (recorded, not silent):** if SSA→source-statement fidelity proves
 unresolvable, revisit hand-building the CFG from the JavaParser AST (as Python/TS/Go do).
+The fallback became the default: what began as Option B is now the reference AST engine (D28).
 
 ### D6 — L4 points-to precision: RTA default + `--precision`
 Default RTA (reuse the L2 call-graph pointer analysis; proven to scale — 0-1-CFA was
@@ -369,6 +371,39 @@ homed so no edge dangles. The gate is threaded through both the `declared` pass 
 an empty `external_symbols`/`call_graph` is omitted rather than emitted as `{}`/`[]` (absence = no
 fact, D10), so parity is a *missing* key, not an empty one. The `L2CallGraph.build` library default
 keeps external on (it is intrinsic to L2); only the CLI defaults it off.
+
+### D25 — L3 overlay endpoints are body-node local ids, not `can://` ids
+`cfg`/`cdg`/`ddg` are intra-callable overlays, so their edge `src`/`dst` are the body-node **local ids**
+(`line:col` or an `@tag` such as `@entry`/`@exit`) that key the `body{}` map — not application-scope
+`can://` ids (contrast the `call_graph`, D17, which crosses callables). Grounded in the keystone's own
+`ddg` example. The schema tightens `cfg`/`cdg`/`ddg` from bare arrays to `cfgEdge`/`cdgEdge`/`ddgEdge`
+`$defs` whose endpoints `$ref` the pre-existing `localId` def; `ddgEdge.prov` is a closed enum `[ssa]`
+at L3 (L4 adds `points-to`).
+
+### D26 — Two interchangeable L3 engines over one contract; `ast` default, differential gate
+L3 has two engines behind `--l3-engine {ast,wala}` producing the *same* schema: the AST engine
+(JavaParser, default, source-only) and the WALA engine (opt-in, needs a build). They are **alternatives,
+not an overlay** — unlike L2's complementary `declared`+`rta` (D18), both L3 engines implement the same
+`ssa` tier, so a union would be redundant and the engine is kept out of `prov`. A differential gate
+cross-checks them; the AST engine is the reference. (WALA engine + gate tracked as a follow-up.)
+
+### D27 — L3 DDG is syntactic: object-insensitive, field-sensitive, k-limited access paths
+Data dependence at L3 is def-use over k-limited access paths (`base(.field|[*])*`, default `k=3` via
+`--graph-field-depth`; arrays index-insensitive `[*]`), matched by spelling. Object-insensitive: `o1.f`
+and `o2.f` are distinct and aliasing is not resolved, so it can both miss aliased def-use and keep a
+stale def across an aliased write — deferred to L4 (`prov:["points-to"]`). Allocation-site precision is
+L4's 0-CFA, not an L3 option. Every L3 `ddg` edge is `prov:["ssa"]`.
+
+### D28 — L3 CFG/DDG derivation (revises D5): AST engine default, WALA opt-in
+D5 made WALA the L3 engine with an AST-CFG fallback. Revised: because body nodes are keyed `line:col`
+and the identity gate requires a real column — which WALA-over-bytecode lacks — nodes must come from the
+JavaParser AST regardless; only the *edges* differ by engine. So the AST engine (exact `line:col`,
+build-free) is the **default** and WALA is **opt-in**. `L3 ⊆ L4` still holds: L4 *adds* `points-to`
+edges over the same nodes, never removing the `ssa` ones. `finally` is a single node whose completion
+fans out to the union of its continuations (line:col identity precludes per-path copies); both engines
+converge on this — `javac` duplicates `finally` in bytecode, but the copies collapse to the one source
+node under WALA's projection. Precise per-path `finally` needs the one-node-per-`line:col` invariant
+relaxed (tracked separately).
 
 ### Scope guard
 The analyzer is a **pure graph provider**: it emits the CFG/PDG/SDG substrate and

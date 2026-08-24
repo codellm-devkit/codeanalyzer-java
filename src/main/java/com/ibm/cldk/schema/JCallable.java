@@ -70,6 +70,13 @@ public class JCallable {
     /** L1 emits only {@code call} nodes here, keyed by ordinal id; the rest of the body arrives at L3. */
     private Map<String, JBodyNode> body = new LinkedHashMap<>();
 
+    /** L3 control-flow edges over this callable's body nodes; null (absent) below level 3. */
+    private List<JCfgEdge> cfg;
+    /** L3 control-dependence edges over this callable's body nodes; null (absent) below level 3. */
+    private List<JCdgEdge> cdg;
+    /** L3 data-dependence edges (prov {@code ssa}) over this callable's body nodes; null below level 3. */
+    private List<JDdgEdge> ddg;
+
     /** Local (method-body) classes, keyed by simple name — nesting encoded by containment (D4). */
     private Map<String, JType> types = new LinkedHashMap<>();
 }

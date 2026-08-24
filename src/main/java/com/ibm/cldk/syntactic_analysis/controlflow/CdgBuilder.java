@@ -1,0 +1,158 @@
+package com.ibm.cldk.syntactic_analysis.controlflow;
+
+import com.ibm.cldk.schema.JCdgEdge;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Builds the control-dependence overlay from a {@link ControlFlowGraph}. Post-dominators are computed
+ * with the Cooper–Harper–Kennedy iterative algorithm run on the <em>reverse</em> CFG rooted at
+ * {@code @exit}; control dependence is then the Ferrante–Ottenstein–Warren rule: for a CFG edge
+ * {@code A -> B} where {@code B} does not post-dominate {@code A}, every node from {@code B} up to (but
+ * not including) {@code ipdom(A)} in the post-dominator tree is control-dependent on {@code A}.
+ */
+public final class CdgBuilder {
+
+    private CdgBuilder() {}
+
+    public static List<JCdgEdge> build(ControlFlowGraph cfg) {
+        Map<String, String> ipdom = postDominators(cfg);
+        List<JCdgEdge> out = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        List<String> sources = new ArrayList<>(ipdom.keySet());
+        Collections.sort(sources);
+        for (String a : sources) {
+            String stop = ipdom.get(a);
+            for (String b : cfg.successors(a)) {
+                if (!ipdom.containsKey(b) || postDominates(b, a, ipdom)) {
+                    continue;
+                }
+                for (String n = b; n != null && !n.equals(stop); n = ipdom.get(n)) {
+                    if (seen.add(a + " " + n)) {
+                        JCdgEdge e = new JCdgEdge();
+                        e.setSrc(a);
+                        e.setDst(n);
+                        out.add(e);
+                    }
+                }
+            }
+        }
+        out.sort(Comparator.comparing(JCdgEdge::getSrc).thenComparing(JCdgEdge::getDst));
+        return out;
+    }
+
+    /** Whether {@code b} post-dominates {@code a} — i.e. {@code b} is on {@code a}'s ipdom chain. */
+    private static boolean postDominates(String b, String a, Map<String, String> ipdom) {
+        for (String n = a; n != null; ) {
+            if (n.equals(b)) {
+                return true;
+            }
+            String next = ipdom.get(n);
+            if (next == null || next.equals(n)) {
+                return false; // reached the root (@exit)
+            }
+            n = next;
+        }
+        return false;
+    }
+
+    /**
+     * Immediate post-dominators, as a child→ipdom map. Post-domination in the forward CFG is domination
+     * in the <em>reverse</em> CFG rooted at {@code @exit}, so this runs the Cooper–Harper–Kennedy
+     * dominator algorithm on the reverse graph: visit nodes in reverse-postorder and set each node's
+     * ipdom to the running {@link #intersect} of its reverse-graph predecessors' ipdoms, iterating to a
+     * fixpoint. A node's predecessors in the reverse graph are its <em>successors</em> in the forward
+     * CFG.
+     */
+    private static Map<String, String> postDominators(ControlFlowGraph cfg) {
+        String exit = ControlFlowGraph.EXIT;
+        List<String> postorder = new ArrayList<>();
+        dfsPostorderOverPredecessors(cfg, exit, new HashSet<>(), postorder);
+        Map<String, Integer> poNum = new HashMap<>();
+        for (int i = 0; i < postorder.size(); i++) {
+            poNum.put(postorder.get(i), i); // @exit is added last, so it has the highest number (the root)
+        }
+        List<String> reversePostorder = new ArrayList<>(postorder);
+        Collections.reverse(reversePostorder);
+
+        Map<String, String> idom = new HashMap<>();
+        idom.put(exit, exit);
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (String b : reversePostorder) {
+                if (b.equals(exit)) {
+                    continue;
+                }
+                String newIdom = null;
+                // Predecessors in the reverse CFG are successors in the forward CFG.
+                for (String p : cfg.successors(b)) {
+                    if (idom.containsKey(p)) {
+                        newIdom = newIdom == null ? p : intersect(p, newIdom, idom, poNum);
+                    }
+                }
+                if (newIdom != null && !newIdom.equals(idom.get(b))) {
+                    idom.put(b, newIdom);
+                    changed = true;
+                }
+            }
+        }
+        return idom;
+    }
+
+    /**
+     * Postorder over the reverse CFG from {@code @exit} (following forward predecessors). {@code @exit}
+     * is added last, so it gets the highest postorder number — the root, as {@link #intersect} and the
+     * reverse-postorder iteration order both rely on. Iterative to avoid deep recursion on long methods.
+     */
+    private static void dfsPostorderOverPredecessors(ControlFlowGraph cfg, String node, Set<String> visited,
+            List<String> out) {
+        Deque<String> stack = new ArrayDeque<>();
+        Deque<Integer> idx = new ArrayDeque<>();
+        stack.push(node);
+        idx.push(0);
+        visited.add(node);
+        while (!stack.isEmpty()) {
+            String cur = stack.peek();
+            List<String> preds = cfg.predecessors(cur); // reverse-CFG successors
+            int i = idx.pop();
+            if (i < preds.size()) {
+                idx.push(i + 1);
+                String p = preds.get(i);
+                if (visited.add(p)) {
+                    stack.push(p);
+                    idx.push(0);
+                }
+            } else {
+                out.add(stack.pop());
+            }
+        }
+    }
+
+    /**
+     * The common ancestor of {@code a} and {@code b} in the partial post-dominator tree (their
+     * meet). Cooper–Harper–Kennedy's two-finger walk: the finger with the smaller postorder number is
+     * the one further from the root, so it climbs via its ipdom until the two fingers coincide.
+     */
+    private static String intersect(String a, String b, Map<String, String> idom, Map<String, Integer> po) {
+        String f1 = a;
+        String f2 = b;
+        while (!f1.equals(f2)) {
+            while (po.get(f1) < po.get(f2)) {
+                f1 = idom.get(f1);
+            }
+            while (po.get(f2) < po.get(f1)) {
+                f2 = idom.get(f2);
+            }
+        }
+        return f1;
+    }
+}
