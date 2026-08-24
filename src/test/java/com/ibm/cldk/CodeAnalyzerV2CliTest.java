@@ -212,10 +212,29 @@ class CodeAnalyzerV2CliTest {
     }
 
     @Test
-    void v2WithAnalysisLevelAboveTwoFailsLoudly(@TempDir Path tmp) throws IOException {
+    void v2AtAnalysisLevelThreeEmitsDataflowOverlays(@TempDir Path tmp) throws IOException {
         Path in = project(tmp.resolve("app"));
-        assertNotEquals(0, run("-i", in.toString(), "--schema", "v2", "-a", "3"),
-                "L3/L4 are not implemented; asking for a level beyond 2 must be an error, not an L2 payload");
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "--schema", "v2", "-a", "3"),
+                "level 3 is supported by the AST engine: it needs no build, only the sources");
+        String json = Files.readString(out.resolve("analysis.json"));
+        JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+        assertEquals(3, root.get("max_level").getAsInt());
+        assertTrue(json.contains("\"cfg\""), "level 3 lays the cfg overlay on callables");
+    }
+
+    @Test
+    void v2WithAnalysisLevelAboveThreeFailsLoudly(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        assertNotEquals(0, run("-i", in.toString(), "--schema", "v2", "-a", "4"),
+                "L4 is not implemented; asking for a level beyond 3 must be an error, not an L3 payload");
+    }
+
+    @Test
+    void v2WalaL3EngineIsRejectedUntilImplemented(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        assertNotEquals(0, run("-i", in.toString(), "--schema", "v2", "-a", "3", "--l3-engine", "wala"),
+                "the wala L3 engine is not implemented yet; it must fail loudly rather than silently run ast");
     }
 
     @Test

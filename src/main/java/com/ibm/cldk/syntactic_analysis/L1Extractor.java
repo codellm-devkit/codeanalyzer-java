@@ -76,6 +76,18 @@ public final class L1Extractor {
     public static Map<String, JModule> extractAll(
             Path projectRoot, String appName, Path dependencyDir, Map<String, JModule> cached)
             throws IOException {
+        return extractAll(projectRoot, appName, dependencyDir, cached, 1, 3);
+    }
+
+    /**
+     * Build the v2 symbol table, additionally running the L3 dataflow pass at parse time when
+     * {@code analysisLevel >= 3}. The AST L3 engine needs the live {@code BlockStmt} and symbol solver,
+     * which exist only during this pass; {@code graphFieldDepth} is the DDG access-path bound k.
+     */
+    public static Map<String, JModule> extractAll(
+            Path projectRoot, String appName, Path dependencyDir, Map<String, JModule> cached,
+            int analysisLevel, int graphFieldDepth)
+            throws IOException {
         ParserConfiguration discovery = parserConfiguration();
         ProjectRoot root = new ParserCollectionStrategy(discovery).collect(projectRoot);
 
@@ -101,7 +113,8 @@ public final class L1Extractor {
                 // Read the file's own text rather than printing the AST: `span.bytes` must index the
                 // real file, byte for byte.
                 String source = Files.readString(path, StandardCharsets.UTF_8);
-                L1BuildContext ctx = new L1BuildContext(applicationId, fileKey, source);
+                L1BuildContext ctx =
+                        new L1BuildContext(applicationId, fileKey, source, analysisLevel, graphFieldDepth);
 
                 // Reuse the cached module when the file is byte-for-byte what it was last time. This
                 // skips the parse as well as the build, which is where the cost is.

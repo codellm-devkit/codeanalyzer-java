@@ -112,6 +112,15 @@ public final class CallableBuilder {
             LocalTypes locals = localClasses(b, callable.getId());
             callable.setBody(callSiteBuilder.build(b, locals.anonymousConstructorIds));
             callable.setTypes(locals.types);
+            // L3 (parse-time, AST engine): complete the body with statement nodes and lay the
+            // cfg/cdg/ddg overlays. The BlockStmt and symbol solver are live only here.
+            if (ctx.getAnalysisLevel() >= 3) {
+                L3Overlays.L3Result l3 = L3Overlays.build(b, callable.getBody(), ctx, ctx.getGraphFieldDepth());
+                callable.setBody(l3.body());
+                callable.setCfg(l3.cfg());
+                callable.setCdg(l3.cdg());
+                callable.setDdg(l3.ddg());
+            }
         });
         return callable;
     }

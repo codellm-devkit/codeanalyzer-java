@@ -96,7 +96,7 @@ public class CodeAnalyzer implements Runnable {
     public static String projectRootPom;
 
     @Option(names = { "-a",
-            "--analysis-level" }, description = "Level of analysis to perform. Options: 1 (for just symbol table); 2 (for call graph). Default: 1")
+            "--analysis-level" }, description = "Level of analysis to perform. Options: 1 (for just symbol table); 2 (for call graph); 3 (for intraprocedural dataflow: cfg/cdg/ddg). Default: 1")
     public static int analysisLevel = 1;
 
     @Option(names = { "--include-test-classes" }, hidden = true, description = "Print logs to console.")
@@ -152,6 +152,15 @@ public class CodeAnalyzer implements Runnable {
                     + "--schema v2 --analysis-level 2. Off by default, matching v1's application-only call "
                     + "graph; when on, edges to library/JDK targets are emitted so no edge dangles.")
     private boolean externalCalls = false;
+
+    @Option(names = {
+            "--l3-engine" }, description = "L3 dataflow engine at --schema v2 --analysis-level 3: "
+                    + "ast (default; source-based, no build) or wala (not yet implemented).")
+    private String l3Engine = "ast";
+
+    @Option(names = {
+            "--graph-field-depth" }, description = "DDG access-path bound k at --analysis-level 3 (default 3).")
+    private int graphFieldDepth = 3;
 
     /** Handle used to report flag-validation errors as clean, non-zero picocli failures. */
     @Spec
@@ -355,9 +364,14 @@ public class CodeAnalyzer implements Runnable {
      * silently different result.
      */
     private void analyzeV2() throws Exception {
-        if (analysisLevel > 2) {
+        if (analysisLevel > 3) {
             throw new ParameterException(spec.commandLine(),
-                    "error: --schema v2 currently supports --analysis-level 1 and 2 only");
+                    "error: --schema v2 currently supports --analysis-level 1, 2, and 3 only");
+        }
+        if (analysisLevel >= 3 && !"ast".equalsIgnoreCase(l3Engine)) {
+            throw new ParameterException(spec.commandLine(), "wala".equalsIgnoreCase(l3Engine)
+                    ? "error: the wala L3 engine is not yet implemented; use --l3-engine ast"
+                    : "error: unknown --l3-engine '" + l3Engine + "'; use ast");
         }
         if ("neo4j".equalsIgnoreCase(emit)) {
             throw new ParameterException(spec.commandLine(),
@@ -397,14 +411,17 @@ public class CodeAnalyzer implements Runnable {
         // full rebuild, which is also how a caller recovers from a cache they distrust.
         Path cache = cacheDir == null ? null : Paths.get(cacheDir);
         String version = analyzerVersion();
-        Map<String, JModule> cached = eager
+        // L3 runs at parse time and needs the AST that a warm cache hit would skip; the cache is also an
+        // L1 artifact that must not carry L3 overlays. So bypass the cache entirely at level >= 3.
+        Map<String, JModule> cached = (eager || analysisLevel >= 3)
                 ? new java.util.LinkedHashMap<>()
                 : L1Cache.load(cache, application, version);
 
         Map<String, JModule> modules;
         List<L2CallGraph.RtaEndpoint> rtaEndpoints = null;
         try {
-            modules = L1Extractor.extractAll(Paths.get(input), application, dependencyDir, cached);
+            modules = L1Extractor.extractAll(
+                    Paths.get(input), application, dependencyDir, cached, analysisLevel, graphFieldDepth);
             // The RTA overlay wants those same dependency jars in WALA's scope, so build it here, before
             // the finally cleans them. `declared` edges need no build, so level 2 never fails for want of
             // one: a build failure (or --no-rta) leaves rta absent and declared edges intact.
@@ -417,8 +434,11 @@ public class CodeAnalyzer implements Runnable {
             BuildProject.cleanLibraryDependencies();
         }
         // Save the L1 tree before the L2 pass mutates it: the cache is an L1 artifact, so `callee`
-        // (an L2 refinement) must not be persisted into it.
-        L1Cache.save(cache, application, version, modules);
+        // (an L2 refinement) must not be persisted into it. At level >= 3 the tree carries L3 overlays,
+        // which are not an L1 artifact, so the cache is not written.
+        if (analysisLevel < 3) {
+            L1Cache.save(cache, application, version, modules);
+        }
 
         Analysis analysis;
         if (analysisLevel >= 2) {
