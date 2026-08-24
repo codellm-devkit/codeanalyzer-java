@@ -24,6 +24,7 @@ public final class ControlFlowGraph {
     public static final String ENTRY = "@entry";
     public static final String EXIT = "@exit";
 
+    /** One directed CFG edge with its kind; value semantics so {@code toCfgEdges} can deduplicate. */
     private static final class Edge {
         private final String src;
         private final String dst;
@@ -64,6 +65,7 @@ public final class ControlFlowGraph {
 
     private final Map<String, JBodyNode> nodes = new LinkedHashMap<>();
     private final List<Edge> edges = new ArrayList<>();
+    // Forward and backward adjacency, kept in sync with `edges` via index()/redirect() for O(1) lookup.
     private final Map<String, List<String>> succ = new LinkedHashMap<>();
     private final Map<String, List<String>> pred = new LinkedHashMap<>();
     /** The JavaParser statement each node was built from — the data-dependence pass reads defs/uses off it. */

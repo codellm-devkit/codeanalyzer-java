@@ -42,6 +42,11 @@ public final class DdgBuilder {
 
     private DdgBuilder() {}
 
+    /**
+     * A reaching definition: the access {@code path} that was written and the body-node {@code node}
+     * that wrote it. Value semantics ({@link #equals}/{@link #hashCode}) let definitions deduplicate in
+     * the {@code IN}/{@code OUT} sets of the reaching-definitions fixpoint.
+     */
     private static final class Def {
         private final String path;
         private final String node;
@@ -66,7 +71,23 @@ public final class DdgBuilder {
         }
     }
 
+    /**
+     * Compute the data-dependence edges for one callable, in three phases:
+     *
+     * <ol>
+     *   <li><b>gather</b> — per CFG node, the access paths it defines and uses ({@link #collect});
+     *   <li><b>solve</b> reaching definitions to a fixpoint — {@code IN[n] = ⋃ OUT[p]} over predecessors
+     *       {@code p}, {@code OUT[n] = gen(n) ∪ (IN[n] − kill(n))} — iterated over the (small, bounded)
+     *       CFG until no set changes;
+     *   <li><b>emit</b> — for each use at a node, one edge from every reaching definition whose path
+     *       overlaps it.
+     * </ol>
+     *
+     * Edges are deduped and sorted for determinism; each is one def→use pair for a {@code fieldDepth}-
+     * limited access path.
+     */
     public static List<JDdgEdge> build(ControlFlowGraph cfg, int fieldDepth) {
+        // Phase 1: per-node gen sets (defs) and the paths each node reads (uses).
         List<String> nodes = reachableFromEntry(cfg);
         Map<String, Set<String>> defs = new HashMap<>();
         Map<String, Set<String>> uses = new HashMap<>();
@@ -78,6 +99,8 @@ public final class DdgBuilder {
             uses.put(n, u);
         }
 
+        // Phase 2: reaching-definitions fixpoint. Monotone, so it terminates: sets only grow within a
+        // round, and OUT is a function of the current IN sets.
         Map<String, Set<Def>> in = new HashMap<>();
         Map<String, Set<Def>> out = new HashMap<>();
         for (String n : nodes) {
@@ -89,19 +112,20 @@ public final class DdgBuilder {
             changed = false;
             for (String n : nodes) {
                 Set<Def> newIn = new HashSet<>();
-                for (String p : cfg.predecessors(n)) {
+                for (String p : cfg.predecessors(n)) { // IN[n] = union of predecessors' OUT
                     Set<Def> po = out.get(p);
                     if (po != null) {
                         newIn.addAll(po);
                     }
                 }
+                // OUT[n] = gen(n) ∪ (IN[n] − kill(n)): incoming defs this node does not overwrite, ...
                 Set<Def> newOut = new HashSet<>();
                 for (Def d : newIn) {
                     if (!killed(d.path, defs.get(n))) {
                         newOut.add(d);
                     }
                 }
-                for (String p : defs.get(n)) {
+                for (String p : defs.get(n)) { // ... plus the definitions this node itself makes.
                     newOut.add(new Def(p, n));
                 }
                 if (!newIn.equals(in.get(n)) || !newOut.equals(out.get(n))) {
@@ -112,8 +136,9 @@ public final class DdgBuilder {
             }
         }
 
+        // Phase 3: a use of `u` at node `n` depends on every reaching definition of an overlapping path.
         List<JDdgEdge> edges = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
+        Set<String> seen = new HashSet<>(); // dedupe by (def-site, use-site, var)
         for (String n : nodes) {
             for (String u : uses.get(n)) {
                 for (Def d : in.get(n)) {
@@ -134,6 +159,12 @@ public final class DdgBuilder {
         return edges;
     }
 
+    /**
+     * The CFG nodes reachable from {@code @entry}, in BFS order. Restricting to reachable nodes keeps
+     * orphan body entries (e.g. a call node nested inside an expression, which is not a statement of its
+     * own) out of the analysis; the fixed traversal order keeps the fixpoint and the emitted edges
+     * reproducible.
+     */
     private static List<String> reachableFromEntry(ControlFlowGraph cfg) {
         List<String> order = new ArrayList<>();
         Set<String> seen = new HashSet<>();
@@ -152,7 +183,13 @@ public final class DdgBuilder {
         return order;
     }
 
-    /** A definition of {@code path} is killed by a node that redefines {@code path} or a prefix of it. */
+    /**
+     * Whether an incoming definition of {@code path} is killed by the node whose definitions are
+     * {@code nodeDefs}. A definition {@code d} kills {@code path} when {@code path} is {@code d} itself
+     * or an <em>extension</em> of it ({@code d.field}, {@code d[*]}) — a downward prefix-kill: assigning
+     * {@code a} invalidates prior defs of {@code a} and {@code a.f}. It does not kill a <em>prefix</em>
+     * of {@code path} — assigning {@code a.f} leaves a prior definition of {@code a} standing.
+     */
     private static boolean killed(String path, Set<String> nodeDefs) {
         for (String d : nodeDefs) {
             if (path.equals(d) || path.startsWith(d + ".") || path.startsWith(d + "[")) {
@@ -162,14 +199,23 @@ public final class DdgBuilder {
         return false;
     }
 
-    /** A definition reaches a use when their access paths overlap (one is a prefix of the other). */
+    /**
+     * Whether a definition of {@code def} reaches a use of {@code use} — true when the two access paths
+     * overlap, i.e. either is a prefix of the other. So a write to a base ({@code a}) reaches a read of
+     * its field ({@code a.f}), and a write to a sub-component ({@code a.f}) reaches a read of the whole
+     * ({@code a}); distinct siblings ({@code a.f} vs {@code a.g}) do not overlap.
+     */
     private static boolean overlaps(String def, String use) {
         return def.equals(use)
                 || use.startsWith(def + ".") || use.startsWith(def + "[")
                 || def.startsWith(use + ".") || def.startsWith(use + "[");
     }
 
-    /** Collect the defs and uses a CFG node contributes, from its own header expressions (not nested bodies). */
+    /**
+     * The access paths a CFG node defines and uses, taken from the node's <em>own</em> expressions only
+     * — a loop's condition/init/update, an {@code if}'s condition, a statement's expression — never the
+     * nested statement bodies, which are separate CFG nodes with their own defs/uses.
+     */
     private static void collect(Node ast, Set<String> defs, Set<String> uses, int k) {
         if (ast == null) {
             return;
@@ -201,6 +247,13 @@ public final class DdgBuilder {
         // break/continue/synchronized/block/labeled contribute no direct defs or uses.
     }
 
+    /**
+     * Walk an expression, recording the access paths it defines and uses: an assignment or unary
+     * {@code ++}/{@code --} defines its target (a compound assignment or {@code ++}/{@code --} also uses
+     * it); a variable declaration defines each declared name; any other variable/field/array reference
+     * is a use, and an array index is itself a use. Recurses into sub-expressions only — nested
+     * statement bodies belong to other CFG nodes.
+     */
     private static void expr(Expression e, Set<String> defs, Set<String> uses, int k) {
         if (e instanceof AssignExpr) {
             AssignExpr a = (AssignExpr) e;

@@ -315,7 +315,7 @@ public final class CfgBuilder {
         }
         // Link the finally body to a temporary sentinel so its real entry is known (abrupt exits route
         // into it) and its completion can be fanned out to the collected continuations afterwards.
-        String sentinel = " finally" + sentinelSeq++;
+        String sentinel = "#finally-sentinel-" + sentinelSeq++;
         String finallyEntry = link(s.getFinallyBlock().get(), sentinel, "fallthrough");
         Frame fin = Frame.finallyScope(finallyEntry);
         fin.continuations.add(next); // normal completion continues after the finally
