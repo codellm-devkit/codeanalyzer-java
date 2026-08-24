@@ -206,10 +206,10 @@ On the existing Picocli app: `-a 3` emits L3 under `--schema v2`; `--l3-engine {
 
 The oracle already anticipates L3 (`max_level ≤ 4`; `bodyNode.kind` includes the L3 kinds; `cfg`/`cdg`/`ddg` present as arrays). This increment **tightens** them, mirroring how L2 added `callEdge`:
 
-- `cfgEdge` — required `src`, `dst`, `kind`; `src`/`dst` are `localId` (`^\d+:\d+$` or `^@[a-z_]+$`); `kind` a closed enum (the nine of §4.2). `additionalProperties:false`.
+- `cfgEdge` — required `src`, `dst`, `kind`; `src`/`dst` are `localId` (`line:col` or an `@tag`, per the schema's existing `$defs/localId`); `kind` a closed enum (the nine of §4.2). `additionalProperties:false`.
 - `cdgEdge` — required `src`, `dst` (`localId`). `additionalProperties:false`.
 - `ddgEdge` — required `src`, `dst`, `var`, `prov`; `prov` an array of `enum ["ssa"]` at L3 (L4 adds `points-to`), `minItems:1`. `additionalProperties:false`.
-- a `localId` def; the `cfg`/`cdg`/`ddg` arrays `$ref` their edge defs.
+- the `cfg`/`cdg`/`ddg` arrays `$ref` their edge defs, whose endpoints reuse the schema's **existing** `localId` def (no new def needed).
 - an `L3SchemaOracleTest` asserting each way a plausible L3 payload can be wrong (bad `kind`, non-local endpoint, missing `var`, empty `prov`, stray key), written before the producer.
 
 ## 10. Testing & gates
