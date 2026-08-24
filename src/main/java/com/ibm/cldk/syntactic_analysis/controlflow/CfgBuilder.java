@@ -5,15 +5,20 @@ import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.ast.stmt.BlockStmt;
+import com.github.javaparser.ast.stmt.BreakStmt;
+import com.github.javaparser.ast.stmt.ContinueStmt;
 import com.github.javaparser.ast.stmt.DoStmt;
 import com.github.javaparser.ast.stmt.ExpressionStmt;
 import com.github.javaparser.ast.stmt.ForEachStmt;
 import com.github.javaparser.ast.stmt.ForStmt;
 import com.github.javaparser.ast.stmt.IfStmt;
+import com.github.javaparser.ast.stmt.LabeledStmt;
 import com.github.javaparser.ast.stmt.Statement;
 import com.github.javaparser.ast.stmt.WhileStmt;
 import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.syntactic_analysis.L1BuildContext;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 
@@ -31,6 +36,25 @@ public final class CfgBuilder {
 
     private final ControlFlowGraph g = new ControlFlowGraph();
     private final L1BuildContext ctx;
+
+    /** Enclosing loop/switch targets for break/continue; innermost first (Deque head). */
+    private final Deque<Frame> frames = new ArrayDeque<>();
+
+    /** A label seen on a {@code LabeledStmt}, consumed by the loop/switch it immediately precedes. */
+    private String pendingLabel;
+
+    /** A break/continue target: where {@code break} and {@code continue} go, plus the construct's label. */
+    private static final class Frame {
+        private final String breakTarget;
+        private final String continueTarget; // null for a switch or labeled block (no continue target)
+        private final String label; // null when unlabeled
+
+        Frame(String breakTarget, String continueTarget, String label) {
+            this.breakTarget = breakTarget;
+            this.continueTarget = continueTarget;
+            this.label = label;
+        }
+    }
 
     private CfgBuilder(L1BuildContext ctx) {
         this.ctx = ctx;
@@ -66,6 +90,9 @@ public final class CfgBuilder {
      * exit semantics (loops, return/throw) ignore it.
      */
     private String link(Statement s, String next, String kindToNext) {
+        if (s.isLabeledStmt()) {
+            return linkLabeled(s.asLabeledStmt(), next, kindToNext);
+        }
         if (s.isBlockStmt()) {
             return linkSequence(s.asBlockStmt().getStatements(), next, kindToNext);
         }
@@ -83,6 +110,12 @@ public final class CfgBuilder {
         }
         if (s.isDoStmt()) {
             return linkDo(s.asDoStmt(), next);
+        }
+        if (s.isBreakStmt()) {
+            return linkBreak(s.asBreakStmt());
+        }
+        if (s.isContinueStmt()) {
+            return linkContinue(s.asContinueStmt());
         }
         if (s.isReturnStmt()) {
             String id = ensure(s, "return");
@@ -117,7 +150,12 @@ public final class CfgBuilder {
     /** A top-tested loop ({@code while}/{@code for}/for-each): true into the body, body tail loops back. */
     private String linkTopTestedLoop(Statement s, Statement body, String next) {
         String loop = ensure(s, "loop");
-        g.addEdge(loop, link(body, loop, "loop_back"), "true");
+        frames.push(new Frame(next, loop, takeLabel()));
+        try {
+            g.addEdge(loop, link(body, loop, "loop_back"), "true");
+        } finally {
+            frames.pop();
+        }
         g.addEdge(loop, next, "false");
         return loop;
     }
@@ -139,10 +177,73 @@ public final class CfgBuilder {
     /** A {@code do}/{@code while}: the body runs first, then the bottom test loops back up to it. */
     private String linkDo(DoStmt s, String next) {
         String loop = ensure(s, "loop"); // the bottom while-condition test
-        String bodyEntry = link(s.getBody(), loop, "fallthrough");
+        frames.push(new Frame(next, loop, takeLabel()));
+        String bodyEntry;
+        try {
+            bodyEntry = link(s.getBody(), loop, "fallthrough");
+        } finally {
+            frames.pop();
+        }
         g.addEdge(loop, bodyEntry, "loop_back");
         g.addEdge(loop, next, "false");
         return bodyEntry; // a do-while is entered through its body
+    }
+
+    /**
+     * A labeled statement. A labeled loop's label rides on the loop's own frame (so {@code continue
+     * <label>} can find it); any other labeled statement gets a break-only frame so {@code break
+     * <label>} exits to {@code next}.
+     */
+    private String linkLabeled(LabeledStmt s, String next, String kindToNext) {
+        String label = s.getLabel().asString();
+        Statement inner = s.getStatement();
+        if (isLoop(inner)) {
+            pendingLabel = label;
+            return link(inner, next, kindToNext);
+        }
+        frames.push(new Frame(next, null, label));
+        try {
+            return link(inner, next, kindToNext);
+        } finally {
+            frames.pop();
+        }
+    }
+
+    private String linkBreak(BreakStmt s) {
+        String id = ensure(s, "statement");
+        Frame f = targetFrame(s.getLabel().map(l -> l.asString()).orElse(null), false);
+        g.addEdge(id, f.breakTarget, "break");
+        return id;
+    }
+
+    private String linkContinue(ContinueStmt s) {
+        String id = ensure(s, "statement");
+        Frame f = targetFrame(s.getLabel().map(l -> l.asString()).orElse(null), true);
+        g.addEdge(id, f.continueTarget, "continue");
+        return id;
+    }
+
+    /** Resolve the break/continue target: the named frame, or the innermost matching one. */
+    private Frame targetFrame(String label, boolean needsContinue) {
+        for (Frame f : frames) {
+            boolean labelOk = label == null || label.equals(f.label);
+            boolean kindOk = !needsContinue || f.continueTarget != null;
+            if (labelOk && kindOk) {
+                return f;
+            }
+        }
+        // Compilable source always has an enclosing target; degrade to @exit rather than throwing.
+        return new Frame(ControlFlowGraph.EXIT, ControlFlowGraph.EXIT, null);
+    }
+
+    private String takeLabel() {
+        String l = pendingLabel;
+        pendingLabel = null;
+        return l;
+    }
+
+    private static boolean isLoop(Statement s) {
+        return s.isWhileStmt() || s.isForStmt() || s.isForEachStmt() || s.isDoStmt();
     }
 
     /** Materialise the node for {@code s} at its anchor with the given kind (never overwriting). */

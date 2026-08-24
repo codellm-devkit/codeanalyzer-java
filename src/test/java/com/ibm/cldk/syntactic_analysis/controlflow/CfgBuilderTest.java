@@ -154,6 +154,35 @@ class CfgBuilderTest {
         assertTrue(g.toCfgEdges().stream().anyMatch(e -> e.getSrc().equals(loop) && e.getKind().equals("loop_back")));
     }
 
+    @Test
+    void breakEdgesToTheLoopExit() {
+        ControlFlowGraph g = build("{ while (a()) { if (b()) break;\n d(); } }");
+        assertTrue(g.toCfgEdges().stream().anyMatch(e -> e.getKind().equals("break")),
+                "break produces a break edge out of the loop");
+    }
+
+    @Test
+    void continueEdgesToTheLoopTest() {
+        ControlFlowGraph g = build("{ while (a()) { if (b()) continue;\n d(); } }");
+        String loop = nodeOfKind(g, "loop");
+        assertTrue(g.toCfgEdges().stream().anyMatch(e -> e.getKind().equals("continue") && e.getDst().equals(loop)),
+                "continue targets the loop test");
+    }
+
+    @Test
+    void labeledContinueTargetsTheOuterLoop() {
+        ControlFlowGraph g = build(
+                "{ outer: for (int i = 0; a(); i++) { for (int j = 0; b(); j++) { continue outer; } }\n c(); }");
+        String outerLoop = g.successors("@entry").get(0);
+        assertEquals("loop", g.nodes().get(outerLoop).getKind());
+        String contDst = g.toCfgEdges().stream()
+                .filter(e -> e.getKind().equals("continue"))
+                .map(JCfgEdge::getDst)
+                .findFirst()
+                .orElseThrow();
+        assertEquals(outerLoop, contDst, "continue outer targets the outer loop test, not the inner");
+    }
+
     private static boolean hasEdge(ControlFlowGraph g, String src, String kind) {
         return g.toCfgEdges().stream().anyMatch(e -> e.getSrc().equals(src) && e.getKind().equals(kind));
     }
