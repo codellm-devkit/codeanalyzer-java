@@ -1,15 +1,43 @@
-# L3 dataflow metrics: AST engine over the real-world fixtures
+# L3 dataflow metrics: AST vs WALA engine over the real-world fixtures
 
-Generated 2026-08-24 from the `codeanalyzer-2.4.1` build on the `enhancement/issue-183-l3-dataflow`
-branch. Each of the ten real-world fixture applications was analysed at analysis level 3 with the
-default AST engine (`--schema v2 --l3-engine ast`), and the emitted `cfg`/`cdg`/`ddg` overlays counted.
-This is the L3 companion to [`l1-v1-v2-comparison.md`](l1-v1-v2-comparison.md) and
+Each of the ten real-world fixture applications was analysed at analysis level 3 with **both** L3
+engines and the emitted `cfg`/`cdg`/`ddg` overlays counted: the default **AST engine**
+(`--schema v2 --l3-engine ast`, source-only, generated 2026-08-24 on `codeanalyzer-2.4.1`) and the
+opt-in **WALA engine** (`--l3-engine wala`, generated 2026-08-25, WALA 1.6.7 — no version bump). This
+is the L3 companion to [`l1-v1-v2-comparison.md`](l1-v1-v2-comparison.md) and
 [`l2-v1-v2-comparison.md`](l2-v1-v2-comparison.md).
 
 Unlike the L1/L2 notes, this is **not** a v1-vs-v2 comparison — L3 is new; there is no v1 equivalent. It
-is a **baseline** of the AST engine's output, laid out so the same table gains a second set of columns
-when the WALA L3 engine lands (#194) and the two engines are compared. The AST engine is source-only, so
-these numbers need no build: they are the exact structural output of the parser-driven passes.
+is a **comparison of the two L3 engines** (#194): the AST engine is the reference oracle, the WALA
+engine the alternative. The consolidated head-to-head is directly below; the per-engine per-app tables
+and the detailed CFG / CDG / DDG comparisons follow.
+
+## Two-engine comparison at a glance
+
+Totals below are whole-corpus for the AST engine (all ten apps, 13,376 callables with a body) and
+the eight WALA-covered apps for the WALA engine (6,205 callables; two apps had zero WALA coverage —
+see the coverage model). Edge counts are therefore **not** directly subtractable across the two
+`total` columns; the apples-to-apples DDG comparison on the *same* covered callables is in
+[DDG delta](#ddg-delta-wala-vs-ast-engine).
+
+| Dimension | AST engine (`ast`, default) | WALA engine (`wala`, opt-in) | How they compare |
+|---|---|---|---|
+| **Build required** | No — pure source | Yes — RTA build (reuses the L2 `rta` call graph + PA) | AST runs on unbuildable / partially-built code |
+| **Coverage** | Every parsed callable — 13,376 with a body | Call-graph-reachable callables only — 6,205 (42%) | WALA emits no overlay for unreachable methods |
+| **Node identity** | Exact `line:col` from JavaParser | Recovered via the B.1 mapping — **0 `line:0` sentinels** in practice | Parity in practice; both key the same `line:col` node space (D28) |
+| **`cfg` edges** | 88,044 | 72,051 (covered set) | Same node space; edge *kinds* compared below |
+| **`exception` edges** | 2,754 | 11,781 (**4.3×**) | **Pinned divergence** — WALA's bytecode catch-all vs AST's syntactic throwers |
+| **`cdg` edges** | 20,196 | 32,244 (covered set) | WALA richer — captures exception-path control dependences |
+| **`ddg` total** | 42,748 | 14,440 | Coverage-dominated, **not** a precision gap (see below) |
+| **`ddg` on the *same covered* callables** | 12,572 | 14,440 (**+15%**, 1.15×) | WALA finds more du-pairs on identical callables |
+| **heap `points-to` du-pairs** | 0 — no pointer analysis | **513** (`prov:["points-to"]`) | **WALA-only** — the aliased/field du-pairs AST cannot produce |
+| **phi-mediated scalar du-pairs** | Captured (reaching-defs) | Dropped (`NORMAL→NORMAL` filter) | **AST-only** — WALA's documented scalar limitation |
+| **Determinism / degradation** | Deterministic; nothing to fail | Deterministic; degrades cleanly (L2 intact) if the build is absent | Both safe |
+
+**Key takeaways.** The two engines are **alternatives at different precision**, not strictly better/worse — the differential gate cross-validates `cfg`+`cdg` (hard) and *reports* the `ddg` delta rather than asserting equality (§7.2).
+- **WALA's distinctive payoff:** 513 sound heap/aliased du-pairs the AST engine cannot produce at all, plus an execution-faithful CFG/CDG (bytecode-derived dominance frontiers).
+- **WALA's costs:** needs a build; covers only the 42% of callables reachable in the RTA call graph; and its scalar DDG drops phi-mediated (loop-carried / branch-merge) deps the AST engine captures.
+- **Engine selection:** choose **WALA** when heap/aliasing data flow matters; choose **AST** when full coverage, source-exact node identity, or loop-carried scalar deps dominate — or when there is no build.
 
 ## How to reproduce
 
@@ -84,7 +112,7 @@ run must be compared against kind-by-kind.
 
 ## WALA engine — per-app counts
 
-Generated 2026-08-25 on the `enhancement/issue-181-l2-call-graph` branch (`-a 3 --schema v2
+Generated 2026-08-25 on the `enhancement/issue-194-l3-wala-engine` branch (`-a 3 --schema v2
 --l3-engine wala`; WALA 1.6.7 — no version bump required). Apps with pre-compiled class files used
 `--no-build`; apps without compiled classes were given `auto`-build and recorded the outcome.
 
