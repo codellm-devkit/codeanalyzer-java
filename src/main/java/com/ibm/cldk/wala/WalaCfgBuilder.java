@@ -1,11 +1,11 @@
 package com.ibm.cldk.wala;
 
+import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.syntactic_analysis.controlflow.ControlFlowGraph;
 import com.ibm.cldk.wala.WalaAnalysis.MethodIr;
 import com.ibm.wala.ssa.ISSABasicBlock;
 import com.ibm.wala.ssa.SSACFG;
 import com.ibm.wala.ssa.SSAConditionalBranchInstruction;
-import com.ibm.wala.ssa.SSAGotoInstruction;
 import com.ibm.wala.ssa.SSAInstruction;
 import com.ibm.wala.ssa.SSAReturnInstruction;
 import com.ibm.wala.ssa.SSASwitchInstruction;
@@ -24,18 +24,31 @@ import java.util.Map;
  * <p>The block structure is taken from the WALA {@link SSACFG} of the method. Each block's
  * instructions are projected to body-node local ids via the {@link InstructionToNode} mapper.
  * Consecutive distinct nodes within a block receive a {@code fallthrough} edge; inter-block edges
- * carry a kind derived from the block terminator:
+ * carry a kind derived from the block terminator and the kind of the last mapped node:
+ *
  * <ul>
- *   <li>{@code SSAConditionalBranchInstruction} → {@code true} / {@code false} to the two normal
- *       successors (the taken/branch-target block receives {@code true}, the fall-through
- *       {@code false}).
+ *   <li>{@code SSAConditionalBranchInstruction} — kind depends on the source construct (from
+ *       {@link com.ibm.cldk.schema.JBodyNode#getKind()} of the branch node):
+ *       <ul>
+ *         <li>{@code "branch"} ({@code if}): javac compiles {@code if (cond)} as {@code if NOT cond
+ *             goto else}, so {@code getTarget()} always points to the <em>else</em> arm (source
+ *             {@code false}); the fall-through successor is the <em>then</em> arm (source
+ *             {@code true}). Rule: taken = {@code "false"}, fall-through = {@code "true"}.
+ *         <li>{@code "loop"} top-tested ({@code while}/{@code for}): javac emits {@code if NOT
+ *             cond goto exit}, so {@code getTarget()} = exit (source {@code false}), fall-through =
+ *             body (source {@code "true"}). Rule: same as {@code "branch"} — taken = {@code
+ *             "false"}, fall-through = {@code "true"}.
+ *         <li>{@code "loop"} bottom-tested ({@code do/while}): the conditional is at the bottom;
+ *             javac emits {@code if cond goto body_start}, so {@code getTarget()} = body start
+ *             (a back-edge, identified by the successor block having a <em>lower</em> number than
+ *             the current block). Rule: taken = {@code "loop_back"}, fall-through = {@code "false"}.
+ *       </ul>
  *   <li>{@code SSASwitchInstruction} → {@code switch_case} to every normal successor.
- *   <li>{@code SSAReturnInstruction} → {@code return} to the single synthetic {@code @exit}.
- *   <li>{@code SSAThrowInstruction} → {@code exception} to exceptional successors; normal
- *       successor (WALA exit block) → {@code exception} to {@code @exit}.
- *   <li>{@code SSAGotoInstruction} or no explicit terminator → {@code fallthrough}.
- *   <li>Any normal successor that is the WALA exit block → {@code return} to {@code @exit}.
- *   <li>Any exceptional successor that is the WALA exit block → {@code exception} to {@code @exit}.
+ *   <li>{@code SSAReturnInstruction} → {@code return} to {@code @exit}.
+ *   <li>{@code SSAThrowInstruction} → {@code exception} to exceptional successors / {@code @exit}.
+ *   <li>Goto or no explicit terminator: if the successor has a <em>lower</em> block number (a
+ *       back-edge, i.e. the loop back-jump in a top-tested loop) → {@code loop_back}; otherwise
+ *       → {@code fallthrough}.
  * </ul>
  *
  * <p>Block iteration is deterministic (sorted by WALA block number). Edge deduplication is handled
@@ -45,12 +58,6 @@ import java.util.Map;
  * bytecode, but all copies share the same source line, so the mapper returns the same node id for
  * every copy. Consecutive-distinct deduplication within a block then collapses them to one node,
  * and inter-block edges all target that single node.
- *
- * <p>Terminator true/false ordering: WALA's {@link SSAConditionalBranchInstruction#getTarget()}
- * returns the bytecode PC of the taken-branch target. The normal successor block whose
- * {@link ISSABasicBlock#getFirstInstructionIndex()} equals that PC is labelled {@code true}; the
- * other is labelled {@code false}. If no match is found (degenerate case), the lower-numbered
- * block is labelled {@code false} and the higher {@code true}.
  */
 public final class WalaCfgBuilder {
 
@@ -109,7 +116,7 @@ public final class WalaCfgBuilder {
 
             // Normal successors.
             List<ISSABasicBlock> normalSuccs = sorted(cfg.getNormalSuccessors(bb));
-            wireNormalSuccessors(g, cfg, blockNodes, lastNode, terminator, normalSuccs);
+            wireNormalSuccessors(g, cfg, blockNodes, bb, lastNode, terminator, normalSuccs);
 
             // Exceptional successors.
             for (ISSABasicBlock succ : sorted(cfg.getExceptionalSuccessors(bb))) {
@@ -133,12 +140,13 @@ public final class WalaCfgBuilder {
             ControlFlowGraph g,
             SSACFG cfg,
             Map<ISSABasicBlock, List<String>> blockNodes,
+            ISSABasicBlock currentBb,
             String lastNode,
             SSAInstruction terminator,
             List<ISSABasicBlock> normalSuccs) {
 
         if (terminator instanceof SSAConditionalBranchInstruction) {
-            wireConditional(g, cfg, blockNodes, lastNode,
+            wireConditional(g, cfg, blockNodes, currentBb, lastNode,
                     (SSAConditionalBranchInstruction) terminator, normalSuccs);
             return;
         }
@@ -189,39 +197,54 @@ public final class WalaCfgBuilder {
             return;
         }
 
-        // Goto or no explicit terminator: fallthrough to each normal successor.
+        // Goto or no explicit terminator. A successor with a lower block number is a loop
+        // back-edge (the jump back to the loop condition in a top-tested while/for loop).
         for (ISSABasicBlock succ : normalSuccs) {
             if (succ.isExitBlock()) {
                 g.addEdge(lastNode, ControlFlowGraph.EXIT, "return");
             } else {
+                boolean isBackEdge = succ.getNumber() < currentBb.getNumber();
+                String kind = isBackEdge ? "loop_back" : "fallthrough";
                 String first = firstNodeOf(succ, blockNodes, cfg);
                 if (first != null) {
-                    g.addEdge(lastNode, first, "fallthrough");
+                    g.addEdge(lastNode, first, kind);
                 }
             }
         }
     }
 
     /**
-     * Wires the two normal successors of a conditional branch.
+     * Wires the two normal successors of a conditional branch, deriving the edge kinds from the
+     * source construct recorded in the body-node graph.
      *
-     * <p>WALA's {@link SSAConditionalBranchInstruction#getTarget()} returns the bytecode PC of the
-     * taken-branch target. The normal successor block whose first instruction index matches that PC
-     * is labelled {@code true}; the other is labelled {@code false}. When no block matches (rare
-     * degenerate cases), the higher-numbered block is labelled {@code true} and the lower
-     * {@code false} — this ensures both edge kinds are always emitted.
+     * <p>javac uniformly compiles conditional tests by branching on the <em>negated</em> condition:
+     * {@code if (cond)} becomes {@code if NOT cond goto else/exit}, so
+     * {@link SSAConditionalBranchInstruction#getTarget()} always points to the "negative" target
+     * (the else arm for an {@code if}, the loop exit for a top-tested loop). The exception is a
+     * bottom-tested {@code do/while}, where the branch fires on the <em>positive</em> condition back
+     * to the loop body — identified by the taken block having a <em>lower</em> block number.
+     *
+     * <p>Kind assignment:
+     * <ul>
+     *   <li>Taken block (getTarget()) is a <em>back-edge</em> (lower block number) AND node kind is
+     *       {@code "loop"}: this is a do/while bottom test — taken → {@code "loop_back"}, fall-through
+     *       → {@code "false"}.
+     *   <li>Otherwise (if statement or top-tested loop): taken → {@code "false"}, fall-through →
+     *       {@code "true"}.
+     * </ul>
      */
     private static void wireConditional(
             ControlFlowGraph g,
             SSACFG cfg,
             Map<ISSABasicBlock, List<String>> blockNodes,
+            ISSABasicBlock currentBb,
             String lastNode,
             SSAConditionalBranchInstruction branch,
             List<ISSABasicBlock> normalSuccs) {
 
         int takenPc = branch.getTarget();
 
-        // Find which successor starts at the taken-branch target PC.
+        // Identify the taken block by matching the branch target PC to block first-instruction.
         ISSABasicBlock takenBlock = null;
         for (ISSABasicBlock succ : normalSuccs) {
             if (!succ.isExitBlock() && succ.getFirstInstructionIndex() == takenPc) {
@@ -229,18 +252,32 @@ public final class WalaCfgBuilder {
                 break;
             }
         }
+        // Fallback when no block matches the target PC (degenerate): higher block number = taken.
+        if (takenBlock == null && normalSuccs.size() == 2) {
+            ISSABasicBlock s0 = normalSuccs.get(0);
+            ISSABasicBlock s1 = normalSuccs.get(1);
+            takenBlock = (s0.getNumber() > s1.getNumber()) ? s0 : s1;
+        }
+
+        // Determine whether the taken block is a back-edge (do/while bottom test).
+        boolean takenIsBackEdge = takenBlock != null
+                && !takenBlock.isExitBlock()
+                && takenBlock.getNumber() < currentBb.getNumber();
+
+        // Read the source-construct kind stored in the graph for this node.
+        JBodyNode nodeObj = g.nodes().get(lastNode);
+        String nodeKind = nodeObj != null ? nodeObj.getKind() : "";
 
         for (ISSABasicBlock succ : normalSuccs) {
-            boolean isTaken;
-            if (takenBlock != null) {
-                isTaken = (succ == takenBlock);
+            boolean isTaken = (succ == takenBlock);
+            String kind;
+            if ("loop".equals(nodeKind) && takenIsBackEdge) {
+                // do/while bottom test: taken back-edge is the loop body re-entry.
+                kind = isTaken ? "loop_back" : "false";
             } else {
-                // Fallback: higher block number → true, lower → false.
-                ISSABasicBlock other = normalSuccs.stream()
-                        .filter(s -> s != succ).findFirst().orElse(null);
-                isTaken = other == null || succ.getNumber() > other.getNumber();
+                // if-statement or top-tested loop: taken is the negative/exit direction.
+                kind = isTaken ? "false" : "true";
             }
-            String kind = isTaken ? "true" : "false";
 
             if (succ.isExitBlock()) {
                 g.addEdge(lastNode, ControlFlowGraph.EXIT, kind);
