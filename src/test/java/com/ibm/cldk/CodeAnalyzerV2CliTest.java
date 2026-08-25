@@ -82,6 +82,10 @@ class CodeAnalyzerV2CliTest {
         clearCollection("unresolvedTypes");
         clearCollection("unresolvedExpressions");
         SymbolTable.declaredMethodsAndConstructors.clear();
+        // projectRootPom is also reset in @BeforeEach; mirror that here so the last test in this
+        // class does not leave a stale (possibly deleted temp-dir) path that bleeds into tests in
+        // other classes that call RtaCallGraph.endpoints directly (which only sets it when null).
+        CodeAnalyzer.projectRootPom = null;
     }
 
     private static void clearCollection(String field) throws Exception {
