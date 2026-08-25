@@ -233,7 +233,7 @@ public final class WalaAnalysis {
             }
             result.add(new MethodIr(node, method, ir, (IBytecodeMethod<?>) method));
         }
-        // Sort deterministically: declaring-type name first (tiebreaker), then method signature.
+        // Sort deterministically: declaring-type name first (primary key), then method signature (tiebreaker).
         // WALA iterates call-graph nodes in hash-based order, which is not stable across JVM runs.
         result.sort(
                 java.util.Comparator.comparing(

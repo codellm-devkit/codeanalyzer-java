@@ -101,6 +101,10 @@ public final class InstructionToNode {
      * </ul>
      *
      * <p>Every sentinel emission increments the {@link #overApproximationCount} counter.
+     *
+     * <p>Note: {@code desc.definedName} is currently <em>not</em> consulted — only
+     * {@code invokedMethodName} drives disambiguation. Populating {@code definedName} (see
+     * {@link InstructionDescriptor}) has no effect until a matching branch is added here.
      */
     String match(InstructionDescriptor desc, int line, List<Statement> candidates) {
         if (candidates.isEmpty()) {

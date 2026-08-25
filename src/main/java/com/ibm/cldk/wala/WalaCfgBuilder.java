@@ -418,6 +418,12 @@ public final class WalaCfgBuilder {
      *   <li>Remove the crossing edge and insert pred→orphan (fallthrough) + orphan→succ (fallthrough).
      * </ol>
      *
+     * <p>Both new legs are labeled {@code fallthrough}. This is correct for what actually orphans here:
+     * instruction-less source statements are constant/phi-absorbed locals (e.g. {@code int sum = 0;}
+     * folded into a loop-header phi), which only ever sit on sequential control flow between wired
+     * nodes. A statement on a non-fallthrough crossing edge (a branch/exception arm) always carries an
+     * instruction and is wired directly, so it never reaches this splice.
+     *
      * <p>If no crossing edge exists for an orphan (degenerate: orphan is after the last wired node
      * with no successor), the orphan is skipped — this is safe because it means no instruction
      * ever executes after the orphan's source position, so the node is dead code in the bytecode.

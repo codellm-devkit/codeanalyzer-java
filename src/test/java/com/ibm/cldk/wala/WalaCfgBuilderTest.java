@@ -146,8 +146,6 @@ class WalaCfgBuilderTest {
                 .collect(Collectors.toList());
         assertFalse(astLoopBackEdges.isEmpty(), "AST CFG must also have a 'loop_back' edge");
 
-        // The AST engine produces exactly one loop_back edge for a single while loop.
-        JCfgEdge astLb = astLoopBackEdges.get(0);
         List<JCfgEdge> walaLoopBackEdges = walaEdges.stream()
                 .filter(e -> "loop_back".equals(e.getKind()))
                 .collect(Collectors.toList());

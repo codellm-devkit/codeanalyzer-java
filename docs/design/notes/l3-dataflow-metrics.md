@@ -161,7 +161,10 @@ all ten apps**, confirming the mapping resolved source lines without ambiguity.
 | quarkuscoffeeshop-kitchen | 17 | 17 | 59 | 35 | 322 | 400 | 199 | 154 | 153 | 1 | 0 |
 | **total (8 covered apps)** | | | **14,035** | **6,205** | **123,754** | **72,051** | **32,244** | **14,440** | **13,927** | **513** | **0** |
 
-`ddg ssa` — scalar def-use pairs with `prov:["ssa"]`; `ddg pts` — heap/aliased du-pairs with
+The **`body`** column counts *all* L1 body nodes emitted for these eight apps (every callable's
+`call` nodes plus, for WALA-covered callables, the L3 statement/branch/loop nodes) — it is **not**
+restricted to WALA-covered callables. Only `cfg`/`cdg`/`ddg` and `wala_covered` reflect the covered
+subset. `ddg ssa` — scalar def-use pairs with `prov:["ssa"]`; `ddg pts` — heap/aliased du-pairs with
 `prov:["points-to"]` (the RTA-resolved, pointer-analysis-derived pairs the AST engine cannot
 produce).
 

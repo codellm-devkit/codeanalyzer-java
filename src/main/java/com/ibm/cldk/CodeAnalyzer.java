@@ -427,6 +427,12 @@ public class CodeAnalyzer implements Runnable {
             modules = L1Extractor.extractAll(
                     Paths.get(input), application, dependencyDir, cached,
                     analysisLevel, graphFieldDepth, l3Engine);
+            // The WALA L3 engine needs the RTA build; --no-rta suppresses it, so a level-3 wala run with
+            // --no-rta would silently carry no overlays. Warn rather than degrade without a signal.
+            if (analysisLevel >= 3 && noRta && "wala".equalsIgnoreCase(l3Engine)) {
+                Log.warn("--l3-engine wala requires the RTA build that --no-rta suppresses; "
+                        + "no L3 overlays will be produced (L1/L2 output is unaffected)");
+            }
             // The RTA overlay wants those same dependency jars in WALA's scope, so build it here, before
             // the finally cleans them. `declared` edges need no build, so level 2 never fails for want of
             // one: a build failure (or --no-rta) leaves rta absent and declared edges intact.
