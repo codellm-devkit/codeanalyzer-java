@@ -1,12 +1,23 @@
 package com.ibm.cldk.wala;
 
 import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.stmt.BlockStmt;
+import com.github.javaparser.ast.stmt.CatchClause;
+import com.github.javaparser.ast.stmt.DoStmt;
+import com.github.javaparser.ast.stmt.ForEachStmt;
+import com.github.javaparser.ast.stmt.ForStmt;
+import com.github.javaparser.ast.stmt.IfStmt;
 import com.github.javaparser.ast.stmt.Statement;
+import com.github.javaparser.ast.stmt.SwitchEntry;
+import com.github.javaparser.ast.stmt.SwitchStmt;
+import com.github.javaparser.ast.stmt.TryStmt;
+import com.github.javaparser.ast.stmt.WhileStmt;
 import com.ibm.cldk.syntactic_analysis.controlflow.BodyNodeBuilder;
 import com.ibm.wala.ssa.SSAAbstractInvokeInstruction;
 import com.ibm.wala.ssa.SSAInstruction;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -125,6 +136,89 @@ public final class InstructionToNode {
             }
         }
         return result;
+    }
+
+    // ----- static index builder -----------------------------------------------------------------
+
+    /**
+     * Builds a {@code Map<line, List<Statement>>} index from {@code body} by walking the block with
+     * the same transparency rules as {@link BodyNodeBuilder}: labeled statements, bare block
+     * statements, synchronized bodies, and try blocks are transparent (recursed into without
+     * creating their own entries), while every other statement is entered under the line of its
+     * addressing anchor. The resulting index is the correct input to
+     * {@link InstructionToNode#InstructionToNode}.
+     */
+    public static Map<Integer, List<Statement>> statementsByLine(BlockStmt body) {
+        Map<Integer, List<Statement>> result = new LinkedHashMap<>();
+        collectBlock(body, result);
+        return result;
+    }
+
+    private static void collectBlock(BlockStmt block, Map<Integer, List<Statement>> acc) {
+        for (Statement s : block.getStatements()) {
+            collectStatement(s, acc);
+        }
+    }
+
+    private static void collectStatement(Statement s, Map<Integer, List<Statement>> acc) {
+        // Transparent containers: recurse without adding an entry for the container itself.
+        if (s.isLabeledStmt()) {
+            collectStatement(s.asLabeledStmt().getStatement(), acc);
+            return;
+        }
+        if (s.isBlockStmt()) {
+            collectBlock(s.asBlockStmt(), acc);
+            return;
+        }
+        if (s.isSynchronizedStmt()) {
+            collectStatement(s.asSynchronizedStmt().getBody(), acc);
+            return;
+        }
+        if (s.isTryStmt()) {
+            TryStmt ts = s.asTryStmt();
+            collectBlock(ts.getTryBlock(), acc);
+            for (CatchClause cc : ts.getCatchClauses()) {
+                collectBlock(cc.getBody(), acc);
+            }
+            ts.getFinallyBlock().ifPresent(fb -> collectBlock(fb, acc));
+            return;
+        }
+        // All other statements get their own index entry; recurse into nested bodies.
+        addToIndex(s, acc);
+        if (s.isIfStmt()) {
+            IfStmt is = s.asIfStmt();
+            collectStatement(is.getThenStmt(), acc);
+            is.getElseStmt().ifPresent(e -> collectStatement(e, acc));
+        } else if (s.isWhileStmt()) {
+            collectStatement(s.asWhileStmt().getBody(), acc);
+        } else if (s.isForStmt()) {
+            collectStatement(s.asForStmt().getBody(), acc);
+        } else if (s.isForEachStmt()) {
+            collectStatement(s.asForEachStmt().getBody(), acc);
+        } else if (s.isDoStmt()) {
+            collectStatement(s.asDoStmt().getBody(), acc);
+        } else if (s.isSwitchStmt()) {
+            SwitchStmt sw = s.asSwitchStmt();
+            for (SwitchEntry se : sw.getEntries()) {
+                for (Statement es : se.getStatements()) {
+                    collectStatement(es, acc);
+                }
+            }
+        }
+    }
+
+    private static void addToIndex(Statement s, Map<Integer, List<Statement>> acc) {
+        String id = BodyNodeBuilder.nodeIdFor(s);
+        int colon = id.indexOf(':');
+        if (colon <= 0) {
+            return;
+        }
+        try {
+            int line = Integer.parseInt(id.substring(0, colon));
+            acc.computeIfAbsent(line, k -> new ArrayList<>()).add(s);
+        } catch (NumberFormatException e) {
+            // node at "0:0" from missing range — skip
+        }
     }
 
     // ----- inner type ---------------------------------------------------------------------------
