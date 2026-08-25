@@ -81,12 +81,25 @@ public final class L1Extractor {
 
     /**
      * Build the v2 symbol table, additionally running the L3 dataflow pass at parse time when
-     * {@code analysisLevel >= 3}. The AST L3 engine needs the live {@code BlockStmt} and symbol solver,
-     * which exist only during this pass; {@code graphFieldDepth} is the DDG access-path bound k.
+     * {@code analysisLevel >= 3} and {@code l3Engine} is {@code "ast"}. The AST L3 engine needs
+     * the live {@code BlockStmt} and symbol solver, which exist only during this pass;
+     * {@code graphFieldDepth} is the DDG access-path bound k.
      */
     public static Map<String, JModule> extractAll(
             Path projectRoot, String appName, Path dependencyDir, Map<String, JModule> cached,
             int analysisLevel, int graphFieldDepth)
+            throws IOException {
+        return extractAll(projectRoot, appName, dependencyDir, cached, analysisLevel, graphFieldDepth, "ast");
+    }
+
+    /**
+     * Build the v2 symbol table with explicit L3 engine selection. When {@code l3Engine} is
+     * {@code "wala"}, the parse-time L3 hook in {@code CallableBuilder} is suppressed; the WALA
+     * post-build pass ({@code L3WalaOverlays}) will apply overlays after this method returns.
+     */
+    public static Map<String, JModule> extractAll(
+            Path projectRoot, String appName, Path dependencyDir, Map<String, JModule> cached,
+            int analysisLevel, int graphFieldDepth, String l3Engine)
             throws IOException {
         ParserConfiguration discovery = parserConfiguration();
         ProjectRoot root = new ParserCollectionStrategy(discovery).collect(projectRoot);
@@ -113,8 +126,8 @@ public final class L1Extractor {
                 // Read the file's own text rather than printing the AST: `span.bytes` must index the
                 // real file, byte for byte.
                 String source = Files.readString(path, StandardCharsets.UTF_8);
-                L1BuildContext ctx =
-                        new L1BuildContext(applicationId, fileKey, source, analysisLevel, graphFieldDepth);
+                L1BuildContext ctx = new L1BuildContext(
+                        applicationId, fileKey, source, analysisLevel, graphFieldDepth, l3Engine);
 
                 // Reuse the cached module when the file is byte-for-byte what it was last time. This
                 // skips the parse as well as the build, which is where the cost is.

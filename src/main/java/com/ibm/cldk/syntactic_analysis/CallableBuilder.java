@@ -114,7 +114,8 @@ public final class CallableBuilder {
             callable.setTypes(locals.types);
             // L3 (parse-time, AST engine): complete the body with statement nodes and lay the
             // cfg/cdg/ddg overlays. The BlockStmt and symbol solver are live only here.
-            if (ctx.getAnalysisLevel() >= 3) {
+            // Skipped under the wala engine — L3WalaOverlays handles that path post-build.
+            if (ctx.getAnalysisLevel() >= 3 && "ast".equals(ctx.getL3Engine())) {
                 L3Overlays.L3Result l3 = L3Overlays.build(b, callable.getBody(), ctx, ctx.getGraphFieldDepth());
                 callable.setBody(l3.body());
                 callable.setCfg(l3.cfg());
