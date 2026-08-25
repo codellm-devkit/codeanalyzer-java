@@ -1,6 +1,7 @@
 package com.ibm.cldk.wala;
 
 import com.ibm.cldk.schema.JBodyNode;
+import com.ibm.cldk.schema.JCfgEdge;
 import com.ibm.cldk.syntactic_analysis.controlflow.ControlFlowGraph;
 import com.ibm.cldk.wala.WalaAnalysis.MethodIr;
 import com.ibm.wala.ssa.ISSABasicBlock;
@@ -12,6 +13,7 @@ import com.ibm.wala.ssa.SSASwitchInstruction;
 import com.ibm.wala.ssa.SSAThrowInstruction;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -130,6 +132,15 @@ public final class WalaCfgBuilder {
                 }
             }
         }
+
+        // Orphan splice: some source statements (e.g. constant-initialized locals like
+        // "int sum = 0;") have no corresponding WALA SSA instruction because the constant
+        // value is folded into a phi node at the loop or join header. BodyNodeBuilder creates
+        // a body node for every such statement, but the instruction-based edge pass above
+        // never wires it in. Splice each orphan (a non-synthetic body node with no incoming
+        // edges) into the CFG at its source position, between its nearest source-adjacent
+        // wired predecessor and successor.
+        spliceOrphans(g);
 
         return g;
     }
@@ -380,6 +391,140 @@ public final class WalaCfgBuilder {
             return m.method.getLineNumber(m.bytecode.getBytecodeIndex(idx));
         } catch (Throwable t) {
             return -1;
+        }
+    }
+
+    // ----- orphan splice -----------------------------------------------------------------
+
+    /**
+     * Ensures every non-synthetic body node is reachable from {@code @entry} by splicing
+     * instruction-less orphan nodes into the CFG in source order.
+     *
+     * <p>WALA folds constant-initialized local variables (e.g. {@code int sum = 0;} before a
+     * loop) into phi nodes at the loop header, leaving the corresponding source-line block empty.
+     * {@link BodyNodeBuilder} creates a body node for every such statement, but the instruction-
+     * based edge pass in {@link #build} never wires it in because no instruction maps to it.
+     * The result is an orphan node (no incoming edges, not {@code @entry}/{@code @exit}) that
+     * fails reachability checks.
+     *
+     * <p>The algorithm:
+     * <ol>
+     *   <li>Collect all non-synthetic, non-sentinel nodes with an empty predecessor list.
+     *   <li>Sort them ascending by (line, col) so that multiple orphans in the same block are
+     *       processed in textual order (each splice is visible to the next iteration).
+     *   <li>For each orphan, find the "crossing edge" — an existing edge (pred, succ) such that
+     *       pred appears before the orphan in source order and succ appears after it. Among all
+     *       crossing edges, pick the one whose pred is closest to the orphan (highest line:col).
+     *   <li>Remove the crossing edge and insert pred→orphan (fallthrough) + orphan→succ (fallthrough).
+     * </ol>
+     *
+     * <p>If no crossing edge exists for an orphan (degenerate: orphan is after the last wired node
+     * with no successor), the orphan is skipped — this is safe because it means no instruction
+     * ever executes after the orphan's source position, so the node is dead code in the bytecode.
+     */
+    private static void spliceOrphans(ControlFlowGraph g) {
+        List<String> orphans = new ArrayList<>();
+        for (String id : g.nodes().keySet()) {
+            if (id.startsWith("@")) {
+                continue;
+            }
+            if (isSentinel(id)) {
+                continue;
+            }
+            if (g.predecessors(id).isEmpty()) {
+                orphans.add(id);
+            }
+        }
+        if (orphans.isEmpty()) {
+            return;
+        }
+        orphans.sort(Comparator.comparingInt(WalaCfgBuilder::sourceLineOf)
+                .thenComparingInt(WalaCfgBuilder::sourceColOf));
+
+        for (String orphan : orphans) {
+            int oLine = sourceLineOf(orphan);
+            int oCol = sourceColOf(orphan);
+            List<JCfgEdge> allEdges = g.toCfgEdges();
+            JCfgEdge crossing = null;
+            int bestSrcLine = -1;
+            int bestSrcCol = -1;
+            for (JCfgEdge e : allEdges) {
+                String src = e.getSrc();
+                String dst = e.getDst();
+                int sLine = sourceLineOf(src);
+                int sCol = sourceColOf(src);
+                int dLine = sourceLineOf(dst);
+                int dCol = sourceColOf(dst);
+                boolean srcBefore = sLine < oLine || (sLine == oLine && sCol < oCol);
+                boolean dstAfter = dLine > oLine || (dLine == oLine && dCol > oCol);
+                if (srcBefore && dstAfter) {
+                    if (crossing == null
+                            || sLine > bestSrcLine
+                            || (sLine == bestSrcLine && sCol > bestSrcCol)) {
+                        crossing = e;
+                        bestSrcLine = sLine;
+                        bestSrcCol = sCol;
+                    }
+                }
+            }
+            if (crossing == null) {
+                continue;
+            }
+            g.removeEdge(crossing.getSrc(), crossing.getDst(), crossing.getKind());
+            g.addEdge(crossing.getSrc(), orphan, "fallthrough");
+            g.addEdge(orphan, crossing.getDst(), "fallthrough");
+        }
+    }
+
+    /**
+     * Returns {@code true} when {@code id} is a sentinel node (a zero-column body node with
+     * no real source position, of the form {@code line:0}).
+     */
+    private static boolean isSentinel(String id) {
+        return id != null && id.matches("\\d+:0");
+    }
+
+    /**
+     * Parses the line component from a {@code line:col} id. Returns {@code 0} for {@code @entry},
+     * {@link Integer#MAX_VALUE} for {@code @exit}, and {@code -1} when the id is unparseable.
+     */
+    private static int sourceLineOf(String id) {
+        if (ControlFlowGraph.ENTRY.equals(id)) {
+            return 0;
+        }
+        if (ControlFlowGraph.EXIT.equals(id)) {
+            return Integer.MAX_VALUE;
+        }
+        int colon = id.indexOf(':');
+        if (colon <= 0) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(id.substring(0, colon));
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    /**
+     * Parses the column component from a {@code line:col} id. Returns {@code 0} for {@code @entry}
+     * and when no column segment is present; returns {@link Integer#MAX_VALUE} for {@code @exit}.
+     */
+    private static int sourceColOf(String id) {
+        if (ControlFlowGraph.ENTRY.equals(id)) {
+            return 0;
+        }
+        if (ControlFlowGraph.EXIT.equals(id)) {
+            return Integer.MAX_VALUE;
+        }
+        int colon = id.indexOf(':');
+        if (colon < 0 || colon + 1 >= id.length()) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(id.substring(colon + 1));
+        } catch (NumberFormatException e) {
+            return 0;
         }
     }
 }

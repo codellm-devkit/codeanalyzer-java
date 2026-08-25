@@ -117,6 +117,21 @@ public final class ControlFlowGraph {
         index(e);
     }
 
+    /**
+     * Remove every directed edge with the given {@code (src, dst, kind)} triple. Rebuilds the
+     * adjacency maps after removal. Only call on method-scope graphs where the rebuild cost is
+     * negligible. Used by {@code WalaCfgBuilder} to splice orphaned body nodes into the CFG.
+     */
+    public void removeEdge(String src, String dst, String kind) {
+        boolean changed = edges.removeIf(
+                e -> e.src().equals(src) && e.dst().equals(dst) && e.kind().equals(kind));
+        if (changed) {
+            succ.clear();
+            pred.clear();
+            edges.forEach(this::index);
+        }
+    }
+
     private void index(Edge e) {
         succ.computeIfAbsent(e.src(), k -> new ArrayList<>()).add(e.dst());
         pred.computeIfAbsent(e.dst(), k -> new ArrayList<>()).add(e.src());

@@ -57,9 +57,12 @@ import org.junit.jupiter.api.io.TempDir;
  *   <li>CFG reachability — every node reachable from {@code @entry} and reaching {@code @exit} in
  *       both engines (the single {@code finally} node, reached on every exit path per §4.4.1, is
  *       checked as part of this invariant).
- *   <li>CDG equality — after filtering sentinel-involving edges and edges whose {@code src} is a
- *       WALA-only exception source (nodes with exception edges in WALA but not in AST), the
- *       remaining CDG must match the AST reference exactly.
+ *   <li>CDG equality — after filtering sentinel-involving edges and edges whose {@code src} or
+ *       {@code dst} is a WALA-only exception source (nodes with exception edges in WALA but not in
+ *       AST), the remaining CDG must match the AST reference exactly. The {@code dst} direction
+ *       covers try/finally constructs where WALA models the finally body as control-dependent on
+ *       the try body, producing CDG edges that the AST engine (which treats finally as always
+ *       executed) does not.
  * </ol>
  *
  * <p><b>Pinned divergences</b> (asserted as <em>expected</em>, never failures):
@@ -68,8 +71,8 @@ import org.junit.jupiter.api.io.TempDir;
  *       fails; absent from the AST engine.
  *   <li>{@code EXCEPTION_EDGE_DENSITY} — WALA adds {@code exception} edges from every instruction
  *       that may throw; the AST engine edges only from statements that syntactically throw.
- *   <li>{@code CDG_EXCEPTION_INDUCED} — CDG edges whose {@code src} is a WALA-only exception source
- *       (induced by the extra WALA exception edges above).
+ *   <li>{@code CDG_EXCEPTION_INDUCED} — CDG edges whose {@code src} or {@code dst} is a WALA-only
+ *       exception source (induced by the extra WALA exception edges above).
  * </ul>
  *
  * <p><b>DDG delta report</b> (printed to stdout; never asserted equal):
@@ -271,11 +274,18 @@ class L3DifferentialGateTest {
 
             // ---- HARD: CDG equality (scoped to non-pinned control dependences) ----------------
             // Scoping rule: remove edges involving line:0 sentinels (B.1 ambiguity) and edges
-            // whose src is a WALA-only exception source (induced by the pinned exception-edge
-            // density divergence). After this scoping, the remaining CDG must match exactly.
+            // whose src OR dst is a WALA-only exception source. The dst direction is necessary for
+            // try/finally constructs: WALA's exception model causes the finally body (which is a
+            // WALA-only exception source because logValue-style calls may throw per bytecode
+            // analysis) to appear control-dependent on the try body, producing CDG edges pointing
+            // TO the finally statement. The AST engine — which models finally as always-executed
+            // — does not produce these. Both src-induced and dst-induced divergences are captured
+            // under the CDG_EXCEPTION_INDUCED pin. After this scoping the remaining CDG must
+            // match exactly.
             Set<String> filteredWalaCdgKeys = walaOverlays.cdg.stream()
                     .filter(e -> !isSentinel(e.getSrc()) && !isSentinel(e.getDst()))
-                    .filter(e -> !walaOnlyExSrcs.contains(e.getSrc()))
+                    .filter(e -> !walaOnlyExSrcs.contains(e.getSrc())
+                            && !walaOnlyExSrcs.contains(e.getDst()))
                     .map(e -> e.getSrc() + "->" + e.getDst())
                     .collect(Collectors.toCollection(LinkedHashSet::new));
             Set<String> filteredAstCdgKeys = astCdg.stream()
@@ -301,7 +311,8 @@ class L3DifferentialGateTest {
                     + " cdgPinnedFromWala="
                     + walaOverlays.cdg.stream()
                             .filter(e -> isSentinel(e.getSrc()) || isSentinel(e.getDst())
-                                    || walaOnlyExSrcs.contains(e.getSrc()))
+                                    || walaOnlyExSrcs.contains(e.getSrc())
+                                    || walaOnlyExSrcs.contains(e.getDst()))
                             .count());
 
             compared++;
