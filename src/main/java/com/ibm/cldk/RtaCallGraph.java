@@ -119,7 +119,7 @@ public final class RtaCallGraph {
     }
 
     /** One endpoint pair per resolved (caller, call site, target) occurrence, sourced from app classes. */
-    private static List<RtaEndpoint> toEndpoints(CallGraph callGraph) {
+    public static List<RtaEndpoint> toEndpoints(CallGraph callGraph) {
         List<RtaEndpoint> endpoints = new ArrayList<>();
         for (CGNode node : callGraph) {
             IMethod caller = node.getMethod();
