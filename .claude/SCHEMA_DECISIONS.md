@@ -380,30 +380,50 @@ keeps external on (it is intrinsic to L2); only the CLI defaults it off.
 `$defs` whose endpoints `$ref` the pre-existing `localId` def; `ddgEdge.prov` is a closed enum `[ssa]`
 at L3 (L4 adds `points-to`).
 
-### D26 — Two interchangeable L3 engines over one contract; `ast` default, differential gate
-L3 has two engines behind `--l3-engine {ast,wala}` producing the *same* schema: the AST engine
-(JavaParser, default, source-only) and the WALA engine (opt-in, needs a build). They are **alternatives,
-not an overlay** — unlike L2's complementary `declared`+`rta` (D18), both L3 engines implement the same
-`ssa` tier, so a union would be redundant and the engine is kept out of `prov`. A differential gate
-cross-checks them; the AST engine is the reference. (WALA engine + gate tracked as a follow-up.)
+### D26 — Two L3 engines over one contract, used as alternatives; `ast` default; gate cross-validates CFG/CDG
+L3 has two engines behind `--l3-engine {ast,wala}` producing the *same* schema over the *same* nodes:
+the AST engine (JavaParser, default, source-only) and the WALA engine (opt-in, needs a build). They are
+**alternatives, one per run — not an overlay**: unlike L2's complementary `declared`+`rta` (D18), the two
+compute the intraprocedural DDG at *different precision* (object-insensitive syntactic vs RTA points-to,
+D27), so unioning would mix precisions rather than add signal. The differential gate **cross-validates
+`cfg`+`cdg`** (AST is the reference oracle) and **reports the DDG delta empirically** rather than
+asserting agreement (§7.2 of the L3 spec).
 
-### D27 — L3 DDG is syntactic: object-insensitive, field-sensitive, k-limited access paths
-Data dependence at L3 is def-use over k-limited access paths (`base(.field|[*])*`, default `k=3` via
-`--graph-field-depth`; arrays index-insensitive `[*]`), matched by spelling. Object-insensitive: `o1.f`
-and `o2.f` are distinct and aliasing is not resolved, so it can both miss aliased def-use and keep a
-stale def across an aliased write — deferred to L4 (`prov:["points-to"]`). Allocation-site precision is
-L4's 0-CFA, not an L3 option. Every L3 `ddg` edge is `prov:["ssa"]`.
+### D27 (revised) — L3 = intraprocedural, L4 = interprocedural; the engines differ in DDG precision
+The L3/L4 boundary is **intraprocedural vs interprocedural**, not syntactic vs points-to. Both engines'
+DDGs stay within one callable. The AST engine is object-insensitive syntactic over k-limited access
+paths (`base(.field|[*])*`, default `k=3` via `--graph-field-depth`; arrays index-insensitive), matched
+by spelling (`prov:["ssa"]`) — it can miss aliased def-use and keep stale defs. The WALA engine adds
+heap/field du-pairs from the per-method PDG over the reused L2 RTA pointer analysis (`prov:["points-to"]`):
+**sound but over-approximate** — RTA is type-based (one abstract cell per type, weak updates), so it
+recovers all aliased du-pairs but conflates same-type objects and keeps stale defs; precise kills and
+allocation-site separation are L4's 0-CFA (D6). So `prov` names the *derivation method* (ssa/points-to),
+not the level — both appear at L3, points-to recurs at L4. Supersedes the original "L3 DDG is purely
+syntactic; aliasing deferred to L4" reading.
 
 ### D28 — L3 CFG/DDG derivation (revises D5): AST engine default, WALA opt-in
 D5 made WALA the L3 engine with an AST-CFG fallback. Revised: because body nodes are keyed `line:col`
 and the identity gate requires a real column — which WALA-over-bytecode lacks — nodes must come from the
 JavaParser AST regardless; only the *edges* differ by engine. So the AST engine (exact `line:col`,
-build-free) is the **default** and WALA is **opt-in**. `L3 ⊆ L4` still holds: L4 *adds* `points-to`
-edges over the same nodes, never removing the `ssa` ones. `finally` is a single node whose completion
-fans out to the union of its continuations (line:col identity precludes per-path copies); both engines
-converge on this — `javac` duplicates `finally` in bytecode, but the copies collapse to the one source
-node under WALA's projection. Precise per-path `finally` needs the one-node-per-`line:col` invariant
-relaxed (tracked separately).
+build-free) is the **default** and WALA is **opt-in**. `L3 ⊆ L4` still holds: L4 keeps every L3 edge —
+scalar `ssa` and (WALA engine) intraprocedural heap `points-to` — and *adds* the interprocedural reach,
+never removing an L3 edge. `finally` is a single node whose completion fans out to the union of its
+continuations (line:col identity precludes per-path copies); both engines converge on this — `javac`
+duplicates `finally` in bytecode, but the copies collapse to the one source node under WALA's projection.
+Precise per-path `finally` needs the one-node-per-`line:col` invariant relaxed (tracked separately).
+
+### D29 — WALA L3 engine internals: native per-method PDG over the reused RTA PA
+The WALA engine is native WALA end to end: `cfg`←`SSACFG`; `cdg`←PDG `CONTROL_DEP` edges (dominance
+frontiers); `ddg`←PDG `DATA_DEP` (scalar, `prov:["ssa"]`) + `HEAP_DATA_DEP` (heap, `prov:["points-to"]`),
+`NORMAL→NORMAL` only. B.1 recovers node `line:col` — line from the bytecode `LineNumberTable`, sentinel
+`line:0` when within-line disambiguation fails (no schema change). Two spike-confirmed mechanics keep it
+intraprocedural and tractable: **(a)** the PDG is given **empty-defaulting** global mod/ref maps — the
+global `ModRef` closure over a JDK-inclusive call graph is L4-scale (OOMs at 4 GB), so it is skipped; the
+PDG still derives each method's heap du-pairs from its own per-instruction `getMod`/`getRef`, and
+call-site heap-param statements (the SDG interface) are dropped as L4; **(b)** `HEAP_DATA_DEP` edges
+materialize lazily (only via the unlabeled `getSuccNodes`/`getPredNodes`), so the builder primes each
+node before reading labeled edges. Per-method PDG cost is negligible atop the reused RTA call graph + PA.
+Aligns with Horwitz–Reps–Binkley PDG/SDG and WALA's own `PDG`/`SDG`.
 
 ### Scope guard
 The analyzer is a **pure graph provider**: it emits the CFG/PDG/SDG substrate and
