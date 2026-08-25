@@ -125,10 +125,11 @@ public final class BodyNodeBuilder {
     }
 
     /**
-     * The body-node local id ({@code line:col}) at a statement's addressing anchor. Package-private
-     * so {@link CfgBuilder} can delegate to it without duplicating the rule.
+     * The body-node local id ({@code line:col}) at a statement's addressing anchor. Public so
+     * cross-package callers (the WALA engine's {@code InstructionToNode}) share the single source of
+     * truth for the id rule without duplicating it.
      */
-    static String nodeIdFor(Statement s) {
+    public static String nodeIdFor(Statement s) {
         return anchorOfStatement(s).getRange()
                 .map(r -> r.begin.line + ":" + r.begin.column)
                 .orElse("0:0");
