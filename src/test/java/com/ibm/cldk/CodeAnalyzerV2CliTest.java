@@ -241,13 +241,40 @@ class CodeAnalyzerV2CliTest {
         // edges (L2 degraded mode) rather than crashing or rejecting the flag.
         Path in = project(tmp.resolve("app"));
         Path out = tmp.resolve("out");
+
         assertEquals(0, run("-i", in.toString(), "-o", out.toString(),
                 "--schema", "v2", "-a", "3", "--l3-engine", "wala", "--no-build"),
                 "--l3-engine wala must exit 0 even when WALA cannot build the call graph");
+
         JsonObject root = JsonParser.parseString(Files.readString(out.resolve("analysis.json")))
                 .getAsJsonObject();
         // Level 3 is the requested level; even when WALA degrades, max_level is still 3.
         assertEquals(3, root.get("max_level").getAsInt());
+
+        // The WALA engine with no compiled class files produces no application methods, so
+        // L3WalaOverlays.apply either is bypassed or processes zero methods — either way no
+        // cfg or ddg overlays appear.  This is the defining property of the degraded mode.
+        assertFalse(hasNonEmptyOverlay(root, "cfg"),
+                "degraded WALA run must not carry cfg overlays");
+        assertFalse(hasNonEmptyOverlay(root, "ddg"),
+                "degraded WALA run must not carry ddg overlays");
+    }
+
+    @Test
+    void v2L3EngineUpperCaseNormalizedToLower(@TempDir Path tmp) throws IOException {
+        // --l3-engine AST (uppercase) must be treated identically to --l3-engine ast.  Without
+        // normalization, the case-sensitive gate in CallableBuilder fires as false and the run
+        // silently emits no overlays despite the CLI validator accepting the value.
+        Path in = project(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(),
+                "--schema", "v2", "-a", "3", "--l3-engine", "AST"),
+                "--l3-engine AST must be accepted and produce overlays like --l3-engine ast");
+        JsonObject root = JsonParser.parseString(Files.readString(out.resolve("analysis.json")))
+                .getAsJsonObject();
+        assertEquals(3, root.get("max_level").getAsInt());
+        assertTrue(hasNonEmptyOverlay(root, "cfg"),
+                "--l3-engine AST (uppercase) must produce cfg overlays; normalize-to-lower is required");
     }
 
     /**

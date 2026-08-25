@@ -68,7 +68,7 @@ public final class L1BuildContext {
         this.source = source;
         this.analysisLevel = analysisLevel;
         this.graphFieldDepth = graphFieldDepth;
-        this.l3Engine = l3Engine != null ? l3Engine : "ast";
+        this.l3Engine = l3Engine != null ? l3Engine.toLowerCase(java.util.Locale.ROOT) : "ast";
     }
 
     /** The {@code can://java/<app>/<file>} id for this module. */
