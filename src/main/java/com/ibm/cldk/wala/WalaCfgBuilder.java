@@ -237,9 +237,10 @@ public final class WalaCfgBuilder {
      *
      * <p>Kind assignment:
      * <ul>
-     *   <li>Taken block (getTarget()) is a <em>back-edge</em> (lower block number) AND node kind is
-     *       {@code "loop"}: this is a do/while bottom test — taken → {@code "loop_back"}, fall-through
-     *       → {@code "false"}.
+     *   <li>Taken block (getTarget()) is a <em>back-edge</em> (lower or equal block number — equal
+     *       when the body and condition share a single WALA block, producing a self-loop) AND node
+     *       kind is {@code "loop"}: this is a do/while bottom test — taken → {@code "loop_back"},
+     *       fall-through → {@code "false"}.
      *   <li>Otherwise (if statement or top-tested loop): taken → {@code "false"}, fall-through →
      *       {@code "true"}.
      * </ul>
@@ -271,9 +272,14 @@ public final class WalaCfgBuilder {
         }
 
         // Determine whether the taken block is a back-edge (do/while bottom test).
+        // The self-loop case (takenBlock == currentBb) arises when the do/while body and
+        // the bottom condition compile into a single WALA basic block: the conditional
+        // branch's getTarget() lands on that block's own first instruction, making the
+        // taken successor the current block. Using <= captures both the strict back-edge
+        // (taken block has a lower number) and the self-loop (equal number).
         boolean takenIsBackEdge = takenBlock != null
                 && !takenBlock.isExitBlock()
-                && takenBlock.getNumber() < currentBb.getNumber();
+                && takenBlock.getNumber() <= currentBb.getNumber();
 
         // Read the source-construct kind stored in the graph for this node.
         JBodyNode nodeObj = g.nodes().get(lastNode);

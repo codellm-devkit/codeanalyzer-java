@@ -170,6 +170,78 @@ class WalaCfgBuilderTest {
                 "'false' edge from loop node must target the loop exit (AST reference)");
     }
 
+    // ----- do/while fixture ---------------------------------------------------------------------
+
+    private static final String DO_WHILE_FIXTURE =
+            "public class WalaCfgDoWhileFixture {\n"
+            + "    int loop(int x) {\n"
+            + "        do {\n"
+            + "            x = x - 1;\n"
+            + "        } while (x > 0);\n"
+            + "        return x;\n"
+            + "    }\n"
+            + "}\n";
+
+    /**
+     * Builds the WALA CFG for the do/while fixture and asserts:
+     * (1) well-formedness (all nodes reachable from @entry, all reach @exit);
+     * (2) a "loop_back" edge exists;
+     * (3) the loop_back edge goes FROM the loop node (the 'do' line node) to the body entry,
+     *     matching the AST engine reference;
+     * (4) the loop node has a "false" edge to the after-loop node, matching the AST engine.
+     *
+     * Unlike a top-tested while/for, the do/while's loop_back goes FROM the loop node (the bottom
+     * test, anchored at the 'do' line) TO the body entry — it does not target the loop node itself.
+     */
+    @Test
+    void cfgEmitsLoopBackAndCorrectLoopEdgesForDoWhile(@TempDir Path tmp) throws Exception {
+        String dir = compileFixture(tmp, "WalaCfgDoWhileFixture.java", DO_WHILE_FIXTURE);
+        WalaAnalysis wala = buildWala(dir);
+
+        WalaAnalysis.MethodIr mir = findMethod(wala, "loop");
+
+        BlockStmt body = L3TestSupport.methodBody(DO_WHILE_FIXTURE, "loop");
+        ControlFlowGraph walaG = buildWalaCfg(DO_WHILE_FIXTURE, body, mir);
+
+        // Reference: build the same graph via the AST engine.
+        ControlFlowGraph astG = CfgBuilder.build(body, new LinkedHashMap<>(), L3TestSupport.ctx(DO_WHILE_FIXTURE));
+
+        // Well-formedness.
+        assertWellFormed(walaG);
+
+        // Find the loop node (kind "loop") — anchored at the 'do' line.
+        String loopNode = findNodeByKind(walaG, "loop");
+
+        List<JCfgEdge> walaEdges = walaG.toCfgEdges();
+        List<JCfgEdge> astEdges = astG.toCfgEdges();
+
+        // (a) A loop_back edge must exist in the WALA graph.
+        boolean hasLoopBack = walaEdges.stream().anyMatch(e -> "loop_back".equals(e.getKind()));
+        assertTrue(hasLoopBack, "WALA CFG must contain at least one 'loop_back' edge");
+
+        // (b) The AST engine must also have a loop_back edge.
+        List<JCfgEdge> astLoopBackEdges = astEdges.stream()
+                .filter(e -> "loop_back".equals(e.getKind()))
+                .collect(Collectors.toList());
+        assertFalse(astLoopBackEdges.isEmpty(), "AST CFG must also have a 'loop_back' edge");
+
+        // (c) For do/while the loop_back goes FROM the loop node TO the body entry.
+        //     The destination must match what the AST engine emits from the same loop node.
+        String astLoopBackDst = edgeDst(astEdges, loopNode, "loop_back");
+        String walaLoopBackDst = edgeDst(walaEdges, loopNode, "loop_back");
+        assertTrue(walaLoopBackDst != null,
+                "WALA 'loop_back' edge must originate from the loop node; all edges: " + walaEdges);
+        assertEquals(astLoopBackDst, walaLoopBackDst,
+                "'loop_back' edge from loop node must target the body entry (AST reference)");
+
+        // (d) The false edge from the loop node (loop exit) must match the AST engine.
+        String astFalseDst = edgeDst(astEdges, loopNode, "false");
+        String walaFalseDst = edgeDst(walaEdges, loopNode, "false");
+        assertTrue(walaFalseDst != null, "Loop node must have a 'false' edge (loop exit)");
+        assertEquals(astFalseDst, walaFalseDst,
+                "'false' edge from loop node must target the loop exit (AST reference)");
+    }
+
     // ----- shared test helpers ------------------------------------------------------------------
 
     private static String compileFixture(Path tmp, String fileName, String source) throws Exception {

@@ -201,6 +201,28 @@ public final class InstructionToNode {
             collectStatement(s.asForEachStmt().getBody(), acc);
         } else if (s.isDoStmt()) {
             collectStatement(s.asDoStmt().getBody(), acc);
+            // javac places the do/while's conditional branch on the 'while' condition line, not
+            // on the 'do' line where the loop node is anchored. Without a second index entry at
+            // the condition line, mapper.map() returns a sentinel for the conditional block's
+            // instruction, the conditional block gets no mapped nodes, and no loop_back edge is
+            // emitted. Adding the do-statement at the condition line lets the mapper reach the
+            // loop node from the conditional block. The guard avoids creating a duplicate when
+            // the 'do' and 'while' keywords share a line, which would cause match() to fall
+            // back to the sentinel due to ambiguous candidates.
+            s.asDoStmt().getCondition().getRange().ifPresent(condRange -> {
+                String anchorId = BodyNodeBuilder.nodeIdFor(s);
+                int colon = anchorId.indexOf(':');
+                if (colon > 0) {
+                    try {
+                        int anchorLine = Integer.parseInt(anchorId.substring(0, colon));
+                        if (condRange.begin.line != anchorLine) {
+                            acc.computeIfAbsent(condRange.begin.line, k -> new ArrayList<>()).add(s);
+                        }
+                    } catch (NumberFormatException ignored) {
+                        // malformed anchor id — skip the extra entry
+                    }
+                }
+            });
         } else if (s.isSwitchStmt()) {
             SwitchStmt sw = s.asSwitchStmt();
             for (SwitchEntry se : sw.getEntries()) {
