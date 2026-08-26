@@ -120,9 +120,14 @@ class L3SchemaOracleTest {
     }
 
     @Test
-    void aDdgEdgeWithANonSsaProvenanceIsRejected() throws IOException {
-        assertRejected(payload("\"ddg\":[{\"src\":\"2:5\",\"dst\":\"3:7\",\"var\":\"x\",\"prov\":[\"points-to\"]}]"),
-                "L3 prov is the closed enum [ssa]; points-to is an L4 tier");
+    void aDdgEdgeWithPointsToProvenanceValidates() throws IOException {
+        assertAccepted(payload("\"ddg\":[{\"src\":\"2:5\",\"dst\":\"3:7\",\"var\":\"x\",\"prov\":[\"points-to\"]}]"));
+    }
+
+    @Test
+    void aDdgEdgeWithAForeignProvenanceIsRejected() throws IOException {
+        assertRejected(payload("\"ddg\":[{\"src\":\"2:5\",\"dst\":\"3:7\",\"var\":\"x\",\"prov\":[\"rta\"]}]"),
+                "prov is a closed enum [ssa, points-to]; foreign values like 'rta' must be rejected");
     }
 
     @Test

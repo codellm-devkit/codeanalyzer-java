@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import java.io.IOException;
@@ -12,8 +13,11 @@ import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
+import javax.tools.ToolProvider;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import picocli.CommandLine;
@@ -54,6 +58,7 @@ class CodeAnalyzerV2CliTest {
         set("input", null);
         set("targetFiles", null);
         set("sourceAnalysis", null);
+        CodeAnalyzer.projectRootPom = null;
     }
 
     private static void set(String field, Object value) throws Exception {
@@ -77,6 +82,10 @@ class CodeAnalyzerV2CliTest {
         clearCollection("unresolvedTypes");
         clearCollection("unresolvedExpressions");
         SymbolTable.declaredMethodsAndConstructors.clear();
+        // projectRootPom is also reset in @BeforeEach; mirror that here so the last test in this
+        // class does not leave a stale (possibly deleted temp-dir) path that bleeds into tests in
+        // other classes that call RtaCallGraph.endpoints directly (which only sets it when null).
+        CodeAnalyzer.projectRootPom = null;
     }
 
     private static void clearCollection(String field) throws Exception {
@@ -231,10 +240,140 @@ class CodeAnalyzerV2CliTest {
     }
 
     @Test
-    void v2WalaL3EngineIsRejectedUntilImplemented(@TempDir Path tmp) throws IOException {
+    void v2WalaL3EngineDegradesClearlyWhenBuildAbsent(@TempDir Path tmp) throws IOException {
+        // No class files present — WALA cannot build the call graph; must exit 0 with declared
+        // edges (L2 degraded mode) rather than crashing or rejecting the flag.
         Path in = project(tmp.resolve("app"));
-        assertNotEquals(0, run("-i", in.toString(), "--schema", "v2", "-a", "3", "--l3-engine", "wala"),
-                "the wala L3 engine is not implemented yet; it must fail loudly rather than silently run ast");
+        Path out = tmp.resolve("out");
+
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(),
+                "--schema", "v2", "-a", "3", "--l3-engine", "wala", "--no-build"),
+                "--l3-engine wala must exit 0 even when WALA cannot build the call graph");
+
+        JsonObject root = JsonParser.parseString(Files.readString(out.resolve("analysis.json")))
+                .getAsJsonObject();
+        // Level 3 is the requested level; even when WALA degrades, max_level is still 3.
+        assertEquals(3, root.get("max_level").getAsInt());
+
+        // The WALA engine with no compiled class files produces no application methods, so
+        // L3WalaOverlays.apply either is bypassed or processes zero methods — either way no
+        // cfg or ddg overlays appear.  This is the defining property of the degraded mode.
+        assertFalse(hasNonEmptyOverlay(root, "cfg"),
+                "degraded WALA run must not carry cfg overlays");
+        assertFalse(hasNonEmptyOverlay(root, "ddg"),
+                "degraded WALA run must not carry ddg overlays");
+    }
+
+    @Test
+    void v2L3EngineUpperCaseNormalizedToLower(@TempDir Path tmp) throws IOException {
+        // --l3-engine AST (uppercase) must be treated identically to --l3-engine ast.  Without
+        // normalization, the case-sensitive gate in CallableBuilder fires as false and the run
+        // silently emits no overlays despite the CLI validator accepting the value.
+        Path in = project(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(),
+                "--schema", "v2", "-a", "3", "--l3-engine", "AST"),
+                "--l3-engine AST must be accepted and produce overlays like --l3-engine ast");
+        JsonObject root = JsonParser.parseString(Files.readString(out.resolve("analysis.json")))
+                .getAsJsonObject();
+        assertEquals(3, root.get("max_level").getAsInt());
+        assertTrue(hasNonEmptyOverlay(root, "cfg"),
+                "--l3-engine AST (uppercase) must produce cfg overlays; normalize-to-lower is required");
+    }
+
+    /**
+     * Realworld test: compile a fixture, run with {@code --l3-engine wala}, and assert that
+     * cfg and ddg overlays are present on the covered callable.
+     */
+    @Test
+    @Tag("realworld")
+    void v2WalaL3EngineProducesOverlays(@TempDir Path tmp) throws Exception {
+        // Fixture: compute(int) has a scalar data dependency (r flows into helper(r)).
+        String fixtureSource = "package com.example;\n"
+                + "public class Sample {\n"
+                + "    private int value = 10;\n"
+                + "    public int compute(int x) {\n"
+                + "        int r = helper(x);\n"
+                + "        if (r > value) {\n"
+                + "            return r;\n"
+                + "        }\n"
+                + "        return 0;\n"
+                + "    }\n"
+                + "    private int helper(int v) { return v * 2; }\n"
+                + "}\n";
+
+        // Create Maven-layout project
+        Path projectDir = tmp.resolve("app");
+        Path pkg = projectDir.resolve("src/main/java/com/example");
+        Files.createDirectories(pkg);
+        Path sourceFile = pkg.resolve("Sample.java");
+        Files.writeString(sourceFile, fixtureSource, StandardCharsets.UTF_8);
+
+        // Compile the fixture into the project directory so WALA can load the class files.
+        int rc = ToolProvider.getSystemJavaCompiler().run(
+                null, null, null,
+                "-g", "-d", projectDir.toString(), sourceFile.toString());
+        assertEquals(0, rc, "fixture compilation must succeed");
+
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", projectDir.toString(), "-o", out.toString(),
+                "--schema", "v2", "-a", "3", "--l3-engine", "wala", "--no-build"),
+                "--l3-engine wala must exit 0 on a compiled fixture");
+
+        String json = Files.readString(out.resolve("analysis.json"));
+        JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+        assertEquals(3, root.get("max_level").getAsInt(), "max_level must be 3");
+
+        // Verify overlays are present: find at least one callable with non-empty cfg and ddg.
+        assertTrue(hasNonEmptyOverlay(root, "cfg"),
+                "at least one callable must carry a non-empty cfg");
+        assertTrue(hasNonEmptyOverlay(root, "ddg"),
+                "compute(int) must carry a non-empty ddg (scalar dep r→helper)");
+
+        // The AST engine path must still work unchanged.
+        Path out2 = tmp.resolve("out2");
+        assertEquals(0, run("-i", projectDir.toString(), "-o", out2.toString(),
+                "--schema", "v2", "-a", "3", "--l3-engine", "ast"),
+                "--l3-engine ast must still work");
+        JsonObject root2 = JsonParser.parseString(Files.readString(out2.resolve("analysis.json")))
+                .getAsJsonObject();
+        assertEquals(3, root2.get("max_level").getAsInt(), "ast path must still emit max_level=3");
+    }
+
+    /** Returns true when any callable in the symbol table has a non-empty array for {@code key}. */
+    private static boolean hasNonEmptyOverlay(JsonObject root, String key) {
+        JsonObject symTable = root.getAsJsonObject("application").getAsJsonObject("symbol_table");
+        for (Map.Entry<String, JsonElement> fileEntry : symTable.entrySet()) {
+            JsonObject types = fileEntry.getValue().getAsJsonObject().getAsJsonObject("types");
+            if (types == null) {
+                continue;
+            }
+            if (hasNonEmptyOverlayInTypes(types, key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasNonEmptyOverlayInTypes(JsonObject types, String key) {
+        for (Map.Entry<String, JsonElement> typeEntry : types.entrySet()) {
+            JsonObject typeObj = typeEntry.getValue().getAsJsonObject();
+            JsonObject callables = typeObj.getAsJsonObject("callables");
+            if (callables != null) {
+                for (Map.Entry<String, JsonElement> callableEntry : callables.entrySet()) {
+                    JsonObject callable = callableEntry.getValue().getAsJsonObject();
+                    if (callable.has(key) && callable.getAsJsonArray(key).size() > 0) {
+                        return true;
+                    }
+                }
+            }
+            // Check nested types
+            JsonObject nestedTypes = typeObj.getAsJsonObject("types");
+            if (nestedTypes != null && hasNonEmptyOverlayInTypes(nestedTypes, key)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Test

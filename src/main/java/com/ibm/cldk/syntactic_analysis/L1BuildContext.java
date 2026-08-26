@@ -38,6 +38,13 @@ public final class L1BuildContext {
     private final int graphFieldDepth;
 
     /**
+     * The L3 engine name — {@code "ast"} (default, parse-time overlays) or {@code "wala"}
+     * (post-build overlays produced by {@code L3WalaOverlays}). Only meaningful at level 3;
+     * {@code CallableBuilder} uses it to gate the parse-time AST L3 hook.
+     */
+    private final String l3Engine;
+
+    /**
      * Memoized *type* resolution failures. Safe because a declared type spelling resolves consistently
      * within one file (this context is per-file), and retrying an unresolvable spelling is expensive.
      * Expression results are deliberately NOT memoized: the same text (`x`) can denote different types
@@ -46,16 +53,22 @@ public final class L1BuildContext {
     private final Set<String> unresolvedTypes = new HashSet<>();
 
     public L1BuildContext(String applicationId, String fileKey, String source) {
-        this(applicationId, fileKey, source, 1, 3);
+        this(applicationId, fileKey, source, 1, 3, "ast");
     }
 
     public L1BuildContext(String applicationId, String fileKey, String source, int analysisLevel,
             int graphFieldDepth) {
+        this(applicationId, fileKey, source, analysisLevel, graphFieldDepth, "ast");
+    }
+
+    public L1BuildContext(String applicationId, String fileKey, String source, int analysisLevel,
+            int graphFieldDepth, String l3Engine) {
         this.applicationId = applicationId;
         this.fileKey = fileKey;
         this.source = source;
         this.analysisLevel = analysisLevel;
         this.graphFieldDepth = graphFieldDepth;
+        this.l3Engine = l3Engine != null ? l3Engine.toLowerCase(java.util.Locale.ROOT) : "ast";
     }
 
     /** The {@code can://java/<app>/<file>} id for this module. */

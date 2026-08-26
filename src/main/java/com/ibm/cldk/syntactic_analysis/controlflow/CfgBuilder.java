@@ -1,7 +1,5 @@
 package com.ibm.cldk.syntactic_analysis.controlflow;
 
-import com.github.javaparser.ast.Node;
-import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.ast.stmt.BlockStmt;
@@ -9,7 +7,6 @@ import com.github.javaparser.ast.stmt.BreakStmt;
 import com.github.javaparser.ast.stmt.CatchClause;
 import com.github.javaparser.ast.stmt.ContinueStmt;
 import com.github.javaparser.ast.stmt.DoStmt;
-import com.github.javaparser.ast.stmt.ExpressionStmt;
 import com.github.javaparser.ast.stmt.ForEachStmt;
 import com.github.javaparser.ast.stmt.ForStmt;
 import com.github.javaparser.ast.stmt.IfStmt;
@@ -113,8 +110,10 @@ public final class CfgBuilder {
 
     public static ControlFlowGraph build(BlockStmt body, Map<String, JBodyNode> existingBody, L1BuildContext ctx) {
         CfgBuilder b = new CfgBuilder(ctx);
-        // Seed the L1 call nodes so a bare-call statement reuses its call node rather than duplicating it.
-        existingBody.forEach(b.g::seed);
+        // Populate the shared body-node set first (seeds L1 call nodes, then creates one node per
+        // statement). The edge-linking pass below calls ensureNode too, but those calls are no-ops for
+        // already-created nodes — the additive invariant holds.
+        BodyNodeBuilder.populate(b.g, body, existingBody, ctx);
         String first = b.linkSequence(body.getStatements(), ControlFlowGraph.EXIT, "fallthrough");
         b.g.addEdge(ControlFlowGraph.ENTRY, first, "fallthrough");
         return b.g;
@@ -474,34 +473,9 @@ public final class CfgBuilder {
 
     /** Materialise the node for {@code s} at its anchor with the given kind (never overwriting). */
     private String ensure(Statement s, String kind) {
-        String id = nodeIdFor(s);
+        String id = BodyNodeBuilder.nodeIdFor(s);
         g.ensureNode(id, kind, ctx.spanOf(s));
         g.recordAst(id, s); // the data-dependence pass reads defs/uses off this statement
         return id;
-    }
-
-    /** The body-node local id ({@code line:col}) at a statement's addressing anchor. */
-    private static String nodeIdFor(Statement s) {
-        return anchorOfStatement(s).getRange()
-                .map(r -> r.begin.line + ":" + r.begin.column)
-                .orElse("0:0");
-    }
-
-    /**
-     * A bare-call statement's node IS the L1 {@code call} node emitted at the invoked-name /
-     * instantiated-type anchor (the additive invariant), so key it there; every other statement is
-     * keyed at its own begin. Mirrors {@code CallSiteBuilder}'s anchoring.
-     */
-    private static Node anchorOfStatement(Statement s) {
-        if (s instanceof ExpressionStmt) {
-            Expression e = ((ExpressionStmt) s).getExpression();
-            if (e instanceof MethodCallExpr) {
-                return ((MethodCallExpr) e).getName();
-            }
-            if (e instanceof ObjectCreationExpr) {
-                return ((ObjectCreationExpr) e).getType();
-            }
-        }
-        return s;
     }
 }

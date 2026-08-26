@@ -1,17 +1,17 @@
 # Design Spec — codeanalyzer-java L3: intraprocedural dataflow (CFG / CDG / DDG), two engines over one contract
 
-> **Status:** Proposed — detailed L3 design; elaborates §8 of the parent spec and **revises decision D5** (see §6). Parent: [`schema-v2-l3-l4-design.md`](./schema-v2-l3-l4-design.md). Live plan & status: [Epic codellm-devkit/.github#42](https://github.com/codellm-devkit/.github/issues/42) (sub-issue #183). Decisions ledger: [`.claude/SCHEMA_DECISIONS.md`](../../../.claude/SCHEMA_DECISIONS.md).
+> **Status:** AST engine implemented & merged (#183, PR #195); **WALA engine in progress (#194)** — its §5.2 (Engine B) and §7 (differential gate) guide that work. Elaborates §8 of the parent spec and **revises decision D5** (see §6). Parent: [`schema-v2-l3-l4-design.md`](./schema-v2-l3-l4-design.md). Live plan & status: [Epic codellm-devkit/.github#42](https://github.com/codellm-devkit/.github/issues/42) (sub-issues #183, #194). Decisions ledger: [`.claude/SCHEMA_DECISIONS.md`](../../../.claude/SCHEMA_DECISIONS.md).
 
 ## 1. Summary
 
-L3 completes each callable's `body{}` with statement nodes plus synthetic `@entry`/`@exit`, and lays three **syntactic, intra-callable** overlays on the callable: `cfg` (control flow), `cdg` (control dependence), and `ddg` (data dependence, `prov:["ssa"]`). No interprocedural analysis and no alias resolution — those are L4.
+L3 completes each callable's `body{}` with statement nodes plus synthetic `@entry`/`@exit`, and lays three **intraprocedural** overlays on the callable: `cfg` (control flow), `cdg` (control dependence), and `ddg` (data dependence). **The L3/L4 line is intraprocedural vs interprocedural:** L3 stays within one callable; the interprocedural reach — `param_in`/`param_out`/`summary`, the SDG — is L4. Within that intraprocedural scope the two engines differ in DDG **precision**: the AST engine is object-insensitive syntactic (`prov:["ssa"]`); the WALA engine adds heap/field du-pairs resolved by the reused L2 RTA pointer analysis (`prov:["points-to"]`).
 
-The parent spec (§8) sketches L3 with a single WALA engine and an AST fallback (D5). This spec refines that into **two interchangeable engines** that produce the *same* schema over the *same* node space, selected by `--l3-engine {ast,wala}`:
+The parent spec (§8) sketches L3 with a single WALA engine and an AST fallback (D5). This spec refines that into **two engines used as alternatives** (one per run) that produce the *same* schema over the *same* node space, selected by `--l3-engine {ast,wala}`:
 
-- **AST engine (JavaParser)** — the **default**. Build-free, exact source `line:col`, works on any Java version. The syntactic tier, consistent with L1 and L2's `declared` edges.
-- **WALA engine** — opt-in. Reuses WALA's `SSACFG` / dominators / SSA def-use, and carries the WALA→source-statement mapping that L4 needs anyway.
+- **AST engine (JavaParser)** — the **default**. Build-free, exact source `line:col`, works on any Java version. Object-insensitive syntactic DDG, consistent with L1 and L2's `declared` edges.
+- **WALA engine** — opt-in. Reuses the L2 `rta` call graph + pointer analysis and runs WALA's native per-method **PDG** (`SSACFG`, dominance-frontier control dependence, intraprocedural scalar + heap data dependence), plus the WALA→source-statement mapping (§5.2 B.1) that L4 reuses.
 
-Both pass one **conformance gate**; a **differential gate** cross-checks them where they must agree. Designing both — implementing later, one per PR, AST first — gives L3 a differential oracle (two independent implementations of one spec), mirroring how `declared` and `rta` coexist at L2.
+Both pass one **conformance gate**; a **differential gate** cross-validates `cfg` and `cdg` (which must agree) and turns the DDG difference into an **empirical delta report** — the engines compute DDG at different precision, so their DDGs are *compared* to guide engine selection, not asserted equal (§7.2). Designing both — implementing later, one per PR, AST first — gives L3 two independent implementations of one spec, mirroring how `declared` and `rta` coexist at L2.
 
 **This increment is JSON-only.** The L3 Neo4j overlay is deferred until the Neo4j v2 base relabel (#182); `--emit neo4j` stays v1-only here.
 
@@ -31,8 +31,8 @@ Both pass one **conformance gate**; a **differential gate** cross-checks them wh
 - Schema: tighten `cfg`/`cdg`/`ddg` (typed edge defs + `localId`) and an L3 schema-oracle test.
 
 **Non-goals**
-- **Interprocedural analysis** (L4): no `param_in`/`param_out`/`summary`, no SDG.
-- **Alias / points-to resolution.** The DDG is *syntactic* — object-insensitive, field-sensitive up to `k`. Aliased def-use is L4's semantic DDG (`prov:["points-to"]`).
+- **Interprocedural analysis** (L4) — the L3/L4 boundary: no `param_in`/`param_out`/`summary`, no SDG, no def-in-callee-reaching-use-in-caller reach. Both engines' DDGs stay strictly within one callable.
+- **Points-to precision above RTA.** The WALA engine reuses the L2 **RTA** pointer analysis for intraprocedural heap du-pairs; sharpening to 0-CFA / 0-1-CFA (`--precision`, D6) is L4. The AST engine does no alias resolution at all — object-insensitive syntactic, field-sensitive up to `k` (its documented limitation, §4.5.1).
 - **Neo4j overlay** this increment (gated on #182).
 - **Slicing / taint** — SDK queries over the emitted graph, not analyzer features.
 
@@ -52,7 +52,7 @@ All three overlays hang on the `callable`; `src`/`dst` are body-node local ids.
 | --- | --- | --- |
 | `cfg` | `{src, dst, kind}` | `kind ∈ fallthrough \| true \| false \| switch_case \| loop_back \| exception \| return \| break \| continue` |
 | `cdg` | `{src, dst}` | control dependence; no attributes |
-| `ddg` | `{src, dst, var, prov:["ssa"]}` | `var` = k-limited access path; multiple ddg edges on one node are distinguished by `var`, not by endpoint identity |
+| `ddg` | `{src, dst, var, prov}` | `prov ∈ ["ssa"] \| ["points-to"]` — `ssa` for scalar/syntactic du-pairs, `points-to` for the WALA engine's RTA-resolved heap du-pairs (§4.5); `var` = k-limited access path; multiple ddg edges on one node are distinguished by `var`, not by endpoint identity |
 
 **PDG** = `cdg ∪ ddg` over the same nodes (bookkeeping; no separate section). The backward-slice gate runs over this union — which is *why* all three overlays must share one `line:col` node space.
 
@@ -77,19 +77,22 @@ The single-node fan-out is not merely the AST engine's compromise — it is the 
 
 The precise per-path model (distinct `finally` copies, each with one successor) is recoverable **only if the one-node-per-`line:col` invariant is relaxed** — e.g. suffixed ids like `@line:col#return` — at the cost of complicating DDG, CDG, and every consumer that joins on body-node ids. Recorded as a deliberate non-choice: doable if a future need for path-precise `finally` outweighs the identity simplicity.
 
-### 4.5 DDG semantics (syntactic — identical for both engines)
+### 4.5 DDG semantics (intraprocedural; the two engines differ by precision)
 
-- Def-use over **k-limited access paths** `base(.field | [*])*`, default `k=3` (`--graph-field-depth`); past `k`, collapse to `…*` and conservatively alias deeper. Array indices collapse to `[*]` (index-insensitive). Bases tagged `local | parameter | receiver (this) | field | captured`.
-- **Object-insensitive, field-sensitive.** Access paths are matched **syntactically** by base spelling: `o1.f` and `o2.f` are distinct; a base reassignment (`o = …`) **prefix-kills** `o.*`. Precise for same-object same-spelling (`this.f`, unaliased locals); it deliberately **does not resolve aliasing**, so it can both miss aliased def-use and keep a stale def across an aliased write (illustrated in §4.5.1). Those are L4's job (points-to). The gate's expected sets are computed under *these* semantics, and a fixture pins an aliased-field case so the imprecision is documented, not discovered.
-- Object/allocation-site precision is **not** an L3 option: allocation-site tracking *is* a points-to analysis (0-CFA's heap abstraction), scoped to L4. Flag for #184 — reconsider whether L4's default precision should be `0-cfa` (allocation-site) rather than `rta` (type-based).
+L3's DDG is the **intraprocedural** def-use relation of a single method. (The L3/L4 line is intraprocedural vs interprocedural — §9; L4 adds the def-in-callee-reaching-use-in-caller reach via `param`/`summary` edges.) The two engines compute the intraprocedural DDG by **different analyses** and are used as **alternatives** — one per run — so their DDGs are *not* required to agree; §7.2 turns their difference into an empirical report that guides engine selection.
 
-#### 4.5.1 Limitation — intraprocedural DDG without points-to (affects both engines)
+- **AST engine — object-insensitive syntactic.** Def-use over **k-limited access paths** `base(.field | [*])*` (default `k=3`, `--graph-field-depth`; past `k` collapse to `…*`; array indices collapse to `[*]`, index-insensitive; bases tagged `local | parameter | receiver | field | captured`), matched by **spelling**: `o1.f` and `o2.f` are distinct, a base reassignment prefix-kills `o.*`. Build-free and exact on scalars and unaliased locals, but **unsound under aliasing** (§4.5.1). Edges carry `prov:["ssa"]`.
+- **WALA engine — RTA points-to (sound, over-approximate).** Scalar def-use from SSA (`prov:["ssa"]`) plus **heap/field du-pairs from the per-method WALA PDG over the reused L2 RTA pointer analysis** (`prov:["points-to"]`). RTA is **type-based**, not allocation-site-based, so the heap DDG is **sound but imprecise**: it recovers *every* real aliased du-pair (no misses — §4.5.1) but gives one abstract cell per type, so it conflates distinct objects of the same type and does only **weak updates** (no kills) — emitting spurious du-pairs between unrelated same-type accesses. Precise kills and allocation-site separation come from L4's higher-precision PA (`--precision 0-cfa`, D6). Needs a build (§5.2). **Known limitation on scalar DDG:** the `NORMAL→NORMAL` PDG filter drops phi-mediated scalar deps (loop-carried and branch-merge patterns; see §5.2 B.2); the WALA scalar DDG is sparser than the AST engine's for phi-heavy methods. The WALA engine's distinctive payoff is the heap (`points-to`) DDG — aliased du-pairs the AST engine structurally cannot see.
 
-The L3 DDG resolves heap (field/array) def-use by **syntactic access-path spelling**, because separating definitions and uses that reach the *same object through different references* requires knowing what each reference points to — a points-to analysis, which is L4. This is a property of the **level, not the engine.** *Scalar* (local) def-use is exact at L3 either way; the limitation is specifically about **heap locations reached through aliases**. The AST engine matches access paths syntactically; the WALA engine — whose SSA gives precise *scalar* def-use for free — still cannot disambiguate *heap* locations at L3 without `ModRef`/pointer analysis, so under the shared contract it resolves field def-use the same syntactic way. **Both engines therefore produce identical heap-aliasing errors.**
+`prov` names **how** a du-pair was derived — `ssa` (SSA/syntactic) or `points-to` (pointer-analysis heap) — **not the level**: both appear at L3, and `points-to` recurs at L4. Consumers must read the level from the overlay / `max_level`, never infer it from `prov`.
 
-Two illustrations, where `a` and `b` name the same object (`class Box { int f; }`):
+`L3 ⊆ L4` is **intraprocedural ⊆ intraprocedural + interprocedural**: L4 keeps every L3 edge and adds the interprocedural reach (and may raise pointer-analysis precision via `--precision {rta,0-cfa,0-1-cfa}`, D6). A per-method PDG's heap deps are *informed* by callees' `ModRef` summaries (what a call site mods/refs), but the **edges stay within the method** (L3); the interprocedural *propagation* is what L4 turns on.
 
-**(1) Missed dependence (false negative).**
+#### 4.5.1 The AST engine's object-insensitive limitation (which the WALA engine mitigates)
+
+The AST engine matches heap access paths by spelling, so it cannot separate def-use that reaches the *same object through different references*. Where `a` and `b` name the same object (`class Box { int f; }`):
+
+**(1) Missed dependence.**
 
 ```java
 Box a = new Box();
@@ -98,9 +101,9 @@ a.f = compute();    // def of a.f     ← D
 int x = b.f;        // use of b.f     ← U   (reads what D wrote)
 ```
 
-The real dependence D → U flows through the alias, but syntactically `a.f ≠ b.f`, so **no `ddg` edge D→U is emitted**.
+Syntactically `a.f ≠ b.f`, so the AST engine emits **no `ddg` edge D→U**.
 
-**(2) Stale def kept *and* real def missed (false positive + false negative at once).**
+**(2) Stale def kept *and* real def missed.**
 
 ```java
 Box a = new Box();
@@ -110,9 +113,9 @@ b.f = 2;            // overwrites a.f through the alias   ← D2
 int x = a.f;        // use of a.f     ← U   (truly reads 2)
 ```
 
-`b.f = 2` does not kill `a.f` (different spelling), so D1 still reaches U → a **spurious** edge D1→U; and the true reaching def D2→U is **missed** (different spelling). Array element def-use is worse still — indices collapse to `[*]`, so `arr[i]` and `arr[j]` are one location.
+`b.f = 2` does not kill `a.f` (different spelling), so the AST engine keeps a **spurious** D1→U and **misses** the real D2→U; array indices collapse to `arr[*]`, conflating `arr[i]`/`arr[j]`.
 
-**What L4 fixes.** Pointer analysis (L4, `--precision {rta,0-cfa,0-1-cfa}`) knows `a` and `b` share an allocation and emits the correct heap def-use as **additional** `ddg` edges tagged `prov:["points-to"]`; L3's `prov:["ssa"]` edges are retained (weak-update posture), preserving `L3 ⊆ L4`. The syntactic edges are labelled `ssa` precisely so a consumer can distinguish the two tiers and treat the L3 heap edges as best-effort. (Def-use that flows through a *callee* is likewise invisible at L3 — that interprocedural dimension is also L4/SDG.)
+**The WALA engine mitigates but does not fully resolve these — because RTA is type-based.** RTA knows a `Box.f` store may reach a `Box.f` load, so it recovers the **missed dependence** of (1), D→U — the soundness win. But RTA gives *one* abstract cell per type, so it cannot separate `a` from an unrelated `Box c`, and it does only **weak updates** (no kills): in (2) it emits the real D2→U *and* keeps the stale D1→U, and it also connects `a.f` to a wholly unrelated `c.f`. So the WALA heap DDG is **sound (no missed aliased du-pairs) but over-approximate (spurious same-type du-pairs, no precise kills)**. Eliminating the stale/spurious edges needs strong updates and allocation-site precision — L4's 0-CFA (D6). This is precisely the *two-directional* difference §7.2's empirical DDG comparison surfaces: the AST engine misses real aliased pairs but emits none spuriously, while the WALA engine catches all real pairs but adds spurious same-type ones — **neither dominates**, which is why they are precision alternatives, not redundant oracles. Interprocedural du-pairs — a def in a callee reaching a use in the caller — are invisible to *both* at L3; that reach is L4/SDG.
 
 ### 4.6 Determinism & monotonicity
 
@@ -133,18 +136,16 @@ Pure source analysis; no build, no WALA. Three passes on the callable's statemen
 
 ### 5.2 Engine B — WALA (opt-in)
 
-Reuses WALA IR; needs a build (like L2 `rta`) and inherits WALA's coverage (the #181 dependency-shadow fix applies) and Java-version limits.
+Reuses the L2 `rta` machinery — the same `ScopeUtils.createScope` → CHA → RTA **call graph + pointer analysis** — and needs a build (the #181 dependency-shadow fix applies; inherits WALA's coverage and Java-version limits). Runs post-build.
 
-- **B.1 The WALA→source-statement mapping (the crux — how `line:col` is recovered).** WALA gives an instruction only a *line* (`IMethod.getSourcePosition`; `getFirstCol() == -1`), never a column — so the WALA engine **never synthesizes a column**. Instead it maps each instruction to an L1/AST statement node and adopts *that node's* exact `line:col` (already computed at L1) as the edge endpoint. The mapping heuristics, in order:
-  1. **Line-cover match** — candidate statements whose L1 span covers the instruction's line.
-  2. **Content disambiguation** (several candidates — multiple statements per line is common) — match the SSA instruction's operation (the variable it defs/uses, the method it invokes) against each candidate's AST and pick the match. Uses semantics, not the missing column.
-  3. **No source position** (SSA phi/pi, compiler-introduced temporaries, other synthetic instructions with no line) — attribute to the governing block's statement, or drop when it is a pure SSA artifact with no source counterpart. This is the case the parent spec's risk #1 flags.
-  4. **Still ambiguous** — attach to the innermost covering statement and log an over-approximation count.
+- **B.1 The WALA→source mapping (node identity only).** WALA recovers an instruction's source **line** reliably (the bytecode line table, via `IBytecodeMethod.getBytecodeIndex` + `getLineNumber`) but **no column** — so the WALA engine adopts the column from the matched AST statement, never synthesizes one. Per instruction: (1) **line-cover** — candidate statements whose L1 span covers the line; (2) several candidates → **content disambiguation**, matching the SSA op (invoked method / defined variable) against each candidate's AST; (3) **no source position** (SSA phi/pi, compiler temporaries) → attribute to the governing block's statement, or drop a pure SSA artifact; (4) **still ambiguous** (contentless co-located statements on one line) → emit the node at the line with a **sentinel column `line:0`** (a valid `localId`, distinct from any real statement) rather than mis-attributing, and log the count. (All spike-confirmed: lines reliable, columns never in bytecode.) B.1 is the *only* place the AST is consulted, and the component L4 reuses.
+- **B.2 CFG / CDG / DDG — native WALA.** **CFG** from `SSACFG` + `ISSABasicBlock`, each instruction projected to its node via B.1, normalized to one `@exit`, edge `kind` from block terminators. (`javac`'s duplicated `finally` copies share a source line and collapse to the one `finally` node the AST engine also produces — §4.4.1.) **CDG and DDG** from the per-method WALA **PDG** over the reused RTA call graph + pointer analysis. The PDG labels every edge with a `Dependency`, which maps onto the schema directly: `CONTROL_DEP`→`cdg`; `DATA_DEP`→`ddg` scalar (`prov:["ssa"]`); `HEAP_DATA_DEP`→`ddg` heap (`prov:["points-to"]`). Only `NORMAL→NORMAL` edges are kept; the `param`/heap-interface statements are the method's SDG boundary and belong to L4.
 
-  This mapping is the component L4's semantic DDG reuses, and the sole source of the within-line ambiguity risk — contained by steps 3–4 plus the differential gate against the exact AST engine.
-- **B.2 CFG / CDG / DDG.** CFG from WALA `SSACFG` + `ISSABasicBlock`, each instruction projected to its statement via B.1, normalized to one `@exit`, edge `kind` recovered from block terminators. `javac`'s duplicated `finally` copies all project to the same source `line:col`, so they collapse to the one `finally` node the AST engine also produces (§4.4.1) — the engines converge there rather than diverge. CDG from WALA dominators/post-dominators on the reverse CFG. DDG from WALA SSA def-use (`DefUse`), each def/use mapped via B.1, `var` from the SSA value's source variable + access path, `prov:["ssa"]`; heap def-use beyond scalars is **not** resolved (no points-to) — same syntactic contract as Engine A.
+  Two spike-confirmed mechanics keep it intraprocedural and tractable. **(a) Empty-defaulting global mod/ref maps.** The PDG constructor takes per-node `mod`/`ref` maps; WALA's *global* `ModRef` closure over a JDK-inclusive call graph is L4-scale (it OOMs at 4 GB). Passing maps that return an empty (non-null-backed) location set for every node drops the interprocedural heap-param statements while the PDG still computes each method's heap du-pairs from its **own per-instruction `getMod`/`getRef`** — exactly the intraprocedural subset L3 wants. **(b) Lazy heap edges.** `HEAP_DATA_DEP` edges materialize only when the *unlabeled* `getSuccNodes(N)`/`getPredNodes(N)` is called (not during `populate()` and not via the labeled accessor), so the builder primes every node once before reading labeled edges. The dependence analysis itself is entirely WALA's own.
 
-**Properties:** reuses mature WALA passes; node-derivation aligned with L4. **Cost:** build dependency; columns recovered via B.1; within-line ambiguity; WALA coverage/version limits.
+  **Phi-mediated-scalar limitation (known property).** The `NORMAL→NORMAL` filter is the correct boundary for L3's intraprocedural scope: it drops `param_in`/`param_out` and heap-interface nodes, which are the SDG's interprocedural surface and belong to L4. As a side-effect, it also drops `PhiStatement` nodes — the SSA phi functions at control-flow merge points. A phi at a loop back-edge or branch merge is not a `NormalStatement`, so both edges `A_NORMAL → phi` and `phi → B_NORMAL` are filtered, breaking the scalar dep chain A→B when the path goes through a phi. The AST reaching-defs algorithm tracks such a dep (its fixpoint propagates through the merge), so **the WALA scalar DDG is sparse on loop-carried and branch-merge scalar deps** relative to the AST engine. This is the documented cost of the `NORMAL→NORMAL` filter. The metrics over the real-world fixture set confirm it: WALA scalar edges per covered callable are comparable to AST on straight-line/call-dense code (ratio 1.02–2.80× across apps) — WALA gains elsewhere (SSA-direct pairs, heap points-to) outweigh the phi loss on the measured apps, but individual loop-heavy methods will show AST > WALA scalar. **The WALA engine's payoff is the heap DDG** (`prov:["points-to"]`): those 513 heap du-pairs across the real-world fixtures are aliased, field-level deps the AST engine structurally cannot produce. For loop-carried scalar analysis, prefer the AST engine; for aliased heap data-flow, prefer WALA.
+
+**Properties:** genuinely native (WALA's dominance-frontier CDG and PDG data dependence); sound heap DDG at RTA precision; the same PDG L4's SDG extends interprocedurally. **Cost:** build + RTA; the B.1 node-identity mapping; WALA coverage/version limits; phi-mediated scalar deps dropped (sparse scalar DDG on loop/branch-heavy methods).
 
 ### 5.3 Trade-offs
 
@@ -156,8 +157,8 @@ The two engines are interchangeable *at the contract* but not equivalent in how 
 | **Node identity (`line:col`)** | **Native, exact** — straight from JavaParser spans | **Recovered** via B.1 (line + content); within-line ambiguity on multi-statement lines; no-source-position instructions folded/dropped |
 | **Edge coverage** | Every **parsed** callable | Only callables in WALA's **analysis scope** (compiled, admitted by the scope loader); others get no overlay |
 | **CFG fidelity** | **Source-structural** — matches what is written, and the schema's source `line:col` | **Execution-faithful** — reflects the compiler's actual lowering (short-circuits, desugared enhanced-for / TWR / string-concat, synthetic blocks); truer to what runs, but must be projected back to source shape |
-| **Scalar (local) DDG** | Hand-rolled reaching-defs — **correctness is ours to prove** (scoping/shadowing) | SSA def-use is **exact by construction** — mature, high-confidence |
-| **Heap / aliased DDG** | Syntactic, object-insensitive (§4.5.1) | Syntactic, object-insensitive (§4.5.1) — **parity**; both need L4 points-to |
+| **Scalar (local) DDG** | Hand-rolled reaching-defs — **correctness is ours to prove** (scoping/shadowing) | PDG scalar (SSA) data dependence — **exact by construction**, mature, high-confidence |
+| **Heap / aliased DDG** | **Object-insensitive syntactic** — misses aliased du-pairs, keeps stale ones (§4.5.1); no build | **RTA points-to** — **sound but over-approximate** (type-based): recovers all aliased du-pairs, but conflates same-type objects and does weak updates (`prov:["points-to"]`); needs a build |
 | **Maintenance** | Three **textbook passes we own** (no analysis engine invoked) | Mature passes; the one incremental cost is the **bespoke B.1 mapping** — WALA itself is already a dependency (v1 and L2 `rta`) |
 | **Speed / cost** | Fast, per-file, no build or whole-program IR | Build + IR construction; **reuses L2 `rta`'s scope/IR** when `rta` already ran, otherwise builds its own |
 | **L4 alignment** | Not reusable for L4 (L4 is WALA-based) | **Same IR + B.1 mapping L4 needs** — the proving ground for L4's SDG/points-to |
@@ -165,20 +166,21 @@ The two engines are interchangeable *at the contract* but not equivalent in how 
 
 **Why AST is the default.** L3's deliverable is *source-faithful* `line:col` overlays; the AST engine produces them with exact identity, no build, on any parsed source, and covers every callable. Its one real risk — the correctness of the hand-written CFG lowering — is contained by a documented rule and a fixture per construct (§4.4, §10). It is the better *product* default.
 
-**Why WALA is still built.** Two payoffs the AST engine can't give. (1) **Confidence** — SSA scalar def-use and bytecode-derived control flow are execution-faithful and mature, so the WALA engine is an independent oracle that keeps the hand-rolled AST passes honest (the differential gate, §7). (2) **L4 readiness** — L4's SDG *must* use WALA, and the B.1 instruction→statement mapping is exactly the machinery L4 reuses; building it at L3 de-risks L4 rather than being throwaway.
+**Why WALA is still built.** Three payoffs the AST engine can't give. (1) **Sound heap DDG** — the reused RTA pointer analysis recovers the aliased du-pairs the AST engine misses (§4.5.1), so the WALA engine sees heap data flow invisible to the syntactic engine; it is sound but over-approximate at RTA (spurious same-type pairs, no precise kills — those await L4), whereas the AST engine is precise-on-spelling but unsound on aliasing. Complementary failure modes, which is why §7.2 reports the delta rather than asserting agreement. (2) **Confidence on CFG/CDG** — bytecode-derived control flow and PDG control dependence are execution-faithful and mature, so the WALA engine is an independent oracle that keeps the hand-rolled AST CFG/CDG passes honest (the differential gate cross-validates exactly these, §7.2). (3) **L4 readiness** — L4's SDG *must* use WALA; the per-method PDG and the B.1 instruction→statement mapping are exactly the machinery L4 extends interprocedurally, so building them at L3 de-risks L4 rather than being throwaway.
 
-**Where they diverge (and it's fine).** The two are held to agreement only on the defined subset (§7); the pinned divergences — exceptional-edge shape and within-line attribution — are the *expected* cost of source-structural vs. execution-faithful views, asserted as divergences rather than bugs. On heap/aliased DDG they are equal and equally limited (§4.5.1) until L4.
+**Where they diverge (and it's fine).** CFG and CDG are held to agreement on the defined subset (§7.2); the pinned divergences there — exceptional-edge shape and within-line attribution — are the *expected* cost of source-structural vs. execution-faithful views, asserted as divergences rather than bugs. DDG is deliberately **not** held to agreement: the two engines compute it at different precision (object-insensitive syntactic vs RTA points-to), so §7.2 reports their delta empirically — how many heap du-pairs the WALA engine adds and the AST engine misses — to drive engine selection rather than to flag a bug.
 
 ## 6. Design decisions
 
-Recorded in [`.claude/SCHEMA_DECISIONS.md`](../../../.claude/SCHEMA_DECISIONS.md). D25–D28 are new; **D28 revises D5** of the parent spec.
+Recorded in [`.claude/SCHEMA_DECISIONS.md`](../../../.claude/SCHEMA_DECISIONS.md). D25–D29 are new; **D28 revises D5** of the parent spec, and **D29 with the revised D27** record the two-engine precision split (§4.5).
 
 | # | Decision | Choice | Rationale / divergence |
 | --- | --- | --- | --- |
 | D25 | L3 edge endpoints | **Body-node local ids** (`line:col`/`@tag`), not `can://` ids | Overlays are intra-callable; local ids match the `body{}` keys. Grounded in the keystone's own `ddg` example. |
-| D26 | L3 engine posture | **Two interchangeable engines**, `--l3-engine ast\|wala`, `ast` default, differential gate | Two implementations of one contract → a differential oracle, as `declared`/`rta` are at L2. |
-| D27 | DDG precision | **Syntactic** — object-insensitive, field-sensitive, k-limited access paths | Aliasing deferred to L4 (`prov:["points-to"]`); allocation-site precision is L4's 0-CFA. `prov:["ssa"]` labels the tier. |
-| D28 | CFG/DDG derivation (**revises D5**) | AST engine builds cfg/cdg/ddg on the JavaParser AST (exact `line:col`, build-free) as the **default**; WALA engine via `SSACFG` + the instruction→statement mapping is **opt-in** | D5 made WALA the engine and AST the fallback. Because body nodes are keyed `line:col` and the identity gate requires a real column — which WALA-over-bytecode lacks — nodes must come from the AST regardless; only the *edges* can differ by engine, so the exact, build-free AST engine is the natural default. `L3 ⊆ L4` still holds: L4 *adds* `points-to` edges over the same nodes, never removing the `ssa` ones. |
+| D26 | L3 engine posture | **Two engines used as alternatives**, `--l3-engine ast\|wala`, `ast` default; differential gate cross-validates CFG/CDG, reports DDG delta | Two implementations of one contract → a differential oracle for CFG/CDG (as `declared`/`rta` at L2), and an empirical DDG comparison for engine selection. |
+| D27 (revised) | DDG precision & the L3/L4 line | **L3 = intraprocedural, L4 = interprocedural.** Both engines' DDGs stay within one callable and differ only in *precision*: AST = object-insensitive syntactic (`prov:["ssa"]`); WALA = scalar SSA (`prov:["ssa"]`) **+ RTA points-to heap** (`prov:["points-to"]`) via the reused L2 pointer analysis | RTA points-to *at L3* is deliberate: without it the WALA L3 engine computes too few du-pairs to be practically useful (§4.5). `prov` names the *derivation method*, not the level. Sharpening past RTA (0-CFA, D6) and the interprocedural reach are L4. Supersedes the earlier "syntactic; aliasing→L4" reading. |
+| D28 | CFG/DDG derivation (**revises D5**) | AST engine builds cfg/cdg/ddg on the JavaParser AST (exact `line:col`, build-free) as the **default**; WALA engine via the native per-method PDG + the instruction→statement mapping is **opt-in** | D5 made WALA the engine and AST the fallback. Because body nodes are keyed `line:col` and the identity gate requires a real column — which WALA-over-bytecode lacks — nodes come from the AST regardless (B.1 recovers identity); only the *edges* differ by engine, so the exact, build-free AST engine is the natural default. `L3 ⊆ L4` still holds: L4 keeps every L3 edge — scalar `ssa` and (WALA engine) intraprocedural heap `points-to` — and *adds* the interprocedural reach, never removing an L3 edge. |
+| D29 | WALA L3 engine internals | **Native per-method WALA PDG** over the reused L2 RTA call graph + pointer analysis: `cfg`←`SSACFG`, `cdg`←PDG control dependence (dominance frontiers), `ddg`←PDG intraprocedural data dependence (scalar `ssa` + heap `points-to`, `NORMAL→NORMAL` only). B.1 recovers node `line:col` — line from the bytecode line table, **sentinel `line:0`** when within-line disambiguation fails. | Keeps the engine true to native WALA (no hand-rolled DDG); the intra/inter split matches Horwitz–Reps–Binkley PDG/SDG and WALA's own `PDG`/`SDG` architecture. Spike-confirmed: lines recover reliably, columns never (bytecode `LineNumberTable` has no columns). |
 
 ## 7. Engine selection & the differential gate
 
@@ -189,14 +191,17 @@ Recorded in [`.claude/SCHEMA_DECISIONS.md`](../../../.claude/SCHEMA_DECISIONS.md
 The engines are **used alternatively** (one per run), not unioned into one graph the way L2 overlays `declared` and `rta`. That precedent deliberately does **not** transfer, for three reasons:
 
 - **CFG/CDG cannot be unioned.** The two produce *different graph shapes* — source-structural vs execution-faithful lowering. Merging their edges yields a graph that satisfies *neither* engine's well-formedness (single `@entry`/`@exit`, reachability; §4.3) — not a richer CFG, a malformed one. One engine's CFG must be authoritative per run.
-- **A DDG union would be redundant, not complementary.** Both engines implement the *same* syntactic, object-insensitive DDG semantics (§4.5); their `ddg` sets are *meant* to coincide, and where they differ it is engine imprecision (the pinned divergences below), not extra signal. Contrast L2, where `declared` (static resolution) and `rta` (dynamic-dispatch fan-out) are genuinely complementary — which is why L2 *is* an overlay.
-- **Provenance is the tell.** At L3 every edge is `prov:["ssa"]` regardless of engine — the engine is an *implementation* choice, not an analysis tier. Overlay/union is how different *tiers* share one list: `declared`+`rta` at L2, and the real cross-level overlay `ssa`+`points-to` at L4 that L3's edges participate in. Keeping the engine out of `prov` is what keeps `L2 ⊆ L3 ⊆ L4` a clean tier union.
+- **A DDG union would mix two precisions, not add signal.** The engines compute the intraprocedural DDG at *different precision* — object-insensitive syntactic (AST) vs RTA points-to (WALA, §4.5) — and are used as alternatives, one per run. Unioning their `ddg` sets into one graph would blend a sound-at-RTA heap edge set with an object-insensitive one that both misses real edges and keeps stale ones: the result is neither engine's DDG and honors neither's precision contract. §7.2 instead *compares* the two as an empirical delta. Contrast L2, where `declared` (static resolution) and `rta` (dynamic-dispatch fan-out) are complementary tiers of the *same* precision question — which is why L2 *is* an overlay.
+- **Provenance is per-run, not a cross-engine overlay.** `prov` records *how* a du-pair was derived — `ssa` (scalar/syntactic) or `points-to` (RTA heap) — within whichever engine ran (§4.5), not the level and not the engine. The WALA engine emits both `ssa` and `points-to` in one run; the AST engine emits only `ssa`. This is *not* the L4 overlay: at L4 `points-to` is an additional tier layered on the *same run's* `ssa` edges, whereas at L3 you pick one engine and get its DDG — the AST engine's `ssa`-only set or the WALA engine's `ssa`+`points-to` set, never a union across engines. That is what keeps `L2 ⊆ L3 ⊆ L4` a clean *per-run* tier union rather than a cross-engine merge.
 
 A best-of-both *composition* — WALA edges per-callable where it analysed one, AST edges for callables outside WALA's scope — is a conceivable future selection policy, but it is a per-callable **fallback** (still one engine's shape per callable), not an edge-level overlay. Out of scope here.
 
-### 7.2 Differential gate
+### 7.2 Differential gate — CFG/CDG cross-validated, DDG reported
 
-On the fixtures, run both engines and assert they agree where they must — CFG node set + reachability (including the single `finally` node and that it is reached on every exit path, §4.4.1), `cdg` edges, and `ddg` edges on constructs where the syntactic semantics coincide. **Pinned, documented divergences:** exceptional-edge shape and density (WALA's catch-all lets any instruction throw into a handler/`finally`; the AST engine edges only from statements that syntactically throw), and within-line attribution on multi-statement lines (AST exact; WALA via B.1). The AST engine is the reference. The gate *uses* the divergence as a cross-check rather than merging it away.
+On the fixtures, run both engines. The gate has two distinct jobs, because only two of the three overlays are meant to agree:
+
+- **CFG + CDG — a hard cross-validation gate.** Assert the engines agree on the CFG node set + reachability (including the single `finally` node and that it is reached on every exit path, §4.4.1) and on `cdg` edges. The AST engine is the reference oracle; a mismatch outside the pinned set fails the build. **Pinned, documented divergences** (asserted as divergences, not bugs): exceptional-edge shape and density (WALA's catch-all lets any instruction throw into a handler/`finally`; the AST engine edges only from statements that syntactically throw), within-line attribution on multi-statement lines (AST exact; WALA via B.1), and any **sentinel `line:0`** nodes the WALA engine emits when B.1 disambiguation fails.
+- **DDG — an empirical delta report, not an agreement assertion.** The two DDGs are computed at *different precision* (§4.5), so they are **not** required to coincide and coincidence is not the goal. Instead the gate emits a report: how many du-pairs each engine finds, how many the WALA engine adds via RTA points-to that the AST engine misses (aliased heap du-pairs, §4.5.1), and how many object-insensitive edges the AST engine keeps that RTA kills. This quantifies the data flow one engine sees and the other doesn't — the signal that drives engine selection in practice — captured alongside the L3 metrics report.
 
 ## 8. CLI contract
 
@@ -208,7 +213,7 @@ The oracle already anticipates L3 (`max_level ≤ 4`; `bodyNode.kind` includes t
 
 - `cfgEdge` — required `src`, `dst`, `kind`; `src`/`dst` are `localId` (`line:col` or an `@tag`, per the schema's existing `$defs/localId`); `kind` a closed enum (the nine of §4.2). `additionalProperties:false`.
 - `cdgEdge` — required `src`, `dst` (`localId`). `additionalProperties:false`.
-- `ddgEdge` — required `src`, `dst`, `var`, `prov`; `prov` an array of `enum ["ssa"]` at L3 (L4 adds `points-to`), `minItems:1`. `additionalProperties:false`.
+- `ddgEdge` — required `src`, `dst`, `var`, `prov`; `prov` an array over `enum ["ssa","points-to"]` (`ssa` for scalar/syntactic du-pairs — the only value the AST engine emits; `points-to` for the WALA engine's RTA-resolved heap du-pairs, §4.5), `minItems:1`. `additionalProperties:false`.
 - the `cfg`/`cdg`/`ddg` arrays `$ref` their edge defs, whose endpoints reuse the schema's **existing** `localId` def (no new def needed).
 - an `L3SchemaOracleTest` asserting each way a plausible L3 payload can be wrong (bad `kind`, non-local endpoint, missing `var`, empty `prov`, stray key), written before the producer.
 
@@ -218,10 +223,10 @@ Per-level conformance gate is a hard gate. A fixture project exercises each cons
 
 1. **CFG gate** — every non-synthetic node has a real span; exactly one `@entry`/`@exit`; every node reachable from `@entry` and reaching `@exit`; each Java construct emits its documented edges including `exception`.
 2. **Dominance gate** — post-dominator tree rooted at `@exit`; hand-computed control deps for `if`/loop/early-return match the `cdg` edges exactly.
-3. **PDG backward-slice gate** — reverse reachability over `cdg ∪ ddg` of a named variable at a named line equals a hand-computed node set **exactly**, under the syntactic DDG semantics. Cases: loop-carried, shadowed scope, and an **aliased-field** case (pins the object-insensitive imprecision).
+3. **PDG backward-slice gate** — reverse reachability over `cdg ∪ ddg` of a named variable at a named line equals a hand-computed node set **exactly**, under the **AST engine's** object-insensitive DDG semantics. Cases: loop-carried, shadowed scope, and an **aliased-field** case (pins the AST engine's object-insensitive imprecision — which the WALA engine resolves, §4.5.1).
 4. **`L2 ⊆ L3`** — analyse one fixture at both levels; L3 contains everything L2 emitted plus the new overlay keys and statement nodes.
 5. **Determinism** — `-j N` byte-identical to `-j 1`; ids stable across runs.
-6. **Differential gate** — Engine A vs Engine B agree on the defined subset; pinned divergences asserted as such. Realworld-tagged (the WALA engine builds), like L2's `rta` end-to-end test.
+6. **Differential gate** — Engine A vs Engine B **agree on CFG + CDG** (the defined subset; pinned divergences — exceptional edges, within-line attribution, sentinel `line:0` — asserted as such), and the **DDG delta is reported** empirically (§7.2), not asserted equal. Realworld-tagged (the WALA engine builds), like L2's `rta` end-to-end test.
 
 Slice/taint gates are **frontend** (SDK) gates, not analyzer gates.
 
@@ -236,7 +241,7 @@ Sequenced so the default (AST) engine — the reference — lands and can ship f
 5. L3 conformance gate (CFG / dominance / PDG-slice) on the AST engine; `L2 ⊆ L3`; determinism.
 6. WALA engine — the B.1 mapping, then CFG/CDG/DDG on it.
 7. Differential gate (A vs B; pin divergences).
-8. Spec amendments + ledger (parent §8; `SCHEMA_DECISIONS` D25–D28).
+8. Spec amendments + ledger (parent §8; `SCHEMA_DECISIONS` D25–D29).
 
 L3 can ship/tag (AST engine, steps 1–5) before the WALA engine (6–7). The Neo4j overlay is a separate follow-up after #182. Live tracking is the epic, not this spec.
 
@@ -245,9 +250,9 @@ L3 can ship/tag (AST engine, steps 1–5) before the WALA engine (6–7). The Ne
 | Risk | Mitigation |
 | --- | --- |
 | AST-CFG lowering correctness (finally duplication, exceptions, TWR) | A documented rule + a fixture per construct; the CFG gate |
-| WALA within-line mapping ambiguity (B.1) | Content-based disambiguation + innermost-statement fallback + the differential gate against the exact AST engine |
+| WALA within-line mapping ambiguity (B.1) | Content-based disambiguation + **sentinel `line:0`** when it fails (never mis-attributes) + the CFG/CDG differential gate against the exact AST engine |
 | Two engines double the maintenance | Shared contract + shared gate; the WALA engine is opt-in and can lag |
-| Syntactic DDG imprecision surprises consumers | `prov:["ssa"]` labels it; an aliased-field fixture pins it; L4 adds the sound `points-to` overlay |
+| AST engine's DDG imprecision surprises consumers | `prov:["ssa"]` labels it; an aliased-field fixture pins it; the **WALA engine already resolves it at L3** (RTA heap, `prov:["points-to"]`), and L4 sharpens further |
 | WALA engine inherits build/coverage limits | Same posture as L2 `rta` (degrade to a clear error; L2 intact); the #181 scope-shadow fix applies |
 
 ## 13. References

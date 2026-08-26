@@ -182,9 +182,9 @@
         },
         "prov": {
           "type": "array",
-          "items": { "enum": ["ssa"] },
+          "items": { "enum": ["ssa", "points-to"] },
           "minItems": 1,
-          "description": "L3 data dependence is syntactic (ssa). A closed enum: L4 extends it with points-to when the semantic overlay lands."
+          "description": "Analysis provenance for this def-use edge. 'ssa' = syntactic scalar dep; 'points-to' = RTA heap dep (first produced by the WALA engine). A closed enum: L4 may extend it further."
         }
       }
     },

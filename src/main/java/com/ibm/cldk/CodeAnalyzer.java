@@ -33,6 +33,7 @@ import com.ibm.cldk.syntactic_analysis.L1Extractor;
 import com.ibm.cldk.syntactic_analysis.L2CallGraph;
 import com.ibm.cldk.utils.BuildProject;
 import com.ibm.cldk.utils.Log;
+import com.ibm.cldk.wala.WalaAnalysis;
 import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
@@ -155,7 +156,8 @@ public class CodeAnalyzer implements Runnable {
 
     @Option(names = {
             "--l3-engine" }, description = "L3 dataflow engine at --schema v2 --analysis-level 3: "
-                    + "ast (default; source-based, no build) or wala (not yet implemented).")
+                    + "ast (default; source-based, no build) or wala (post-build; requires compiled "
+                    + "class files — uses WALA RTA + PDG for cfg/cdg/ddg).")
     private String l3Engine = "ast";
 
     @Option(names = {
@@ -368,10 +370,11 @@ public class CodeAnalyzer implements Runnable {
             throw new ParameterException(spec.commandLine(),
                     "error: --schema v2 currently supports --analysis-level 1, 2, and 3 only");
         }
-        if (analysisLevel >= 3 && !"ast".equalsIgnoreCase(l3Engine)) {
-            throw new ParameterException(spec.commandLine(), "wala".equalsIgnoreCase(l3Engine)
-                    ? "error: the wala L3 engine is not yet implemented; use --l3-engine ast"
-                    : "error: unknown --l3-engine '" + l3Engine + "'; use ast");
+        if (analysisLevel >= 3
+                && !"ast".equalsIgnoreCase(l3Engine)
+                && !"wala".equalsIgnoreCase(l3Engine)) {
+            throw new ParameterException(spec.commandLine(),
+                    "error: unknown --l3-engine '" + l3Engine + "'; use ast or wala");
         }
         if ("neo4j".equalsIgnoreCase(emit)) {
             throw new ParameterException(spec.commandLine(),
@@ -419,16 +422,37 @@ public class CodeAnalyzer implements Runnable {
 
         Map<String, JModule> modules;
         List<L2CallGraph.RtaEndpoint> rtaEndpoints = null;
+        WalaAnalysis wala = null;
         try {
             modules = L1Extractor.extractAll(
-                    Paths.get(input), application, dependencyDir, cached, analysisLevel, graphFieldDepth);
+                    Paths.get(input), application, dependencyDir, cached,
+                    analysisLevel, graphFieldDepth, l3Engine);
+            // The WALA L3 engine needs the RTA build; --no-rta suppresses it, so a level-3 wala run with
+            // --no-rta would silently carry no overlays. Warn rather than degrade without a signal.
+            if (analysisLevel >= 3 && noRta && "wala".equalsIgnoreCase(l3Engine)) {
+                Log.warn("--l3-engine wala requires the RTA build that --no-rta suppresses; "
+                        + "no L3 overlays will be produced (L1/L2 output is unaffected)");
+            }
             // The RTA overlay wants those same dependency jars in WALA's scope, so build it here, before
             // the finally cleans them. `declared` edges need no build, so level 2 never fails for want of
             // one: a build failure (or --no-rta) leaves rta absent and declared edges intact.
             if (analysisLevel >= 2 && !noRta) {
                 String buildCommand = noBuild ? null : (build == null ? "auto" : build);
                 String deps = dependencyDir == null ? null : dependencyDir.toString();
-                rtaEndpoints = RtaCallGraph.endpoints(input, deps, buildCommand);
+                if (analysisLevel >= 3 && "wala".equalsIgnoreCase(l3Engine)) {
+                    // Build the call graph once; reuse it for both L2 rta endpoints and L3 overlays.
+                    wala = WalaAnalysis.of(input, deps, buildCommand).orElse(null);
+                    if (wala == null) {
+                        Log.warn("WALA L3 engine unavailable; emitting L2 declared edges only");
+                    }
+                    rtaEndpoints = wala != null ? wala.rtaEndpoints() : java.util.List.of();
+                } else {
+                    rtaEndpoints = RtaCallGraph.endpoints(input, deps, buildCommand);
+                }
+            }
+            // Apply WALA L3 overlays while the dependency jars are still live (PDG/CFG need class files).
+            if (wala != null) {
+                L3WalaOverlays.apply(wala, input, modules, graphFieldDepth);
             }
         } finally {
             BuildProject.cleanLibraryDependencies();
