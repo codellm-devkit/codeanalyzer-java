@@ -50,7 +50,10 @@ public final class L1Extractor {
     private static final String[] EXCLUDED_SOURCE_ROOTS = {
         Paths.get("src", "test", "resources").toString(),
         Paths.get("src", "it", "resources").toString(),
-        Paths.get("src", "xdocs-examples").toString()
+        Paths.get("src", "xdocs-examples").toString(),
+        // Gradle's processResources copies src/test/resources into build/resources; those copies are
+        // build output, not project code.
+        Paths.get("build", "resources").toString()
     };
 
     /** Analyse a project with no library dependencies available (JDK + project sources only). */
@@ -101,6 +104,9 @@ public final class L1Extractor {
             Path projectRoot, String appName, Path dependencyDir, Map<String, JModule> cached,
             int analysisLevel, int graphFieldDepth, String l3Engine)
             throws IOException {
+        // JavaParser's collection strategy silently finds zero source roots for a path with a `.`
+        // element (`-i .` arrives here as exactly that), so normalize before discovery.
+        projectRoot = projectRoot.toAbsolutePath().normalize();
         ParserConfiguration discovery = parserConfiguration();
         ProjectRoot root = new ParserCollectionStrategy(discovery).collect(projectRoot);
 
