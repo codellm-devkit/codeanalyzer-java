@@ -1,0 +1,28 @@
+plugins {
+    id 'java'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // String notation, both quote styles, with and without parentheses.
+    implementation 'org.springframework:spring-core:6.1.4'
+    api("com.google.guava:guava:33.0.0-jre")
+
+    // A version carried by a BOM/platform — no version token on the line.
+    implementation 'org.slf4j:slf4j-api'
+
+    // An interpolated version: kept as the spec, left unresolved.
+    testImplementation "org.junit.jupiter:junit-jupiter:${junitVersion}"
+
+    // Development-scope configuration.
+    compileOnly 'org.projectlombok:lombok:1.18.30'
+
+    // Map notation — recognized form.
+    runtimeOnly group: 'com.h2database', name: 'h2', version: '2.2.224'
+
+    // A computed/dynamic coordinate this best-effort parser does not read (counts as a logged gap).
+    implementation project(':internal-lib')
+}
