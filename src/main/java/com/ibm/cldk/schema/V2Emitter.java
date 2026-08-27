@@ -38,6 +38,22 @@ public final class V2Emitter {
             String analyzerVersion,
             List<JCallEdge> callGraph,
             Map<String, JExternalSymbol> externalSymbols) {
+        return emit(appName, maxLevel, modules, analyzerVersion, callGraph, externalSymbols, null);
+    }
+
+    /**
+     * As above, additionally attaching the repository-artifact inventory. {@code artifacts} is set only
+     * when non-{@code null} and non-empty, so a repository with no inventoried artifacts omits the key
+     * (absence means "no fact"). The inventory is ungated — it rides along at every analysis level.
+     */
+    public static Analysis emit(
+            String appName,
+            int maxLevel,
+            Map<String, JModule> modules,
+            String analyzerVersion,
+            List<JCallEdge> callGraph,
+            Map<String, JExternalSymbol> externalSymbols,
+            Map<String, JArtifact> artifacts) {
         JApplication application = new JApplication();
         application.setId(CanId.applicationId(appName));
 
@@ -54,6 +70,9 @@ public final class V2Emitter {
         }
         if (externalSymbols != null && !externalSymbols.isEmpty()) {
             application.setExternalSymbols(externalSymbols);
+        }
+        if (artifacts != null && !artifacts.isEmpty()) {
+            application.setArtifacts(artifacts);
         }
 
         Analysis analysis = new Analysis();

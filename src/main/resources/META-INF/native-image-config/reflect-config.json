@@ -3282,5 +3282,20 @@
   },
   {
     "name": "values"
+  },
+  {
+    "name": "org.yaml.snakeyaml.constructor.SafeConstructor",
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true
+  },
+  {
+    "name": "org.yaml.snakeyaml.LoaderOptions",
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true
+  },
+  {
+    "name": "org.yaml.snakeyaml.DumperOptions",
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true
   }
 ]

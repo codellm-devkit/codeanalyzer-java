@@ -1,0 +1,12 @@
+server:
+  port: 8080
+spring:
+  application:
+    name: artifact-inventory-test
+  datasource:
+    url: ${DB_URL}
+services:
+  - name: payments
+    url: http://payments:9000
+  - name: orders
+    url: http://orders:9001

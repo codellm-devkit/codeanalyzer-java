@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>artifact-inventory-test</artifactId>
+  <version>1.0.0</version>
+  <properties>
+    <spring.version>6.1.4</spring.version>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-core</artifactId>
+      <version>6.1.4</version>
+    </dependency>
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <version>1.18.30</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.10.1</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.acme</groupId>
+      <artifactId>propref</artifactId>
+      <version>${spring.version}</version>
+    </dependency>
+  </dependencies>
+</project>

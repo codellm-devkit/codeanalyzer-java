@@ -118,6 +118,14 @@
           "propertyNames": { "$ref": "#/$defs/externalCanId" },
           "additionalProperties": { "$ref": "#/$defs/externalSymbol" }
         },
+        "artifacts": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^(?!/)(?!.*\\.\\.).*$",
+            "description": "Keys are repo-relative artifact paths: never absolute, never escaping the root."
+          },
+          "additionalProperties": { "$ref": "#/$defs/artifact" }
+        },
         "param_in": { "type": "array" },
         "param_out": { "type": "array" }
       }
@@ -207,6 +215,93 @@
           "minLength": 1,
           "description": "Dotted source spelling; the id carries the binary name."
         }
+      }
+    },
+
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "artifact_kind", "path", "content_hash", "size_bytes"],
+      "properties": {
+        "id": { "$ref": "#/$defs/canId" },
+        "kind": { "const": "artifact" },
+        "artifact_kind": {
+          "enum": [
+            "build_manifest", "dependency_lockfile", "configuration", "deployment_manifest",
+            "container", "infrastructure", "ci", "script", "documentation", "data", "other"
+          ],
+          "description": "Closed classification set. 'other' is the catch-all so a file is never dropped for lack of a parser."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*\\.\\.).*$",
+          "description": "Repo-relative path; never absolute, never escaping the root."
+        },
+        "format": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "minLength": 1 },
+        "content_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "text": { "type": "string" },
+        "text_encoding": { "type": "string", "minLength": 1 },
+        "text_truncated": { "type": "boolean" },
+        "dependencies": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/dependency" }
+        },
+        "config_keys": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/configKey" }
+        }
+      }
+    },
+
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "name", "ecosystem", "scope", "direct"],
+      "properties": {
+        "id": { "$ref": "#/$defs/canId" },
+        "kind": { "const": "dependency" },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Ecosystem-native identity, verbatim (groupId:artifactId for maven)."
+        },
+        "version_spec": { "type": "string", "minLength": 1 },
+        "resolved_version": { "type": "string", "minLength": 1 },
+        "ecosystem": { "type": "string", "minLength": 1 },
+        "scope": {
+          "enum": ["runtime", "development", "test", "build", "optional", "unknown"],
+          "description": "Shared closed scope vocabulary across analyzers. 'unknown' is the catch-all."
+        },
+        "direct": { "type": "boolean" }
+      }
+    },
+
+    "configKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "key", "references"],
+      "properties": {
+        "id": { "$ref": "#/$defs/canId" },
+        "kind": { "const": "config_key" },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Canonical dotted key; a flat .properties key and a nested .yml path share one key space."
+        },
+        "namespace": { "type": "string", "minLength": 1 },
+        "value": {
+          "description": "Boxed literal (string/number/boolean) as parsed, or null.",
+          "type": ["string", "number", "boolean", "null"]
+        },
+        "references": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Placeholder references preserved where recognizable, e.g. env:PAYMENT_HOST."
+        },
+        "span": { "$ref": "#/$defs/span" }
       }
     },
 

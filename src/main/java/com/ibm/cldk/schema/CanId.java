@@ -46,4 +46,26 @@ public final class CanId {
     public static String externalId(String appName, String binaryType, String signature) {
         return applicationId(appName) + "/@external/" + binaryType + "/" + signature;
     }
+
+    /**
+     * {@code can://java/<app>/@artifact/<relative-path>} — a non-source repository file. The
+     * {@code @artifact} marker in the file slot keeps artifact ids out of the callable {@code signatureOf}
+     * id space (parallel to {@code @external}); separators are normalized to {@code /} and a leading
+     * {@code ./} or {@code /} is stripped, so a dotfile such as {@code .env} is preserved intact
+     * (only a leading {@code ./} or {@code /} sequence is removed, never a bare dot).
+     */
+    public static String artifactId(String appName, String relPath) {
+        String rel = relPath.replace("\\", "/").replaceFirst("^(?:\\./|/)+", "");
+        return applicationId(appName) + "/@artifact/" + rel;
+    }
+
+    /** {@code <artifactId>/<native-name>} — a dependency declared by a manifest artifact. */
+    public static String dependencyId(String artifactId, String nativeName) {
+        return childId(artifactId, nativeName);
+    }
+
+    /** {@code <artifactId>/<dotted-key>} — a config key defined by a config artifact. */
+    public static String configKeyId(String artifactId, String dottedKey) {
+        return childId(artifactId, dottedKey);
+    }
 }

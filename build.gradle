@@ -124,6 +124,11 @@ dependencies {
     implementation('com.github.javaparser:javaparser-symbol-solver-core:3.26.3')
     implementation('com.github.javaparser:javaparser-core:3.26.3')
 
+    // YAML parsing for the repository-artifact layer's config-key extraction (application.yml and
+    // friends). Reached only via the config overlay; a reflect-config.json entry keeps it working in
+    // the GraalVM native image.
+    implementation('org.yaml:snakeyaml:2.2')
+
     // Neo4j Bolt driver for `--emit neo4j --neo4j-uri ...` (live incremental graph push).
     // Bundled into the fat jar so `java -jar` supports live push out of the box. It is reached ONLY
     // reflectively, via the BoltSink seam (see Neo4jEmitter#loadBoltSink), so the GraalVM native image

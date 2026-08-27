@@ -21,10 +21,12 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.ibm.cldk.artifacts.ArtifactInventory;
 import com.ibm.cldk.entities.JavaCompilationUnit;
 import com.ibm.cldk.neo4j.BoltConfig;
 import com.ibm.cldk.neo4j.Neo4jEmitter;
 import com.ibm.cldk.schema.Analysis;
+import com.ibm.cldk.schema.JArtifact;
 import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.schema.V2Emitter;
 import com.ibm.cldk.schema.V2Json;
@@ -163,6 +165,19 @@ public class CodeAnalyzer implements Runnable {
     @Option(names = {
             "--graph-field-depth" }, description = "DDG access-path bound k at --analysis-level 3 (default 3).")
     private int graphFieldDepth = 3;
+
+    @Option(names = {
+            "--artifact-text" }, negatable = true, description = "Capture verbatim text of inventoried "
+                    + "repository artifacts (manifests, config, docs) at --schema v2. On by default; "
+                    + "--no-artifact-text records each artifact's path, hash, size, and parsed overlays "
+                    + "without its text payload.")
+    private boolean artifactText = true;
+
+    @Option(names = {
+            "--artifact-text-max-bytes" }, description = "Per-artifact text-capture cap in bytes at "
+                    + "--schema v2 (default 262144). A larger file is inventoried with a leading prefix "
+                    + "and text_truncated set.")
+    private int artifactTextMaxBytes = ArtifactInventory.DEFAULT_ARTIFACT_TEXT_MAX_BYTES;
 
     /** Handle used to report flag-validation errors as clean, non-zero picocli failures. */
     @Spec
@@ -464,13 +479,20 @@ public class CodeAnalyzer implements Runnable {
             L1Cache.save(cache, application, version, modules);
         }
 
+        // The repository-artifact inventory is a separate repo-wide walk (source extraction is scoped to
+        // the source roots; artifacts live all over the tree). Ungated: it rides along at every level.
+        Map<String, JArtifact> artifacts = ArtifactInventory.inventory(
+                Paths.get(input), application, artifactText, artifactTextMaxBytes);
+
         Analysis analysis;
         if (analysisLevel >= 2) {
             L2CallGraph.Result l2 = L2CallGraph.build(application, modules, rtaEndpoints, externalCalls);
             analysis = V2Emitter.emit(
-                    application, analysisLevel, modules, version, l2.callGraph(), l2.externalSymbols());
+                    application, analysisLevel, modules, version, l2.callGraph(), l2.externalSymbols(),
+                    artifacts);
         } else {
-            analysis = V2Emitter.emit(application, analysisLevel, modules, version);
+            analysis = V2Emitter.emit(
+                    application, analysisLevel, modules, version, null, null, artifacts);
         }
 
         if (output == null) {

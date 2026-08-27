@@ -23,4 +23,11 @@ public class JApplication {
      * edge dangles. Left {@code null} at L1 so the key is omitted.
      */
     private Map<String, JExternalSymbol> externalSymbols;
+
+    /**
+     * The repository-artifact inventory: non-source files keyed by repo-relative path, each carrying its
+     * declared dependencies and config keys. Ungated (present at every analysis level, like the symbol
+     * table). Left {@code null} when the inventory is empty so the key is omitted.
+     */
+    private Map<String, JArtifact> artifacts;
 }

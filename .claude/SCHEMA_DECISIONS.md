@@ -430,3 +430,58 @@ The analyzer is a **pure graph provider**: it emits the CFG/PDG/SDG substrate an
 stops. Slicing, taint, and reachability are **SDK queries** over the emitted graph
 (`cldk-sdk-frontend`) — never analyzer features. No `taint_flows` section, no
 sources/sinks policy in the analyzer.
+
+## Effort: repository-artifact layer (2026-08)
+
+Inventory a repository's non-source files (manifests, config, docs, CI, containers) as
+`artifact` nodes under `application`, each carrying declared `dependency` and `config_key`
+children. Anchored on the cross-repo spec and mirroring `codeanalyzer-python`'s scope —
+artifact inventory + dependency nodes + config-key nodes, application-anchored. `config_use`
+(config-key ↔ code join) is deferred to a follow-up.
+
+### D30 — Artifact layer is analysis.json-only; the Neo4j projection defers entirely
+Java's Neo4j projection is still v1 (`--emit neo4j` is rejected under `--schema v2`), so the
+artifact layer ships in the JSON projection only and the Neo4j `SCHEMA_VERSION` is **not** bumped.
+**Divergence (broader than the spec):** the spec defers only the `J_USES_CONFIG` graph edge; Java
+defers the whole graph projection of the layer, because there is no v2 graph projection to extend
+yet. When Java's Neo4j projection is migrated to v2, the artifact/dependency/config-key nodes and
+their containment edges land there in one pass. No node or field is dropped from JSON in the
+meantime — the two projections will reconcile at that migration, not here.
+
+### D31 — A separate repo-wide walk, disjoint from source extraction
+Artifacts live across the whole tree (root manifests, `.github/` CI, `k8s/` manifests), but the v2
+extractor is scoped to the Java source roots. So the inventory runs its own `Files.walk` from the
+project root (`ArtifactInventory`), with its own directory pruning (`.git`, `build`, `target`,
+`node_modules`, …) and its own source-file exclusion (`.java`/`.class`/`.jar` belong to the symbol
+table, not the inventory). Ungated: the inventory rides along at every analysis level, like the
+symbol table — not behind an `--analysis-level` threshold.
+
+### D32 — Closed `artifact_kind` / `scope` vocabularies with an explicit catch-all
+`artifact_kind ∈ {build_manifest, dependency_lockfile, configuration, deployment_manifest,
+container, infrastructure, ci, script, documentation, data, other}` and `scope ∈ {runtime,
+development, test, build, optional, unknown}`. Both close over a catch-all (`other` / `unknown`) so
+a file is **never dropped** for want of a classifier or a scope mapping — coverage beats perfect
+classification. Enforced by the JSON Schema conformance gate, not by a Java enum (matching how
+`type.kind` is a validated-by-convention string).
+
+### D33 — `ecosystem` names the coordinate space, not the build tool
+Maven and Gradle dependencies both carry `ecosystem: "maven"` — Gradle coordinates live in the
+Maven coordinate space (`groupId:artifactId`), so a consumer reads one dependency identity space
+across build tools. Which tool declared a dependency stays recoverable from the containing
+artifact's `format` (`gradle` vs `xml`).
+
+### D34 — Dependency extraction: exact for Maven (DOM), best-effort for Gradle (regex, logged gaps)
+`pom.xml` is parsed with the JDK DOM parser (XXE-hardened) — the exact path. Gradle build scripts
+are arbitrary Groovy/Kotlin, so there is no exact static path short of running the build; the Gradle
+parser recognizes the common declaration forms and **logs the count it could not read** rather than
+guessing (map/platform/computed coordinates). A parse failure never prevents the enclosing artifact
+(with its raw text) from being inventoried — dependency/config parsing is a pure overlay.
+
+### D35 — Text capture is toggleable and byte-capped; hash/size/path are unconditional
+`--artifact-text`/`--no-artifact-text` (default on) toggles the verbatim `text` payload;
+`--artifact-text-max-bytes` (default 262144) caps it, emitting a leading prefix with
+`text_truncated` set past the cap. `path`, `content_hash` (SHA-256), and `size_bytes` are always
+present, so a binary or truncated artifact still dereferences to its source. A hard byte-cap is
+backed off to the last complete UTF-8 character before decode, so a clean text prefix survives the
+cut while a genuine binary file still reads as binary (no `text`). The inventory itself is
+unaffected by the toggle — only the `text` field is.
