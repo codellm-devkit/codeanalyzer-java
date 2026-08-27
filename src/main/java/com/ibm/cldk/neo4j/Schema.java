@@ -39,7 +39,11 @@ public final class Schema {
             "CREATE CONSTRAINT j_init_block_id IF NOT EXISTS FOR (ib:JInitializationBlock) REQUIRE ib.id IS UNIQUE",
             "CREATE CONSTRAINT j_crud_operation_id IF NOT EXISTS FOR (co:JCrudOperation) REQUIRE co.id IS UNIQUE",
             "CREATE CONSTRAINT j_crud_query_id IF NOT EXISTS FOR (cq:JCrudQuery) REQUIRE cq.id IS UNIQUE",
-            "CREATE CONSTRAINT j_comment_id IF NOT EXISTS FOR (cm:JComment) REQUIRE cm.id IS UNIQUE");
+            "CREATE CONSTRAINT j_comment_id IF NOT EXISTS FOR (cm:JComment) REQUIRE cm.id IS UNIQUE",
+            // Schema v2 (graph 2.0.0) additions — the writers run the union so either generation's
+            // graph stays constraint-protected in a shared database.
+            "CREATE CONSTRAINT j_module_id IF NOT EXISTS FOR (m:JModule) REQUIRE m.id IS UNIQUE",
+            "CREATE CONSTRAINT j_body_node_id IF NOT EXISTS FOR (bn:JBodyNode) REQUIRE bn.id IS UNIQUE");
 
     public static final List<String> INDEXES = Arrays.asList(
             "CREATE INDEX j_callable_name IF NOT EXISTS FOR (c:JCallable) ON (c.name)",

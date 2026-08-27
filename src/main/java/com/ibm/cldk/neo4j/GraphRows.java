@@ -70,12 +70,24 @@ public final class GraphRows {
         public final NodeRef from;
         public final NodeRef to;
         public final Map<String, Object> props;
+        /**
+         * Optional MERGE discriminant. When set, writers MERGE on {@code {_k: key}} so several
+         * relationships of one type may coexist between one endpoint pair (a conditional's
+         * true/false CFG edges; one DDG dependence per variable). {@code null} means the plain
+         * one-relationship-per-(type, from, to) MERGE.
+         */
+        public final String key;
 
         public EdgeRow(String type, NodeRef from, NodeRef to, Map<String, Object> props) {
+            this(type, from, to, props, null);
+        }
+
+        public EdgeRow(String type, NodeRef from, NodeRef to, Map<String, Object> props, String key) {
             this.type = type;
             this.from = from;
             this.to = to;
             this.props = props;
+            this.key = key;
         }
     }
 }

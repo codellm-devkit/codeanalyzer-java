@@ -31,9 +31,15 @@ import java.util.Map;
 public final class CypherWriter {
 
     private static final int BATCH = 500;
+    /**
+     * Every containment relationship either graph generation emits — v1 (unit-rooted) and v2
+     * (module-rooted) together, so a v2 push wipes/prunes a prior v1 graph of the same app and vice
+     * versa (spec: one app name = one graph, latest push wins).
+     */
     static final String DESCENDANTS = "[:J_DECLARES_TYPE|J_HAS_NESTED_TYPE|J_HAS_CALLABLE|J_HAS_FIELD|J_HAS_PARAMETER"
             + "|J_HAS_CALLSITE|J_DECLARES_VAR|J_HAS_ENUM_CONSTANT|J_HAS_RECORD_COMPONENT|J_HAS_INIT_BLOCK"
-            + "|J_HAS_CRUD_OPERATION|J_HAS_CRUD_QUERY|J_HAS_COMMENT*1..]";
+            + "|J_HAS_CRUD_OPERATION|J_HAS_CRUD_QUERY|J_HAS_COMMENT"
+            + "|J_DECLARES|J_HAS_METHOD|J_HAS_BODY_NODE*1..]";
 
     private CypherWriter() {}
 
@@ -65,10 +71,18 @@ public final class CypherWriter {
     }
 
     private static String wipe(String appName) {
+        // The unit hop is unlabeled and lists both generations' rel types (v1 J_HAS_UNIT →
+        // :JCompilationUnit, v2 J_HAS_MODULE → :JModule) so either generation's push replaces
+        // whichever generation the DB currently holds for this app. The second statement sweeps
+        // fully-isolated :JSymbol nodes the containment traversal cannot reach — v1's
+        // import-materialized bodyless :JType stubs hang off units via J_IMPORTS only, so the
+        // DETACH DELETE above orphans them; degree-0 symbols are unreferencable junk in any
+        // generation, and a symbol another application still uses keeps its edges and survives.
         return "MATCH (a:JApplication {name: " + cypherValue(appName) + "})\n"
-                + "OPTIONAL MATCH (a)-[:J_HAS_UNIT]->(c:JCompilationUnit)\n"
+                + "OPTIONAL MATCH (a)-[:J_HAS_UNIT|J_HAS_MODULE]->(c)\n"
                 + "OPTIONAL MATCH (c)-" + DESCENDANTS + "->(x)\n"
-                + "DETACH DELETE x, c, a;";
+                + "DETACH DELETE x, c, a;\n"
+                + "MATCH (s:JSymbol) WHERE NOT (s)--() DELETE s;";
     }
 
     // ----------------------------------------------------------------------------------------------
@@ -108,23 +122,26 @@ public final class CypherWriter {
     private static List<String> edgeStatements(List<EdgeRow> edges) {
         Map<String, List<EdgeRow>> groups = new LinkedHashMap<>();
         for (EdgeRow e : edges) {
-            String k = e.type + "|" + e.from.label + "." + e.from.keyProp + "|" + e.to.label + "." + e.to.keyProp;
+            String k = e.type + "|" + e.from.label + "." + e.from.keyProp + "|" + e.to.label + "." + e.to.keyProp
+                    + "|" + (e.key != null);
             groups.computeIfAbsent(k, x -> new ArrayList<>()).add(e);
         }
 
         List<String> blocks = new ArrayList<>();
         for (List<EdgeRow> group : groups.values()) {
             EdgeRow head = group.get(0);
+            boolean keyed = head.key != null;
             for (List<EdgeRow> batch : chunk(group, BATCH)) {
                 List<String> list = new ArrayList<>();
                 for (EdgeRow e : batch) {
                     list.add("  {f: " + cypherValue(e.from.value) + ", t: " + cypherValue(e.to.value)
+                            + (keyed ? ", k: " + cypherValue(e.key) : "")
                             + ", p: " + cypherMap(e.props) + "}");
                 }
                 blocks.add("UNWIND [\n" + String.join(",\n", list) + "\n] AS row\n"
                         + "MATCH (a:" + head.from.label + " {" + head.from.keyProp + ": row.f})\n"
                         + "MATCH (b:" + head.to.label + " {" + head.to.keyProp + ": row.t})\n"
-                        + "MERGE (a)-[r:" + head.type + "]->(b)\n"
+                        + "MERGE (a)-[r:" + head.type + (keyed ? " {_k: row.k}" : "") + "]->(b)\n"
                         + "SET r += row.p;");
             }
         }

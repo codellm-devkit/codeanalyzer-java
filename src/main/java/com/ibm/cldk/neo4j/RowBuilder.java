@@ -90,6 +90,11 @@ public final class RowBuilder {
         edges.add(new EdgeRow(type, from, to, props));
     }
 
+    /** As above, with a {@code _k} MERGE discriminant (see {@link EdgeRow#key}). */
+    public void keyedEdge(String type, NodeRef from, NodeRef to, Map<String, Object> props, String key) {
+        edges.add(new EdgeRow(type, from, to, props, key));
+    }
+
     public void edge(String type, NodeRef from, NodeRef to) {
         edges.add(new EdgeRow(type, from, to, RowBuilder.props()));
     }
@@ -119,11 +124,12 @@ public final class RowBuilder {
             }
         }
         // Dedupe edges the way Neo4j's MERGE would: one relationship per
-        // (type, source, target), last-write-wins on props (mirrors `MERGE (a)-[r]->(b) SET r += p`).
+        // (type, source, target[, _k]), last-write-wins on props (mirrors `MERGE (a)-[r]->(b) SET r += p`).
         Map<String, EdgeRow> uniqueEdges = new LinkedHashMap<>();
         for (EdgeRow e : edges) {
             uniqueEdges.put(e.type + "|" + e.from.label + ":" + e.from.value
-                    + "|" + e.to.label + ":" + e.to.value, e);
+                    + "|" + e.to.label + ":" + e.to.value
+                    + (e.key == null ? "" : "|" + e.key), e);
         }
 
         List<NodeRow> nodeList = new ArrayList<>(nodes.values());
@@ -131,8 +137,9 @@ public final class RowBuilder {
                 (a.labels.get(0) + " " + a.value).compareTo(b.labels.get(0) + " " + b.value));
         List<EdgeRow> edgeList = new ArrayList<>(uniqueEdges.values());
         edgeList.sort((a, b) ->
-                (a.type + " " + a.from.value + " " + a.to.value)
-                        .compareTo(b.type + " " + b.from.value + " " + b.to.value));
+                (a.type + " " + a.from.value + " " + a.to.value + " " + (a.key == null ? "" : a.key))
+                        .compareTo(b.type + " " + b.from.value + " " + b.to.value + " "
+                                + (b.key == null ? "" : b.key)));
         return new GraphRows(nodeList, edgeList);
     }
 }

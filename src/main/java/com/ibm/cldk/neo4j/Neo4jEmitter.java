@@ -37,10 +37,13 @@ public final class Neo4jEmitter {
 
     private Neo4jEmitter() {}
 
-    /** Emit the machine-readable schema contract. {@code output == null} prints to stdout. */
+    /**
+     * Emit the machine-readable schema contract — always the v2 catalog (graph 2.0.0), regardless
+     * of {@code --schema} (spec decision 5). {@code output == null} prints to stdout.
+     */
     public static void emitSchema(String output) throws IOException {
         String doc = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
-                .toJson(SchemaCatalog.buildSchemaDocument()) + "\n";
+                .toJson(V2SchemaCatalog.buildSchemaDocument()) + "\n";
         if (output == null) {
             System.out.print(doc);
             return;
@@ -66,8 +69,18 @@ public final class Neo4jEmitter {
     public static void emit(Map<String, JavaCompilationUnit> symbolTable, JsonArray callGraph, String appName,
             String input, String output, boolean targetedRun, BoltConfig bolt) throws IOException {
         String name = appName != null ? appName : deriveAppName(input);
-        GraphRows rows = GraphProjector.project(symbolTable, callGraph, name);
+        write(GraphProjector.project(symbolTable, callGraph, name), name, output, targetedRun, bolt);
+    }
 
+    /** Project + emit the schema v2 graph (graph contract 2.0.0). Always a full-depth, full run. */
+    public static void emitV2(com.ibm.cldk.schema.Analysis analysis, String appName, String input,
+            String output, BoltConfig bolt) throws IOException {
+        String name = appName != null ? appName : deriveAppName(input);
+        write(V2GraphProjector.project(analysis, name), name, output, false, bolt);
+    }
+
+    private static void write(GraphRows rows, String name, String output, boolean targetedRun,
+            BoltConfig bolt) throws IOException {
         if (bolt != null) {
             BoltSink sink = loadBoltSink();
             if (sink != null) {
