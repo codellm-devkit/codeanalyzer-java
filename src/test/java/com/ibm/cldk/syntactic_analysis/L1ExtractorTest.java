@@ -137,6 +137,41 @@ class L1ExtractorTest {
     }
 
     @Test
+    void extractAll_discoversTheSameModulesFromAnUnnormalizedProjectRoot(@TempDir Path tmp) throws IOException {
+        Path root = writeProject(tmp);
+        Path relative = Paths.get("").toAbsolutePath().relativize(root.toAbsolutePath());
+        assertFalse(relative.isAbsolute());
+        java.util.Set<String> expected = L1Extractor.extractAll(root, "myapp").keySet();
+
+        assertEquals(expected, L1Extractor.extractAll(relative, "myapp").keySet(),
+                "a relative project root must discover the same modules as its absolute equivalent");
+        // `-i .` reaches extractAll as a path with a `.` element, which JavaParser's collection
+        // strategy silently resolves to zero source roots unless the root is normalized first.
+        assertEquals(expected, L1Extractor.extractAll(root.resolve("."), "myapp").keySet(),
+                "a project root with a `.` element must discover the same modules");
+        assertEquals(expected, L1Extractor.extractAll(relative.resolve("."), "myapp").keySet(),
+                "a relative project root with a `.` element must discover the same modules");
+    }
+
+    @Test
+    void extractAll_ignoresBuildOutputCopiesOfResources(@TempDir Path tmp) throws IOException {
+        Path root = writeProject(tmp);
+        // Gradle's processResources copies src/test/resources into build/resources; fixture apps that
+        // live there must not be analyzed as project code.
+        Path copied = root.resolve("build/resources/test/test-applications/demo/src/main/java/com/example");
+        Files.createDirectories(copied);
+        Files.writeString(copied.resolve("Copied.java"),
+                "package com.example;\npublic class Copied {}\n", StandardCharsets.UTF_8);
+
+        Map<String, JModule> modules = L1Extractor.extractAll(root, "myapp");
+
+        assertEquals(2, modules.size(), "only the real sources, not the build/resources copy");
+        for (String key : modules.keySet()) {
+            assertFalse(key.startsWith("build/"), "build output must not be analyzed: " + key);
+        }
+    }
+
+    @Test
     void extractAll_producesStableIdsAndDeterministicOutputAcrossRuns(@TempDir Path tmp) throws IOException {
         Path root = writeProject(tmp);
         assertEquals(
