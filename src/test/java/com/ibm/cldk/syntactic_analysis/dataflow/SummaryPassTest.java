@@ -147,6 +147,66 @@ class SummaryPassTest {
         assertEquals("topCall/actual_out", top.getSummary().get(0).getDst());
     }
 
+    /**
+     * A parameter that reaches the return <em>through a local</em> — {@code int m(int q) { int t = q;
+     * return t; }} — the commonest Java shape after {@code return q;} itself. Nothing in the ddg is
+     * rooted at {@code q}: {@code DdgBuilder} gives a parameter no defining node, so the only edge is
+     * {@code (decl → ret, var "t")}; there is no call site; and the return text names {@code t}, not
+     * {@code q}. The seed therefore has to come from the <em>declaration statement</em>'s own text,
+     * which is what the widened word-boundary rule supplies — the existing {@code decl → ret} edge
+     * then carries it to the sink.
+     *
+     * <p>Asserted through a caller, because that is where the miss actually shows up: with
+     * {@code flows(m)} empty, every caller of {@code m} silently loses its summary edge.
+     */
+    @Test
+    void aParameterCopiedIntoALocalStillReachesTheReturn() {
+        Map<String, JModule> modules = localCopyChain();
+        SdgVertices.apply(modules);
+        SummaryPass.apply(modules, List.of(callEdge("top(int)", "m(int)")), 3);
+
+        JCallable top = callable(modules, "/Pass/top(int)");
+        assertNotNull(top.getSummary(), "q reaches m's return through the local t, so top shortcuts the call");
+        assertEquals(1, top.getSummary().size());
+        assertEquals("topCall/actual_in:0", top.getSummary().get(0).getSrc());
+        assertEquals("topCall/actual_out", top.getSummary().get(0).getDst());
+    }
+
+    private static final String LOCAL_SOURCE = String.join(
+            "\n",
+            "class Pass {",
+            "    int m(int q) { int t = q; return t; }",
+            "    int top(int b) { int u = m(b); return u; }",
+            "}");
+
+    /** {@code m} copies its parameter into a local and returns the local; {@code top} calls it. */
+    private static Map<String, JModule> localCopyChain() {
+        JType type = new JType();
+        type.setId("can://java/pass/Pass.java/Pass");
+
+        JCallable m = method("m(int)", "q");
+        m.getBody().put("@entry", node("entry", null, LOCAL_SOURCE));
+        m.getBody().put("mDecl", node("statement", "int t = q;", LOCAL_SOURCE));
+        m.getBody().put("mRet", node("return", "return t;", LOCAL_SOURCE));
+        // The only edge the ddg has: `q` itself is never a def site, so no edge is rooted at it.
+        m.setDdg(new ArrayList<>(List.of(ddg("mDecl", "mRet", "t"))));
+        type.getCallables().put("m(int)", m);
+
+        JCallable top = method("top(int)", "b");
+        top.getBody().put("@entry", node("entry", null, LOCAL_SOURCE));
+        top.getBody().put("topCall", callNode("m(b)", "m(int)", LOCAL_SOURCE));
+        top.getBody().put("topDecl", node("statement", "int u = m(b);", LOCAL_SOURCE));
+        top.getBody().put("topRet", node("return", "return u;", LOCAL_SOURCE));
+        top.setDdg(new ArrayList<>(List.of(ddg("topDecl", "topRet", "u"))));
+        type.getCallables().put("top(int)", top);
+
+        JModule module = new JModule();
+        module.setId("can://java/pass/Pass.java");
+        module.setSource(LOCAL_SOURCE);
+        module.getTypes().put("Pass", type);
+        return new LinkedHashMap<>(Map.of("Pass.java", module));
+    }
+
     private static final String WRAP_SOURCE = String.join(
             "\n",
             "class Pass {",
@@ -293,6 +353,7 @@ class SummaryPassTest {
     @Test
     void summaryEndpointsAreExistingLocalBodyNodes() throws Exception {
         Map<String, JModule> modules = analyzed();
+        int[] edges = {0};
         modules.values().stream()
                 .flatMap(m -> m.getTypes().values().stream())
                 .flatMap(t -> t.getCallables().values().stream())
@@ -300,6 +361,11 @@ class SummaryPassTest {
                 .forEach(c -> c.getSummary().forEach(e -> {
                     assertTrue(c.getBody().containsKey(e.getSrc()), c.getId() + " src " + e.getSrc());
                     assertTrue(c.getBody().containsKey(e.getDst()), c.getId() + " dst " + e.getDst());
+                    edges[0]++;
                 }));
+        // Without this the endpoint check passes vacuously on a regression that empties every
+        // summary. Four is the fixture's whole set: Chain.a→b, Chain.b→c, Mutual.even→odd,
+        // Mutual.odd→even. Heap's two sites cannot carry one (void callee, no-arg callee).
+        assertEquals(4, edges[0], "every fixture summary edge is checked, and there are four of them");
     }
 }

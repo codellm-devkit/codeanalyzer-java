@@ -36,10 +36,13 @@ import java.util.regex.Pattern;
  * <p>The relation is derived <em>syntactically</em>, in the weak-update (may-flow, never-drop)
  * posture the L4 design takes: a parameter reaches the return if the callable's {@code ddg} carries
  * it there, if a call site passes it on and that callee's own summary returns it, or if the
- * parameter is simply named in a {@code return} expression. That last rule is what makes the pass
- * useful at all on ordinary code — {@code int c(int z) { return z - 3; }} has no local variable, so
- * no def-use, so no {@code ddg} edge to follow — at the cost of counting a parameter merely
- * <em>mentioned</em> in a return as flowing. Over-approximating there is the accepted trade.
+ * parameter is simply <em>named</em> in a body node's source text. That last rule is what makes the
+ * pass useful at all on ordinary code, because {@link DdgBuilder} gives a parameter no defining node
+ * — nothing in the {@code ddg} is ever rooted at one. Without it {@code int c(int z) { return z - 3;
+ * }} has no def-use to follow at all, and {@code int m(int q) { int t = q; return t; }} has only
+ * {@code (decl → ret, var "t")}, which no seed reaches. The cost is counting a parameter merely
+ * <em>mentioned</em> in a statement as flowing out of it. Over-approximating there is the accepted
+ * trade.
  */
 public final class SummaryPass {
 
@@ -147,15 +150,17 @@ public final class SummaryPass {
         }
 
         Map<String, JBodyNode> body = c.getBody();
-        Map<String, String> returnText = new LinkedHashMap<>();
+        Map<String, String> spanText = new LinkedHashMap<>();
         for (Map.Entry<String, JBodyNode> entry : body.entrySet()) {
             JBodyNode node = entry.getValue();
-            if ("return".equals(node.getKind())) {
-                fn.sinks.add(entry.getKey());
+            if (SEEDABLE_KINDS.contains(node.getKind())) {
                 String text = slice(source, node.getSpan());
                 if (text != null) {
-                    returnText.put(entry.getKey(), text);
+                    spanText.put(entry.getKey(), text);
                 }
+            }
+            if ("return".equals(node.getKind())) {
+                fn.sinks.add(entry.getKey());
             } else if ("call".equals(node.getKind())) {
                 // Where a call's value goes next. Deliberately outside the resolved/in-project filter
                 // below: an unresolved or external call is still a node the chain has to pass
@@ -192,7 +197,7 @@ public final class SummaryPass {
 
         List<JParameter> params = c.getParameters();
         for (int i = 0; i < params.size(); i++) {
-            Set<String> seeds = seedsFor(fn, params.get(i).getName(), returnText);
+            Set<String> seeds = seedsFor(fn, params.get(i).getName(), spanText);
             if (!seeds.isEmpty()) {
                 fn.seeds.put(i, seeds);
             }
@@ -201,20 +206,38 @@ public final class SummaryPass {
     }
 
     /**
+     * The body-node kinds whose {@code span} is a single statement or expression, so that matching a
+     * parameter name against the slice says something about <em>that</em> node. Deliberately omits
+     * {@code branch}, {@code loop} and {@code switch}, whose spans swallow every statement nested
+     * inside them: a name mentioned anywhere in a loop body would otherwise seed the loop node and
+     * inherit all of its def-use reach, which buys no soundness (the nested statement carrying the
+     * real flow is seeded on its own) and costs precision in bulk. {@code entry}/{@code exit} and the
+     * synthetic L4 vertices carry no span at all, so {@link #slice} skips them regardless.
+     *
+     * <p>A {@code statement} spanning a local class declaration is a container in source terms but not
+     * in body-node terms — the nested methods are separate callables with their own {@code body} maps
+     * (see {@link #walkTypes}) — so it is a leaf here and is safe to slice.
+     */
+    private static final Set<String> SEEDABLE_KINDS = Set.of("statement", "return", "call");
+
+    /**
      * Where a parameter's value is visible, syntactically: the def end of any {@code ddg} edge whose
      * access path is rooted at it, any call-site {@code actual_in} vertex whose argument text names
-     * it, and any {@code return} statement whose text names it (see the class javadoc — a parameter
-     * flowing straight to the return is the commonest summary shape and leaves no def-use trail).
+     * it, and any {@link #SEEDABLE_KINDS} body node whose source text names it (see the class javadoc
+     * — a parameter has no defining node in the {@code ddg}, so text is the only thing that can put it
+     * on the map at all).
      */
-    private static Set<String> seedsFor(Fn fn, String name, Map<String, String> returnText) {
+    private static Set<String> seedsFor(Fn fn, String name, Map<String, String> spanText) {
         Set<String> seeds = new LinkedHashSet<>();
         if (name == null || name.isEmpty()) {
             return seeds;
         }
         // Spelling, not binding — this is the syntactic seeding the L4 design settles for, and every
         // way it can over-credit is a may-flow direction the weak-update posture accepts. It credits
-        // `name` when it is merely mentioned rather than returned (`return other(x) + 1;`); when it
-        // is a *field* of something else, since `.` is not a word character (`return a.z;` credits
+        // `name` when it is merely mentioned rather than used (`return other(x) + 1;`, `log(x);`);
+        // when the mention is a *shadowing* local or catch parameter of the same spelling, since this
+        // reads text and not scopes (`{ int x = 0; sink(x); }` in a method taking `x`); when it is a
+        // *field* of something else, since `.` is not a word character (`return a.z;` credits
         // parameter `z`); when it appears inside a string literal (`return "x marks";` credits `x`);
         // and when it sits next to `$`, which Java allows in identifiers but regex `\b` does not
         // treat as a word character (`a$b` credits `a`). None of these can lose a real flow.
@@ -238,9 +261,9 @@ public final class SummaryPass {
                 }
             }
         }
-        for (Map.Entry<String, String> ret : returnText.entrySet()) {
-            if (word.matcher(ret.getValue()).find()) {
-                seeds.add(ret.getKey());
+        for (Map.Entry<String, String> node : spanText.entrySet()) {
+            if (word.matcher(node.getValue()).find()) {
+                seeds.add(node.getKey());
             }
         }
         return seeds;
