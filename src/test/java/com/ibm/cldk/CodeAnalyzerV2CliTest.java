@@ -118,15 +118,60 @@ class CodeAnalyzerV2CliTest {
     }
 
     @Test
-    void v2SchemaIsNotTheDefault(@TempDir Path tmp) throws IOException {
-        // The legacy shape stays the default until the rest of the migration lands, so existing
-        // consumers are unaffected by this change.
+    void v2SchemaIsTheDefault(@TempDir Path tmp) throws IOException {
+        // 3.0.0: the canonical shape is the default; --schema v1 opts into the legacy shape.
         Path in = project(tmp.resolve("app"));
         Path out = tmp.resolve("out");
         assertEquals(0, run("-i", in.toString(), "-o", out.toString()));
         JsonObject root = JsonParser.parseString(Files.readString(out.resolve("analysis.json"))).getAsJsonObject();
-        assertFalse(root.has("schema_version"), "default output is still the v1 shape");
+        assertEquals("2.0.0", root.get("schema_version").getAsString(), "default output is the v2 envelope");
+    }
+
+    @Test
+    void schemaV1StillEmitsTheLegacyShape(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "--schema", "v1"));
+        JsonObject root = JsonParser.parseString(Files.readString(out.resolve("analysis.json"))).getAsJsonObject();
+        assertFalse(root.has("schema_version"), "--schema v1 keeps the legacy shape");
         assertTrue(root.has("symbol_table"), "v1 keeps symbol_table at the top level");
+    }
+
+    @Test
+    void emitNeo4jWritesTheV2GraphAtFullDepth(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "--emit", "neo4j", "--no-build",
+                "--app-name", "widgets"));
+        Path cypher = out.resolve("graph.cypher");
+        assertTrue(Files.exists(cypher), "graph.cypher must be written");
+        String script = Files.readString(cypher);
+        assertTrue(script.contains(":JModule"), "v2 graph projects :JModule rows");
+        assertTrue(script.contains(":JBodyNode"), "full depth: the L3 body must be projected");
+        assertTrue(script.contains("J_CFG_NEXT"), "full depth: cfg overlay edges must be present");
+        assertFalse(script.contains(":JCompilationUnit {"), "v1 node rows must not appear in a v2 graph");
+    }
+
+    @Test
+    void emitNeo4jRejectsAnalysisLevelAndFieldDepth(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        assertNotEquals(0, run("-i", in.toString(), "--emit", "neo4j", "-a", "2"),
+                "the graph is always full depth; -a with --emit neo4j must error");
+        assertNotEquals(0, run("-i", in.toString(), "--emit", "neo4j", "--graph-field-depth", "2"),
+                "--graph-field-depth with --emit neo4j must error");
+    }
+
+    @Test
+    void emitSchemaAlwaysEmitsTheV2Catalog(@TempDir Path tmp) throws IOException {
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("--emit", "schema", "-o", out.toString()));
+        JsonObject doc = JsonParser.parseString(Files.readString(out.resolve("schema.neo4j.json")))
+                .getAsJsonObject();
+        assertEquals("2.0.0", doc.get("schema_version").getAsString());
+        assertEquals(0, run("--emit", "schema", "-o", out.toString(), "--schema", "v1"),
+                "--emit schema ignores --schema");
+        assertEquals("2.0.0", JsonParser.parseString(Files.readString(out.resolve("schema.neo4j.json")))
+                .getAsJsonObject().get("schema_version").getAsString());
     }
 
     @Test
@@ -400,10 +445,4 @@ class CodeAnalyzerV2CliTest {
                 "--external-calls homes out-of-project targets (e.g. java.lang.Math)");
     }
 
-    @Test
-    void v2WithNeo4jEmitFailsLoudly(@TempDir Path tmp) throws IOException {
-        Path in = project(tmp.resolve("app"));
-        assertNotEquals(0, run("-i", in.toString(), "--schema", "v2", "--emit", "neo4j"),
-                "the graph projection is still v1");
-    }
 }

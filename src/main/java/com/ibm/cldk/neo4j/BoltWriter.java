@@ -101,10 +101,12 @@ public final class BoltWriter implements BoltSink {
                 }
             }
 
-            // 2. diff content_hash.
+            // 2. diff content_hash. Both generations key their per-file node on file_key: v1
+            // :JCompilationUnit and v2 :JModule.
             Map<String, String> dbHash = new HashMap<>();
             try (Session s = session()) {
-                s.run("MATCH (c:JCompilationUnit) RETURN c.file_key AS k, c.content_hash AS h").list()
+                s.run("MATCH (c) WHERE c:JCompilationUnit OR c:JModule "
+                                + "RETURN c.file_key AS k, c.content_hash AS h").list()
                         .forEach(rec -> dbHash.put(rec.get("k").asString(null), rec.get("h").asString(null)));
             }
             Set<String> changed = new HashSet<>();
@@ -149,14 +151,18 @@ public final class BoltWriter implements BoltSink {
             }
             upsertEdges(edges);
 
-            // 6. orphan prune — only safe on a full run.
+            // 6. orphan prune — only safe on a full run. Reaches both generations' per-file nodes
+            // through the shared application anchor, so a v2 push also prunes a prior v1 graph's
+            // units (and other applications in the database are never touched).
             if (fullRun) {
                 List<String> present = new ArrayList<>(byUnit.keySet());
+                String app = appNameOf(rows);
                 try (Session s = session()) {
-                    long pruned = s.run("MATCH (c:JCompilationUnit) WHERE NOT c.file_key IN $present "
+                    long pruned = s.run("MATCH (:JApplication {name: $app})-[:J_HAS_UNIT|J_HAS_MODULE]->(c) "
+                                    + "WHERE NOT c.file_key IN $present "
                                     + "OPTIONAL MATCH (c)-" + CypherWriter.DESCENDANTS + "->(x) "
                                     + "DETACH DELETE x, c RETURN count(c) AS pruned",
-                            Values.parameters("present", present)).single().get("pruned").asLong(0);
+                            Values.parameters("present", present, "app", app)).single().get("pruned").asLong(0);
                     Log.info("neo4j(bolt): pruned " + pruned + " vanished unit(s)");
                 }
             } else {
@@ -193,21 +199,26 @@ public final class BoltWriter implements BoltSink {
         private void upsertEdges(List<EdgeRow> edges) {
             Map<String, List<EdgeRow>> groups = new LinkedHashMap<>();
             for (EdgeRow e : edges) {
-                String k = e.type + "|" + e.from.label + "." + e.from.keyProp + "|" + e.to.label + "." + e.to.keyProp;
+                String k = e.type + "|" + e.from.label + "." + e.from.keyProp + "|" + e.to.label + "." + e.to.keyProp
+                        + "|" + (e.key != null);
                 groups.computeIfAbsent(k, x -> new ArrayList<>()).add(e);
             }
             for (List<EdgeRow> group : groups.values()) {
                 EdgeRow head = group.get(0);
+                boolean keyed = head.key != null;
                 String cypher = "UNWIND $rows AS row "
                         + "MATCH (a:" + head.from.label + " {" + head.from.keyProp + ": row.f}) "
                         + "MATCH (b:" + head.to.label + " {" + head.to.keyProp + ": row.t}) "
-                        + "MERGE (a)-[r:" + head.type + "]->(b) SET r += row.p";
+                        + "MERGE (a)-[r:" + head.type + (keyed ? " {_k: row.k}" : "") + "]->(b) SET r += row.p";
                 for (List<EdgeRow> batch : CypherWriter.chunk(group, BATCH)) {
                     List<Map<String, Object>> payload = new ArrayList<>();
                     for (EdgeRow e : batch) {
                         Map<String, Object> r = new HashMap<>();
                         r.put("f", e.from.value);
                         r.put("t", e.to.value);
+                        if (keyed) {
+                            r.put("k", e.key);
+                        }
                         r.put("p", e.props);
                         payload.add(r);
                     }
@@ -220,12 +231,25 @@ public final class BoltWriter implements BoltSink {
 
         private static String hashOf(List<NodeRow> nodes, String fileKey) {
             for (NodeRow n : nodes) {
-                if (n.labels.get(0).equals("JCompilationUnit") && n.value.equals(fileKey)) {
+                String label = n.labels.get(0);
+                boolean fileNode = label.equals("JCompilationUnit")
+                        || (label.equals("JModule") && fileKey.equals(n.props.get("file_key")));
+                if (fileNode && (n.value.equals(fileKey) || fileKey.equals(n.props.get("file_key")))) {
                     Object h = n.props.get("content_hash");
                     return h instanceof String ? (String) h : null;
                 }
             }
             return null;
+        }
+
+        /** The application anchor's name — the one {@code :JApplication} row every projection emits. */
+        private static String appNameOf(GraphRows rows) {
+            for (NodeRow n : rows.nodes) {
+                if (n.labels.get(0).equals("JApplication")) {
+                    return n.value;
+                }
+            }
+            return "application";
         }
     }
 }

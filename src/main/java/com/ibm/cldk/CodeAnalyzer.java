@@ -128,11 +128,10 @@ public class CodeAnalyzer implements Runnable {
     private static String neo4jDatabase;
 
     @Option(names = {
-            "--schema" }, description = "Output schema: v1 (legacy, default) | v2 (canonical CPG). "
-                    + "v2 currently covers analysis levels 1 and 2.")
+            "--schema" }, description = "Output schema: v2 (canonical CPG, default) | v1 (legacy).")
     // Deliberately an INSTANCE field: the pre-existing options on this class are static, which leaks
     // values between CommandLine instances in the same JVM. New flags do not add to that.
-    private String schema = "v1";
+    private String schema = "v2";
 
     @Option(names = {"-c",
             "--cache-dir" }, description = "Directory holding the incremental analysis cache. When set, "
@@ -315,15 +314,8 @@ public class CodeAnalyzer implements Runnable {
             JsonArray callGraph = combinedJsonObject.has("call_graph")
                     ? combinedJsonObject.getAsJsonArray("call_graph")
                     : null;
-            // Connection options resolve with precedence: CLI flag > NEO4J_* env var > default.
-            String uri = firstNonEmpty(neo4jUri, System.getenv("NEO4J_URI"));
-            BoltConfig bolt = uri == null
-                    ? null
-                    : new BoltConfig(uri,
-                            firstNonEmpty(neo4jUser, System.getenv("NEO4J_USERNAME"), "neo4j"),
-                            firstNonEmpty(neo4jPassword, System.getenv("NEO4J_PASSWORD"), "neo4j"),
-                            firstNonEmpty(neo4jDatabase, System.getenv("NEO4J_DATABASE")));
-            Neo4jEmitter.emit(symbolTable, callGraph, appName, input, output, targetFiles != null, bolt);
+            Neo4jEmitter.emit(symbolTable, callGraph, appName, input, output, targetFiles != null,
+                    boltConfig());
             return;
         }
 
@@ -377,8 +369,20 @@ public class CodeAnalyzer implements Runnable {
                     "error: unknown --l3-engine '" + l3Engine + "'; use ast or wala");
         }
         if ("neo4j".equalsIgnoreCase(emit)) {
-            throw new ParameterException(spec.commandLine(),
-                    "error: --schema v2 does not support --emit neo4j yet; the graph projection is still v1");
+            // The graph is always full-depth (keystone depth rule): depth/section selectors cannot
+            // be combined with it — error loudly rather than silently project a partial graph.
+            if (spec.commandLine().getParseResult().hasMatchedOption("--analysis-level")) {
+                throw new ParameterException(spec.commandLine(),
+                        "error: --analysis-level does not apply to --emit neo4j; "
+                                + "the graph is always projected at full depth");
+            }
+            if (spec.commandLine().getParseResult().hasMatchedOption("--graph-field-depth")) {
+                throw new ParameterException(spec.commandLine(),
+                        "error: --graph-field-depth does not apply to --emit neo4j; "
+                                + "the graph is always projected at full depth");
+            }
+            analysisLevel = 3;
+            externalCalls = true;
         }
         if (sourceAnalysis != null || targetFiles != null) {
             throw new ParameterException(spec.commandLine(),
@@ -473,6 +477,11 @@ public class CodeAnalyzer implements Runnable {
             analysis = V2Emitter.emit(application, analysisLevel, modules, version);
         }
 
+        if ("neo4j".equalsIgnoreCase(emit)) {
+            Neo4jEmitter.emitV2(analysis, appName, input, output, boltConfig());
+            return;
+        }
+
         if (output == null) {
             // stdout is the data channel: compact JSON only, so the SDK can parse it directly.
             System.out.println(V2Json.compact().toJson(analysis));
@@ -485,6 +494,17 @@ public class CodeAnalyzer implements Runnable {
                 writer.write(V2Json.pretty().toJson(analysis));
             }
         }
+    }
+
+    /** Bolt connection resolution, precedence: CLI flag > NEO4J_* env var > default. Null ⇒ snapshot. */
+    private static BoltConfig boltConfig() {
+        String uri = firstNonEmpty(neo4jUri, System.getenv("NEO4J_URI"));
+        return uri == null
+                ? null
+                : new BoltConfig(uri,
+                        firstNonEmpty(neo4jUser, System.getenv("NEO4J_USERNAME"), "neo4j"),
+                        firstNonEmpty(neo4jPassword, System.getenv("NEO4J_PASSWORD"), "neo4j"),
+                        firstNonEmpty(neo4jDatabase, System.getenv("NEO4J_DATABASE")));
     }
 
     private static String analyzerVersion() {
