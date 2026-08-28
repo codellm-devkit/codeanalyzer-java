@@ -125,6 +125,70 @@ class SummaryPassTest {
         assertEquals(1, mid.getSummary().size());
     }
 
+    /**
+     * The same composition, but with the in-project call wrapped in an unresolved one —
+     * {@code int t = Math.abs(id(a)); return t;}. The wrapper is a body node too, and its span is
+     * narrower than the statement's, so it is what encloses the inner call; it is external, has no
+     * summary, and is an orphan carrying no ddg edge. If the route out of a call node were built only
+     * for resolved in-project sites, the chain would stop dead on the wrapper and {@code top} would
+     * lose a summary edge it should have — an under-approximation. Node ids, spans and the
+     * {@code callee}-less wrapper mirror what {@code -a 4} really emits for this source.
+     */
+    @Test
+    void anUnresolvedWrapperDoesNotBreakComposition() {
+        Map<String, JModule> modules = wrappedChain();
+        SdgVertices.apply(modules);
+        SummaryPass.apply(modules, List.of(callEdge("top(int)", "caller(int)"), callEdge("caller(int)", "id(int)")), 3);
+
+        JCallable top = callable(modules, "/Pass/top(int)");
+        assertNotNull(top.getSummary(), "top still composes through caller, wrapper notwithstanding");
+        assertEquals(1, top.getSummary().size());
+        assertEquals("topCall/actual_in:0", top.getSummary().get(0).getSrc());
+        assertEquals("topCall/actual_out", top.getSummary().get(0).getDst());
+    }
+
+    private static final String WRAP_SOURCE = String.join(
+            "\n",
+            "class Pass {",
+            "    int id(int p) { return p; }",
+            "    int caller(int a) { int t = Math.abs(id(a)); return t; }",
+            "    int top(int b) { int u = caller(b); return u; }",
+            "}");
+
+    private static Map<String, JModule> wrappedChain() {
+        JType type = new JType();
+        type.setId("can://java/pass/Pass.java/Pass");
+
+        JCallable id = method("id(int)", "p");
+        id.getBody().put("@entry", node("entry", null, WRAP_SOURCE));
+        id.getBody().put("idRet", node("return", "return p;", WRAP_SOURCE));
+        id.setDdg(new ArrayList<>());
+        type.getCallables().put("id(int)", id);
+
+        JCallable caller = method("caller(int)", "a");
+        caller.getBody().put("@entry", node("entry", null, WRAP_SOURCE));
+        caller.getBody().put("wrapCall", node("call", "Math.abs(id(a))", WRAP_SOURCE)); // no callee: unresolved
+        caller.getBody().put("idCall", callNode("id(a)", "id(int)", WRAP_SOURCE));
+        caller.getBody().put("callerDecl", node("statement", "int t = Math.abs(id(a));", WRAP_SOURCE));
+        caller.getBody().put("callerRet", node("return", "return t;", WRAP_SOURCE));
+        caller.setDdg(new ArrayList<>(List.of(ddg("callerDecl", "callerRet", "t"))));
+        type.getCallables().put("caller(int)", caller);
+
+        JCallable top = method("top(int)", "b");
+        top.getBody().put("@entry", node("entry", null, WRAP_SOURCE));
+        top.getBody().put("topCall", callNode("caller(b)", "caller(int)", WRAP_SOURCE));
+        top.getBody().put("topDecl", node("statement", "int u = caller(b);", WRAP_SOURCE));
+        top.getBody().put("topRet", node("return", "return u;", WRAP_SOURCE));
+        top.setDdg(new ArrayList<>(List.of(ddg("topDecl", "topRet", "u"))));
+        type.getCallables().put("top(int)", top);
+
+        JModule module = new JModule();
+        module.setId("can://java/pass/Pass.java");
+        module.setSource(WRAP_SOURCE);
+        module.getTypes().put("Pass", type);
+        return new LinkedHashMap<>(Map.of("Pass.java", module));
+    }
+
     // Line 2 holds callee, 3 mid, 4 top; every snippet below is unique, and the text is ASCII so a
     // char offset is a byte offset.
     private static final String PASS_SOURCE = String.join(
@@ -141,26 +205,26 @@ class SummaryPassTest {
         type.setId("can://java/pass/Pass.java/Pass");
 
         JCallable callee = method("callee(int)", "q");
-        callee.getBody().put("@entry", node("entry", null));
-        callee.getBody().put("calleeRet", node("return", "return q;"));
+        callee.getBody().put("@entry", node("entry", null, PASS_SOURCE));
+        callee.getBody().put("calleeRet", node("return", "return q;", PASS_SOURCE));
         callee.setDdg(new ArrayList<>());
         type.getCallables().put("callee(int)", callee);
 
         JCallable mid = method("mid(int)", "x");
-        mid.getBody().put("@entry", node("entry", null));
-        mid.getBody().put("midCall", callNode("callee(x)", "callee(int)"));
-        mid.getBody().put("midDecl", node("statement", "int t = callee(x);"));
-        mid.getBody().put("midRet", node("return", "return t;"));
+        mid.getBody().put("@entry", node("entry", null, PASS_SOURCE));
+        mid.getBody().put("midCall", callNode("callee(x)", "callee(int)", PASS_SOURCE));
+        mid.getBody().put("midDecl", node("statement", "int t = callee(x);", PASS_SOURCE));
+        mid.getBody().put("midRet", node("return", "return t;", PASS_SOURCE));
         // The def-use edge leaves the *statement*, never the nested call node — that asymmetry is
         // the whole point of the case.
         mid.setDdg(new ArrayList<>(List.of(ddg("midDecl", "midRet", "t"))));
         type.getCallables().put("mid(int)", mid);
 
         JCallable top = method("top(int)", "w");
-        top.getBody().put("@entry", node("entry", null));
-        top.getBody().put("topCall", callNode("mid(w)", "mid(int)"));
-        top.getBody().put("topDecl", node("statement", "int s = mid(w);"));
-        top.getBody().put("topRet", node("return", "return s;"));
+        top.getBody().put("@entry", node("entry", null, PASS_SOURCE));
+        top.getBody().put("topCall", callNode("mid(w)", "mid(int)", PASS_SOURCE));
+        top.getBody().put("topDecl", node("statement", "int s = mid(w);", PASS_SOURCE));
+        top.getBody().put("topRet", node("return", "return s;", PASS_SOURCE));
         top.setDdg(new ArrayList<>(List.of(ddg("topDecl", "topRet", "s"))));
         type.getCallables().put("top(int)", top);
 
@@ -193,20 +257,20 @@ class SummaryPassTest {
         return c;
     }
 
-    private static JBodyNode node(String kind, String snippet) {
+    private static JBodyNode node(String kind, String snippet, String source) {
         JBodyNode n = new JBodyNode();
         n.setKind(kind);
         if (snippet != null) {
             Span span = new Span();
-            int at = PASS_SOURCE.indexOf(snippet);
+            int at = source.indexOf(snippet);
             span.setBytes(new int[] {at, at + snippet.length()});
             n.setSpan(span);
         }
         return n;
     }
 
-    private static JBodyNode callNode(String snippet, String calleeSignature) {
-        JBodyNode n = node("call", snippet);
+    private static JBodyNode callNode(String snippet, String calleeSignature, String source) {
+        JBodyNode n = node("call", snippet, source);
         n.setCallee("can://java/pass/Pass.java/Pass/" + calleeSignature);
         n.setReturnType("int");
         n.setArgumentExpr(new ArrayList<>(List.of(snippet.substring(snippet.indexOf('(') + 1, snippet.length() - 1))));

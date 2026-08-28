@@ -75,15 +75,12 @@ public final class SummaryPass {
         private final String callee;
         private final List<String> args;
         private final boolean hasActualOut;
-        /** The body node whose span encloses this call, or null when the call is itself one. */
-        private final String enclosing;
 
-        Site(String local, String callee, List<String> args, boolean hasActualOut, String enclosing) {
+        Site(String local, String callee, List<String> args, boolean hasActualOut) {
             this.local = local;
             this.callee = callee;
             this.args = args;
             this.hasActualOut = hasActualOut;
-            this.enclosing = enclosing;
         }
 
         String actualIn(int j) {
@@ -159,32 +156,38 @@ public final class SummaryPass {
                 if (text != null) {
                     returnText.put(entry.getKey(), text);
                 }
-            } else if ("call".equals(node.getKind())
-                    && node.getCallee() != null
-                    && !node.getCallee().contains("/@external/")) {
-                fn.sites.add(new Site(
-                        entry.getKey(),
-                        node.getCallee(),
-                        node.getArgumentExpr(),
-                        body.containsKey(entry.getKey() + "/actual_out"),
-                        enclosing(entry.getKey(), body)));
+            } else if ("call".equals(node.getKind())) {
+                // Where a call's value goes next. Deliberately outside the resolved/in-project filter
+                // below: an unresolved or external call is still a node the chain has to pass
+                // *through*. `int t = Math.abs(id(a));` encloses the `id(a)` site in the `Math.abs`
+                // node, which is an orphan (not a CFG node, so no ddg edge leaves it) and has no
+                // summary of its own — filtering it out here would strand the hop and silently drop
+                // the caller's summary edge, an under-approximation the L4 posture does not allow.
+                String outer = enclosing(entry.getKey(), body);
+                if (outer != null) {
+                    fn.graph.computeIfAbsent(entry.getKey(), k -> new ArrayList<>()).add(outer);
+                }
+                if (node.getCallee() != null && !node.getCallee().contains("/@external/")) {
+                    fn.sites.add(new Site(
+                            entry.getKey(),
+                            node.getCallee(),
+                            node.getArgumentExpr(),
+                            body.containsKey(entry.getKey() + "/actual_out")));
+                }
             }
         }
         if (body.containsKey("@formal_out")) {
             fn.sinks.add("@formal_out");
         }
 
-        // What a call's returned value does next, without which the callee bridges below would be
-        // dead ends and summaries could never compose. Two hops, because the `ddg` does not hang off
-        // a call node that sits inside a larger expression: `DdgBuilder` analyses CFG nodes, and a
-        // nested call is not one (`int t = f(x);` puts the def-use edge on the *statement*, and the
-        // call node is an orphan body entry). So the value flows actual_out → the call node → the
-        // node enclosing it, which is the CFG node the ddg edges actually leave from.
+        // The other half of that route: a resolved call's returned value reaches the call node. Only
+        // resolved sites have an actual_out vertex to leave from, so unlike the hop above this one
+        // does belong inside the filter. Together they give actual_out → call node → enclosing node,
+        // which is the CFG node the ddg edges actually leave from — the `ddg` does not hang off a
+        // call that sits inside a larger expression, since `DdgBuilder` analyses CFG nodes and such a
+        // call is not one (`int t = f(x);` puts the def-use edge on the *statement*).
         for (Site site : fn.sites) {
             fn.graph.computeIfAbsent(site.actualOut(), k -> new ArrayList<>()).add(site.local);
-            if (site.enclosing != null) {
-                fn.graph.computeIfAbsent(site.local, k -> new ArrayList<>()).add(site.enclosing);
-            }
         }
 
         List<JParameter> params = c.getParameters();
@@ -208,6 +211,13 @@ public final class SummaryPass {
         if (name == null || name.isEmpty()) {
             return seeds;
         }
+        // Spelling, not binding — this is the syntactic seeding the L4 design settles for, and every
+        // way it can over-credit is a may-flow direction the weak-update posture accepts. It credits
+        // `name` when it is merely mentioned rather than returned (`return other(x) + 1;`); when it
+        // is a *field* of something else, since `.` is not a word character (`return a.z;` credits
+        // parameter `z`); when it appears inside a string literal (`return "x marks";` credits `x`);
+        // and when it sits next to `$`, which Java allows in identifiers but regex `\b` does not
+        // treat as a word character (`a$b` credits `a`). None of these can lose a real flow.
         Pattern word = Pattern.compile("\\b" + Pattern.quote(name) + "\\b");
 
         List<JDdgEdge> ddg = fn.callable.getDdg();
@@ -237,10 +247,15 @@ public final class SummaryPass {
     }
 
     /**
-     * The smallest body node whose span strictly encloses {@code local}'s — the statement (or branch,
-     * or outer call) a nested call sits inside. Null when nothing encloses it, which is the case for
-     * a call in statement position: there the call node <em>is</em> the CFG node, so no hop is needed.
-     * Ties break on the node id so the choice cannot depend on map order.
+     * The smallest body node whose span strictly encloses {@code local}'s — the statement, outer
+     * call, or enclosing {@code branch}/{@code loop}/{@code switch} a nested call sits inside. Null
+     * only when <em>nothing</em> encloses it: a call in statement position at the top level of the
+     * body, where the call node is itself the CFG node and needs no hop. A call in statement position
+     * <em>inside</em> an {@code if}/{@code for}/{@code while} body does get a hop, to that branch or
+     * loop node, whose span covers the whole statement — reach then continues along its ddg
+     * out-edges, which over-approximates (the condition's dependences are not the call's) in the
+     * may-flow direction the L4 posture accepts. Ties break on the node id so the choice cannot
+     * depend on map order.
      */
     private static String enclosing(String local, Map<String, JBodyNode> body) {
         int[] inner = bytes(body.get(local));
