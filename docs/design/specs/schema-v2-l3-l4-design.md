@@ -152,6 +152,20 @@ Global/static state modeled as **extra** formal/actual vertices (rides the same 
 
 **Cost controls:** flag-gated (nothing at L4 runs unless `-a 4`); k-limiting mandatory for termination; summaries content-hashed/cached with recorded dependency metadata (incremental re-analysis aspirational); parallel-by-construction wavefront over the SCC DAG, `-j N` byte-identical to `-j 1`.
 
+### 9a. Implementation delta
+
+What the L4 branch actually shipped, against the sketch above. Output conforms; the construction does not, and two vertex families were deferred.
+
+**Deferred (not built):**
+- **Global/static state as extra formal/actual vertices.** No such vertices are emitted. Static-field *flow* is not lost: `L4WalaOverlays` maps a `StaticFieldKey` heap location to the field name, so static-mediated dependence still rides the `prov:["points-to"]` ddg — it is just not addressable as a vertex a consumer can enumerate.
+- **`formal_out` for by-ref parameters.** `SdgVertices` emits exactly one `@formal_out` per callable, for `$ret`, and only when the callable returns a value. Java has no by-ref parameters; mutation-through-a-reference-argument therefore has no dedicated vertex and shows up (if at all) as points-to ddg.
+
+**Built differently (engine deviations):**
+- **`param_in`/`param_out` are derived, not sliced.** They come straight from the v2 tree — body `call` nodes with L2-backfilled `callee`, wired to the callee's parameter list — rather than from a WALA `SDG<InstanceKey>` pruned with `GraphSlicer.prune`. The edges are structurally determined by the call graph alone, so the derived result is identical and byte-deterministic, and it avoids re-opening the whole-program ModRef closure that OOMs at 4 GB over a JDK-inclusive call graph (`WalaAnalysis.emptyDefaultingMap`). Recorded in `docs/design/plans/2026-08-27-l4-sdg.md`.
+- **Semantic ddg comes from per-method PDGs, not a whole-program SDG.** `L4WalaOverlays` primes mod/ref restricted to application-scope CG nodes (the bounded answer to that same OOM), re-runs `WalaPdgBuilder` per application method, and projects caller-side `HeapStatement`s onto their call's own `NormalStatement` so the interprocedural round trip lands on real body nodes. Consequence: library-mediated heap flow is conservatively absent.
+
+**No `SDG` object is ever constructed** — a reader looking for one will not find it.
+
 ---
 
 ## 10. CLI contract

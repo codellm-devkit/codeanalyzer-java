@@ -12,6 +12,7 @@ import com.google.gson.JsonParser;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Assumptions;
@@ -57,14 +58,44 @@ class L4GateTest {
         }
 
         // Chain.a calls b(1 arg): exactly one actual_in:0 → b@formal_in:0 edge exists.
-        boolean found = false;
+        int found = 0;
         for (var e : app.getAsJsonArray("param_in")) {
             String dst = e.getAsJsonObject().get("dst").getAsString();
             if (dst.endsWith("/Chain/b(int)@formal_in:0")) {
-                found = true;
+                found++;
             }
         }
-        assertTrue(found, "a→b param_in edge present");
+        assertEquals(1, found, "exactly one a→b param_in edge");
+    }
+
+    /**
+     * §14's "arity matches" as an actual count. Hand-derived from the three fixture files and
+     * confirmed against this run:
+     *
+     * <ul>
+     *   <li>{@code param_in} = 5 — one per argument at each of the five in-project call sites with
+     *       arguments: {@code a→b}, {@code b→c}, {@code even→odd}, {@code odd→even},
+     *       {@code roundTrip→put}. {@code roundTrip→get()} passes none, so it contributes none.
+     *   <li>{@code param_out} = 5 — one per site whose callee returns a value: the same four
+     *       {@code Chain}/{@code Mutual} sites plus {@code roundTrip→get()}; {@code put} is
+     *       {@code void}, so that site has no {@code actual_out} to reach.
+     *   <li>{@code summary} = 4 — {@code Chain.a}, {@code Chain.b}, {@code Mutual.even},
+     *       {@code Mutual.odd}, one shortcut each. {@code Heap.roundTrip}'s two sites are a void
+     *       callee and a no-arg callee, so neither can carry one.
+     * </ul>
+     */
+    @Test
+    void overlayCountsAreExactlyWhatTheFixtureImplies() {
+        JsonObject app = root.getAsJsonObject("application");
+        assertEquals(5, app.getAsJsonArray("param_in").size(), "param_in: one per argument at a resolved site");
+        assertEquals(5, app.getAsJsonArray("param_out").size(), "param_out: one per value-returning site");
+
+        int summaries = 0;
+        for (JsonObject c : callablesById(root).values()) {
+            JsonArray summary = c.getAsJsonArray("summary");
+            summaries += summary == null ? 0 : summary.size();
+        }
+        assertEquals(4, summaries, "summary: one shortcut per pass-through call site");
     }
 
     @Test
@@ -100,19 +131,38 @@ class L4GateTest {
                 "-a", "3", "-o", tmp.toString());
         assertEquals(0, exit);
         JsonObject l3 = JsonParser.parseString(Files.readString(tmp.resolve("analysis.json"))).getAsJsonObject();
-        JsonObject l3Chain = callable(l3, "Chain", "a(int)");
-        JsonObject l4Chain = callable(root, "Chain", "a(int)");
-        for (var e : l3Chain.getAsJsonArray("cfg")) {
-            assertTrue(l4Chain.getAsJsonArray("cfg").contains(e), "L3 cfg ⊆ L4 cfg");
+
+        // Every callable, not a sample of one: L4 only ever adds, so the whole L3 payload has to
+        // survive it — body nodes, cfg and ddg alike.
+        Map<String, JsonObject> l3Callables = callablesById(l3);
+        Map<String, JsonObject> l4Callables = callablesById(root);
+        assertFalse(l3Callables.isEmpty(), "the -a 3 run produced callables to compare against");
+        for (Map.Entry<String, JsonObject> entry : l3Callables.entrySet()) {
+            String id = entry.getKey();
+            JsonObject before = entry.getValue();
+            JsonObject after = l4Callables.get(id);
+            assertNotNull(after, "L3 callable survives into L4: " + id);
+            for (String overlay : new String[] {"cfg", "cdg", "ddg"}) {
+                JsonArray l3Edges = before.getAsJsonArray(overlay);
+                if (l3Edges == null) {
+                    continue; // no fact at L3 is nothing to preserve
+                }
+                JsonArray l4Edges = after.getAsJsonArray(overlay);
+                assertNotNull(l4Edges, id + " loses its " + overlay + " at L4");
+                for (var e : l3Edges) {
+                    assertTrue(l4Edges.contains(e), "L3 " + overlay + " ⊆ L4 " + overlay + " in " + id + ": " + e);
+                }
+            }
+            JsonObject l3Body = before.getAsJsonObject("body");
+            if (l3Body == null) {
+                continue;
+            }
+            for (String key : l3Body.keySet()) {
+                assertTrue(after.getAsJsonObject("body").has(key), "L3 body node survives: " + id + " " + key);
+            }
+            assertFalse(l3Body.keySet().stream().anyMatch(k -> k.contains("formal") || k.contains("actual")),
+                    "no L4 vertices leak into -a 3: " + id);
         }
-        for (var e : l3Chain.getAsJsonArray("ddg")) {
-            assertTrue(l4Chain.getAsJsonArray("ddg").contains(e), "L3 ddg ⊆ L4 ddg");
-        }
-        for (String key : l3Chain.getAsJsonObject("body").keySet()) {
-            assertTrue(l4Chain.getAsJsonObject("body").has(key), "L3 body nodes survive: " + key);
-        }
-        assertFalse(l3Chain.getAsJsonObject("body").keySet().stream().anyMatch(k -> k.contains("formal")),
-                "no L4 vertices leak into -a 3");
     }
 
     // ----- helpers ------------------------------------------------------------------------------
@@ -128,6 +178,35 @@ class L4GateTest {
             }
         }
         throw new AssertionError("no type found with suffix /" + typeSuffix);
+    }
+
+    /** Every callable in a document, keyed by its {@code id} (nested and callable-local types included). */
+    private static Map<String, JsonObject> callablesById(JsonObject doc) {
+        Map<String, JsonObject> byId = new LinkedHashMap<>();
+        JsonObject symbolTable = doc.getAsJsonObject("application").getAsJsonObject("symbol_table");
+        for (Map.Entry<String, JsonElement> fileEntry : symbolTable.entrySet()) {
+            collectCallables(fileEntry.getValue().getAsJsonObject().getAsJsonObject("types"), byId);
+        }
+        return byId;
+    }
+
+    private static void collectCallables(JsonObject types, Map<String, JsonObject> byId) {
+        if (types == null) {
+            return;
+        }
+        for (Map.Entry<String, JsonElement> typeEntry : types.entrySet()) {
+            JsonObject type = typeEntry.getValue().getAsJsonObject();
+            collectCallables(type.getAsJsonObject("types"), byId);
+            JsonObject callables = type.getAsJsonObject("callables");
+            if (callables == null) {
+                continue;
+            }
+            for (Map.Entry<String, JsonElement> callableEntry : callables.entrySet()) {
+                JsonObject callable = callableEntry.getValue().getAsJsonObject();
+                byId.put(callable.get("id").getAsString(), callable);
+                collectCallables(callable.getAsJsonObject("types"), byId);
+            }
+        }
     }
 
     /** Depth-first search of a {@code types} map (and its nested {@code types}) for an id match. */

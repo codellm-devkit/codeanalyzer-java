@@ -187,12 +187,15 @@ public class V2Neo4jSchemaConformanceTest {
     @Test
     void l4OverlayProjectsParamAndSummaryEdges() {
         boolean paramIn = false;
+        boolean paramOut = false;
         boolean summary = false;
         for (EdgeRow edge : rows.edges) {
             paramIn |= edge.type.equals("J_PARAM_IN");
+            paramOut |= edge.type.equals("J_PARAM_OUT");
             summary |= edge.type.equals("J_SUMMARY");
         }
         assertTrue(paramIn, "J_PARAM_IN projected from application param_in");
+        assertTrue(paramOut, "J_PARAM_OUT projected from application param_out");
         assertTrue(summary, "J_SUMMARY projected from callable summaries");
     }
 }
