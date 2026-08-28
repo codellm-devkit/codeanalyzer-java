@@ -361,28 +361,19 @@ public class CodeAnalyzer implements Runnable {
     }
 
     /**
-     * Emit the canonical schema v2 payload. Levels 1 (containment tree) and 2 (the {@code call_graph}
-     * overlay) are supported, whole-project, JSON. Anything else is an explicit error rather than a
-     * silently different result.
+     * Emit the canonical schema v2 payload. Levels 1 (containment tree), 2 (the {@code call_graph}
+     * overlay), 3 (the intraprocedural {@code cfg}/{@code cdg}/{@code ddg} overlays) and 4 (the
+     * interprocedural SDG overlays) are supported, whole-project, JSON. Anything else is an explicit
+     * error rather than a silently different result.
      */
     private void analyzeV2() throws Exception {
         if (analysisLevel > 4) {
             throw new ParameterException(spec.commandLine(),
                     "error: --schema v2 currently supports --analysis-level 1, 2, 3, and 4 only");
         }
-        if (analysisLevel >= 4
-                && !"rta".equalsIgnoreCase(precision)
-                && !"0-cfa".equalsIgnoreCase(precision)
-                && !"0-1-cfa".equalsIgnoreCase(precision)) {
-            throw new ParameterException(spec.commandLine(),
-                    "error: unknown --precision '" + precision + "'; use rta, 0-cfa or 0-1-cfa");
-        }
-        if (analysisLevel >= 3
-                && !"ast".equalsIgnoreCase(l3Engine)
-                && !"wala".equalsIgnoreCase(l3Engine)) {
-            throw new ParameterException(spec.commandLine(),
-                    "error: unknown --l3-engine '" + l3Engine + "'; use ast or wala");
-        }
+        // Ahead of the flag-value checks below, because it raises the effective level to 4 and those
+        // checks are level-gated: validating first would let `--emit neo4j --precision garbage` run at
+        // level 4 with an unrecognised value and silently fall back, against the CLI contract.
         if ("neo4j".equalsIgnoreCase(emit)) {
             // The graph is always full-depth (keystone depth rule): depth/section selectors cannot
             // be combined with it — error loudly rather than silently project a partial graph.
@@ -398,6 +389,19 @@ public class CodeAnalyzer implements Runnable {
             }
             analysisLevel = 4;
             externalCalls = true;
+        }
+        if (analysisLevel >= 4
+                && !"rta".equalsIgnoreCase(precision)
+                && !"0-cfa".equalsIgnoreCase(precision)
+                && !"0-1-cfa".equalsIgnoreCase(precision)) {
+            throw new ParameterException(spec.commandLine(),
+                    "error: unknown --precision '" + precision + "'; use rta, 0-cfa or 0-1-cfa");
+        }
+        if (analysisLevel >= 3
+                && !"ast".equalsIgnoreCase(l3Engine)
+                && !"wala".equalsIgnoreCase(l3Engine)) {
+            throw new ParameterException(spec.commandLine(),
+                    "error: unknown --l3-engine '" + l3Engine + "'; use ast or wala");
         }
         if (sourceAnalysis != null || targetFiles != null) {
             throw new ParameterException(spec.commandLine(),

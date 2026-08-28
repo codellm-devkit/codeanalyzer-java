@@ -48,9 +48,12 @@ class CodeAnalyzerV2CliTest {
 
     /**
      * The pre-existing CLI options on {@link CodeAnalyzer} are static, so a value set by one test
-     * would leak into the next. Reset the ones these tests touch so each case starts from defaults.
+     * would leak into the next. Reset the ones these tests touch so each case starts from defaults —
+     * and again afterwards, so whichever test happens to run last cannot leak {@code emit=neo4j} or a
+     * deliberately bad {@code --precision} into another test class that drives the same CLI.
      */
     @BeforeEach
+    @AfterEach
     void resetStaticOptions() throws Exception {
         set("emit", "json");
         set("analysisLevel", 1);
@@ -462,6 +465,15 @@ class CodeAnalyzerV2CliTest {
         Path in = project(tmp.resolve("app"));
         assertNotEquals(0, run("-i", in.toString(), "-a", "4", "--precision", "2-cfa"),
                 "unrecognized flag values exit non-zero (CLI contract)");
+    }
+
+    @Test
+    void unknownPrecisionFailsLoudlyUnderEmitNeo4jToo(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        // --emit neo4j raises the level to 4 itself, and the precision check is level-gated: if it ran
+        // before the raise, this would exit 0 and silently fall back to RTA.
+        assertNotEquals(0, run("-i", in.toString(), "--emit", "neo4j", "--precision", "2-cfa"),
+                "unrecognized flag values exit non-zero (CLI contract), --emit neo4j included");
     }
 
 }
