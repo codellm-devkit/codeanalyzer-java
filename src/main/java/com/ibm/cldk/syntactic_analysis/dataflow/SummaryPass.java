@@ -75,12 +75,15 @@ public final class SummaryPass {
         private final String callee;
         private final List<String> args;
         private final boolean hasActualOut;
+        /** The body node whose span encloses this call, or null when the call is itself one. */
+        private final String enclosing;
 
-        Site(String local, String callee, List<String> args, boolean hasActualOut) {
+        Site(String local, String callee, List<String> args, boolean hasActualOut, String enclosing) {
             this.local = local;
             this.callee = callee;
             this.args = args;
             this.hasActualOut = hasActualOut;
+            this.enclosing = enclosing;
         }
 
         String actualIn(int j) {
@@ -98,8 +101,8 @@ public final class SummaryPass {
      */
     private static final class Fn {
         private final JCallable callable;
-        /** {@code ddg} as adjacency (src → dsts) — the fixed half of the reachability graph. */
-        private final Map<String, List<String>> ddg = new LinkedHashMap<>();
+        /** The intraprocedural reachability graph (src → dsts) — the fixed half; bridges are added per round. */
+        private final Map<String, List<String>> graph = new LinkedHashMap<>();
         /** Parameter index → the body nodes at which its value is first visible. */
         private final Map<Integer, Set<String>> seeds = new LinkedHashMap<>();
         /** Reaching one of these means "the value left through the return". */
@@ -142,7 +145,7 @@ public final class SummaryPass {
         Fn fn = new Fn(c);
         if (c.getDdg() != null) {
             for (JDdgEdge e : c.getDdg()) {
-                fn.ddg.computeIfAbsent(e.getSrc(), k -> new ArrayList<>()).add(e.getDst());
+                fn.graph.computeIfAbsent(e.getSrc(), k -> new ArrayList<>()).add(e.getDst());
             }
         }
 
@@ -163,11 +166,25 @@ public final class SummaryPass {
                         entry.getKey(),
                         node.getCallee(),
                         node.getArgumentExpr(),
-                        body.containsKey(entry.getKey() + "/actual_out")));
+                        body.containsKey(entry.getKey() + "/actual_out"),
+                        enclosing(entry.getKey(), body)));
             }
         }
         if (body.containsKey("@formal_out")) {
             fn.sinks.add("@formal_out");
+        }
+
+        // What a call's returned value does next, without which the callee bridges below would be
+        // dead ends and summaries could never compose. Two hops, because the `ddg` does not hang off
+        // a call node that sits inside a larger expression: `DdgBuilder` analyses CFG nodes, and a
+        // nested call is not one (`int t = f(x);` puts the def-use edge on the *statement*, and the
+        // call node is an orphan body entry). So the value flows actual_out → the call node → the
+        // node enclosing it, which is the CFG node the ddg edges actually leave from.
+        for (Site site : fn.sites) {
+            fn.graph.computeIfAbsent(site.actualOut(), k -> new ArrayList<>()).add(site.local);
+            if (site.enclosing != null) {
+                fn.graph.computeIfAbsent(site.local, k -> new ArrayList<>()).add(site.enclosing);
+            }
         }
 
         List<JParameter> params = c.getParameters();
@@ -219,6 +236,45 @@ public final class SummaryPass {
         return seeds;
     }
 
+    /**
+     * The smallest body node whose span strictly encloses {@code local}'s — the statement (or branch,
+     * or outer call) a nested call sits inside. Null when nothing encloses it, which is the case for
+     * a call in statement position: there the call node <em>is</em> the CFG node, so no hop is needed.
+     * Ties break on the node id so the choice cannot depend on map order.
+     */
+    private static String enclosing(String local, Map<String, JBodyNode> body) {
+        int[] inner = bytes(body.get(local));
+        if (inner == null) {
+            return null;
+        }
+        String best = null;
+        long bestWidth = Long.MAX_VALUE;
+        for (Map.Entry<String, JBodyNode> entry : body.entrySet()) {
+            int[] outer = bytes(entry.getValue());
+            if (entry.getKey().equals(local)
+                    || outer == null
+                    || outer[0] > inner[0]
+                    || outer[1] < inner[1]
+                    || (outer[0] == inner[0] && outer[1] == inner[1])) {
+                continue;
+            }
+            long width = (long) outer[1] - outer[0];
+            if (best == null || width < bestWidth || (width == bestWidth && entry.getKey().compareTo(best) < 0)) {
+                best = entry.getKey();
+                bestWidth = width;
+            }
+        }
+        return best;
+    }
+
+    /** A node's {@code span.bytes}, or null when it has none (every synthetic vertex). */
+    private static int[] bytes(JBodyNode node) {
+        if (node == null || node.getSpan() == null || node.getSpan().getBytes() == null) {
+            return null;
+        }
+        return node.getSpan().getBytes().length < 2 ? null : node.getSpan().getBytes();
+    }
+
     /** An access path's base segment — the text before the first {@code .} or {@code [}. */
     private static String base(String var) {
         if (var == null) {
@@ -248,8 +304,8 @@ public final class SummaryPass {
     /**
      * Solves every callable's {@code flows} relation, callees first. Within one component each member
      * is recomputed until none grows. Termination is structural: a member's seeds, sinks and
-     * {@code ddg} are fixed, the only other edges — the callee bridges — appear as callee relations
-     * grow, and the result is unioned in rather than replaced, so every relation grows monotonically;
+     * reachability graph are fixed, the only other edges — the callee bridges — appear as callee
+     * relations grow, and the result is unioned in rather than replaced, so relations only grow;
      * {@code flows(c) ⊆ {0 … arity(c)-1}} bounds it, so a component settles in at most (its members'
      * total arity + 1) rounds.
      */
@@ -274,8 +330,10 @@ public final class SummaryPass {
 
     /** One iteration of a callable's transfer relation: which parameters reach a return sink. */
     private static Set<Integer> computeFlows(Fn fn, Map<String, Fn> fns, Map<String, Set<Integer>> flows) {
-        // Built once per callable per round, then walked once per parameter.
-        Map<String, List<String>> graph = new LinkedHashMap<>(fn.ddg);
+        // Built once per callable per round, then walked once per parameter. Successor lists are
+        // copied, not shared: the bridges below would otherwise accumulate into fn.graph each round.
+        Map<String, List<String>> graph = new LinkedHashMap<>();
+        fn.graph.forEach((node, next) -> graph.put(node, new ArrayList<>(next)));
         for (Site site : fn.sites) {
             for (int j : passThrough(site, fns, flows)) {
                 graph.computeIfAbsent(site.actualIn(j), k -> new ArrayList<>()).add(site.actualOut());

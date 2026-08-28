@@ -5,13 +5,21 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.ibm.cldk.schema.JBodyNode;
+import com.ibm.cldk.schema.JCallEdge;
 import com.ibm.cldk.schema.JCallable;
+import com.ibm.cldk.schema.JDdgEdge;
 import com.ibm.cldk.schema.JModule;
+import com.ibm.cldk.schema.JParameter;
+import com.ibm.cldk.schema.JType;
+import com.ibm.cldk.schema.Span;
 import com.ibm.cldk.schema.V2Json;
 import com.ibm.cldk.syntactic_analysis.L1Extractor;
 import com.ibm.cldk.syntactic_analysis.L2CallGraph;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -85,6 +93,137 @@ class SummaryPassTest {
         // ...and Heap.roundTrip's two sites are a void call (no actual_out) and a no-arg call (no
         // actual_in), so neither can carry a shortcut. Absent, not an empty list.
         assertNull(callable(modules, "/Heap/roundTrip(int)").getSummary(), "no viable site, no summary");
+    }
+
+    /**
+     * A call whose value passes through a local before being returned — {@code int t = f(x); return
+     * t;} — which is where summary <em>composition</em> has to work: nothing in the return statement
+     * names the parameter, so the syntactic return rule cannot rescue it and the only route is the
+     * callee's own summary. The tree is built by hand, node for node, from the shape the AST engine
+     * really emits for this source (verified by running {@code -a 4} over it): the call sits at its
+     * own body node, the def-use edge hangs off the enclosing <em>statement</em>, and the call node
+     * itself carries no ddg edge at all.
+     *
+     * <p>The assertion is on {@code top}, not {@code mid}: {@code mid}'s own summary edge follows
+     * from {@code flows(callee)} alone and holds either way, so only the grandparent's edge actually
+     * depends on {@code flows(mid)} having composed through the call.
+     */
+    @Test
+    void aValuePassingThroughALocalStillComposes() {
+        Map<String, JModule> modules = passThroughChain();
+        SdgVertices.apply(modules);
+        SummaryPass.apply(modules, passThroughCallGraph(), 3);
+
+        JCallable top = callable(modules, "/Pass/top(int)");
+        assertNotNull(top.getSummary(), "top composes through mid, which composes through callee");
+        assertEquals(1, top.getSummary().size());
+        assertEquals("topCall/actual_in:0", top.getSummary().get(0).getSrc());
+        assertEquals("topCall/actual_out", top.getSummary().get(0).getDst());
+
+        JCallable mid = callable(modules, "/Pass/mid(int)");
+        assertNotNull(mid.getSummary());
+        assertEquals(1, mid.getSummary().size());
+    }
+
+    // Line 2 holds callee, 3 mid, 4 top; every snippet below is unique, and the text is ASCII so a
+    // char offset is a byte offset.
+    private static final String PASS_SOURCE = String.join(
+            "\n",
+            "class Pass {",
+            "    int callee(int q) { return q; }",
+            "    int mid(int x) { int t = callee(x); return t; }",
+            "    int top(int w) { int s = mid(w); return s; }",
+            "}");
+
+    /** {@code callee → mid → top}, each level passing its argument out through the return. */
+    private static Map<String, JModule> passThroughChain() {
+        JType type = new JType();
+        type.setId("can://java/pass/Pass.java/Pass");
+
+        JCallable callee = method("callee(int)", "q");
+        callee.getBody().put("@entry", node("entry", null));
+        callee.getBody().put("calleeRet", node("return", "return q;"));
+        callee.setDdg(new ArrayList<>());
+        type.getCallables().put("callee(int)", callee);
+
+        JCallable mid = method("mid(int)", "x");
+        mid.getBody().put("@entry", node("entry", null));
+        mid.getBody().put("midCall", callNode("callee(x)", "callee(int)"));
+        mid.getBody().put("midDecl", node("statement", "int t = callee(x);"));
+        mid.getBody().put("midRet", node("return", "return t;"));
+        // The def-use edge leaves the *statement*, never the nested call node — that asymmetry is
+        // the whole point of the case.
+        mid.setDdg(new ArrayList<>(List.of(ddg("midDecl", "midRet", "t"))));
+        type.getCallables().put("mid(int)", mid);
+
+        JCallable top = method("top(int)", "w");
+        top.getBody().put("@entry", node("entry", null));
+        top.getBody().put("topCall", callNode("mid(w)", "mid(int)"));
+        top.getBody().put("topDecl", node("statement", "int s = mid(w);"));
+        top.getBody().put("topRet", node("return", "return s;"));
+        top.setDdg(new ArrayList<>(List.of(ddg("topDecl", "topRet", "s"))));
+        type.getCallables().put("top(int)", top);
+
+        JModule module = new JModule();
+        module.setId("can://java/pass/Pass.java");
+        module.setSource(PASS_SOURCE);
+        module.getTypes().put("Pass", type);
+        return new LinkedHashMap<>(Map.of("Pass.java", module));
+    }
+
+    private static JDdgEdge ddg(String src, String dst, String var) {
+        JDdgEdge e = new JDdgEdge();
+        e.setSrc(src);
+        e.setDst(dst);
+        e.setVar(var);
+        e.setProv(List.of("ssa"));
+        return e;
+    }
+
+    private static JCallable method(String signature, String param) {
+        JCallable c = new JCallable();
+        c.setId("can://java/pass/Pass.java/Pass/" + signature);
+        c.setKind("method");
+        c.setSignature(signature);
+        c.setReturnType("int");
+        JParameter p = new JParameter();
+        p.setName(param);
+        p.setType("int");
+        c.setParameters(new ArrayList<>(List.of(p)));
+        return c;
+    }
+
+    private static JBodyNode node(String kind, String snippet) {
+        JBodyNode n = new JBodyNode();
+        n.setKind(kind);
+        if (snippet != null) {
+            Span span = new Span();
+            int at = PASS_SOURCE.indexOf(snippet);
+            span.setBytes(new int[] {at, at + snippet.length()});
+            n.setSpan(span);
+        }
+        return n;
+    }
+
+    private static JBodyNode callNode(String snippet, String calleeSignature) {
+        JBodyNode n = node("call", snippet);
+        n.setCallee("can://java/pass/Pass.java/Pass/" + calleeSignature);
+        n.setReturnType("int");
+        n.setArgumentExpr(new ArrayList<>(List.of(snippet.substring(snippet.indexOf('(') + 1, snippet.length() - 1))));
+        return n;
+    }
+
+    private static List<JCallEdge> passThroughCallGraph() {
+        return List.of(
+                callEdge("top(int)", "mid(int)"),
+                callEdge("mid(int)", "callee(int)"));
+    }
+
+    private static JCallEdge callEdge(String from, String to) {
+        JCallEdge e = new JCallEdge();
+        e.setSrc("can://java/pass/Pass.java/Pass/" + from);
+        e.setDst("can://java/pass/Pass.java/Pass/" + to);
+        return e;
     }
 
     @Test
