@@ -446,8 +446,9 @@ class CodeAnalyzerV2CliTest {
         assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "-a", "4", "--no-build"),
                 "level 4 must run; WALA-unavailable degrades, never crashes");
         JsonObject root = JsonParser.parseString(Files.readString(out.resolve("analysis.json"))).getAsJsonObject();
-        assertTrue(root.get("max_level").getAsInt() >= 3,
-                "degraded runs report what was actually computed");
+        assertEquals(4, root.get("max_level").getAsInt(),
+                "max_level is the requested level: the L4 vertices/param edges are engine-free and "
+                        + "still ran, even though the semantic ddg (WALA-dependent) degraded");
     }
 
     @Test

@@ -31,6 +31,7 @@ import com.ibm.cldk.schema.V2Json;
 import com.ibm.cldk.syntactic_analysis.L1Cache;
 import com.ibm.cldk.syntactic_analysis.L1Extractor;
 import com.ibm.cldk.syntactic_analysis.L2CallGraph;
+import com.ibm.cldk.syntactic_analysis.dataflow.SdgVertices;
 import com.ibm.cldk.utils.BuildProject;
 import com.ibm.cldk.utils.Log;
 import com.ibm.cldk.wala.WalaAnalysis;
@@ -144,7 +145,8 @@ public class CodeAnalyzer implements Runnable {
 
     @Option(names = {
             "--no-rta" }, description = "Skip the WALA RTA overlay at --schema v2 --analysis-level 2, "
-                    + "emitting declared-only call edges without building the application.")
+                    + "emitting declared-only call edges without building the application. Does not "
+                    + "suppress the L4 WALA build at --analysis-level 4: the semantic ddg still needs it.")
     private boolean noRta = false;
 
     @Option(names = {
@@ -470,6 +472,24 @@ public class CodeAnalyzer implements Runnable {
             if (wala != null) {
                 L3WalaOverlays.apply(wala, input, modules, graphFieldDepth);
             }
+            // L4: the semantic ddg needs a WALA build regardless of --l3-engine, so build it here (or
+            // reuse the instance --l3-engine wala already built above) while the jars are still live.
+            // Must run strictly after the L3 overlay above: primeL4ModRef() permanently mutates the
+            // WalaAnalysis instance's shared mod/ref maps, and every PDG built afterwards — including
+            // L3's — would see the primed closure instead of the empty-defaulting one L3 relies on.
+            if (analysisLevel >= 4) {
+                if (wala == null) {
+                    String buildCommand = noBuild ? null : (build == null ? "auto" : build);
+                    String deps = dependencyDir == null ? null : dependencyDir.toString();
+                    wala = WalaAnalysis.of(input, deps, buildCommand, precision).orElse(null);
+                }
+                if (wala != null) {
+                    L4WalaOverlays.apply(wala, modules, graphFieldDepth);
+                } else {
+                    Log.warn("L4 semantic ddg unavailable (WALA build failed); emitting the derived "
+                            + "SDG vertices and param edges only");
+                }
+            }
         } finally {
             BuildProject.cleanLibraryDependencies();
         }
@@ -480,15 +500,20 @@ public class CodeAnalyzer implements Runnable {
             L1Cache.save(cache, application, version, modules);
         }
 
-        // maxLevel reports what was computed: 4 only once the L4 pass ran (Task 6 flips this).
-        int emittedLevel = Math.min(analysisLevel, 3);
+        // maxLevel reports the requested level: the L1-L3 passes above always run to that level (or
+        // degrade a specific overlay with a warning), and the L4 vertices/param edges below are
+        // engine-free, so they run whenever analysisLevel >= 4 regardless of the WALA build's fate.
         Analysis analysis;
         if (analysisLevel >= 2) {
             L2CallGraph.Result l2 = L2CallGraph.build(application, modules, rtaEndpoints, externalCalls);
-            analysis = V2Emitter.emit(
-                    application, emittedLevel, modules, version, l2.callGraph(), l2.externalSymbols());
+            // SdgVertices needs the callee ids L2CallGraph.build just backfilled onto call body nodes,
+            // and no dependency jars, so it runs here rather than inside the try block above.
+            SdgVertices.Result sdg = analysisLevel >= 4 ? SdgVertices.apply(modules) : null;
+            analysis = V2Emitter.emit(application, analysisLevel, modules, version,
+                    l2.callGraph(), l2.externalSymbols(),
+                    sdg == null ? null : sdg.paramIn, sdg == null ? null : sdg.paramOut);
         } else {
-            analysis = V2Emitter.emit(application, emittedLevel, modules, version);
+            analysis = V2Emitter.emit(application, analysisLevel, modules, version);
         }
 
         if ("neo4j".equalsIgnoreCase(emit)) {
