@@ -69,33 +69,37 @@ class L4GateTest {
     }
 
     /**
-     * §14's "arity matches" as an actual count. Hand-derived from the three fixture files and
+     * §14's "arity matches" as an actual count. Hand-derived from the four fixture files and
      * confirmed against this run:
      *
      * <ul>
-     *   <li>{@code param_in} = 5 — one per argument at each of the five in-project call sites with
+     *   <li>{@code param_in} = 6 — one per argument at each of the six in-project call sites with
      *       arguments: {@code a→b}, {@code b→c}, {@code even→odd}, {@code odd→even},
-     *       {@code roundTrip→put}. {@code roundTrip→get()} passes none, so it contributes none.
-     *   <li>{@code param_out} = 5 — one per site whose callee returns a value: the same four
-     *       {@code Chain}/{@code Mutual} sites plus {@code roundTrip→get()}; {@code put} is
-     *       {@code void}, so that site has no {@code actual_out} to reach.
-     *   <li>{@code summary} = 4 — {@code Chain.a}, {@code Chain.b}, {@code Mutual.even},
-     *       {@code Mutual.odd}, one shortcut each. {@code Heap.roundTrip}'s two sites are a void
-     *       callee and a no-arg callee, so neither can carry one.
+     *       {@code roundTrip→put}, {@code callFirst→first}. {@code roundTrip→get()} passes none, so
+     *       it contributes none.
+     *   <li>{@code param_out} = 6 — one per site whose callee returns a value: the same four
+     *       {@code Chain}/{@code Mutual} sites, plus {@code callFirst→first} and
+     *       {@code roundTrip→get()}; {@code put} is {@code void}, so that site has no
+     *       {@code actual_out} to reach.
+     *   <li>{@code summary} = 5 — {@code Chain.a}, {@code Chain.b}, {@code Mutual.even},
+     *       {@code Mutual.odd} and {@code Loops.callFirst}, one shortcut each.
+     *       {@code Heap.roundTrip}'s two sites are a void callee and a no-arg callee, so neither can
+     *       carry one. {@code Loops.callFirst}'s is the one that needs container nodes to be
+     *       seedable: {@code first}'s parameter is named only in its {@code for}-each header.
      * </ul>
      */
     @Test
     void overlayCountsAreExactlyWhatTheFixtureImplies() {
         JsonObject app = root.getAsJsonObject("application");
-        assertEquals(5, app.getAsJsonArray("param_in").size(), "param_in: one per argument at a resolved site");
-        assertEquals(5, app.getAsJsonArray("param_out").size(), "param_out: one per value-returning site");
+        assertEquals(6, app.getAsJsonArray("param_in").size(), "param_in: one per argument at a resolved site");
+        assertEquals(6, app.getAsJsonArray("param_out").size(), "param_out: one per value-returning site");
 
         int summaries = 0;
         for (JsonObject c : callablesById(root).values()) {
             JsonArray summary = c.getAsJsonArray("summary");
             summaries += summary == null ? 0 : summary.size();
         }
-        assertEquals(4, summaries, "summary: one shortcut per pass-through call site");
+        assertEquals(5, summaries, "summary: one shortcut per pass-through call site");
     }
 
     @Test

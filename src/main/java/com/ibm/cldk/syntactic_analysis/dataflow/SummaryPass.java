@@ -153,11 +153,9 @@ public final class SummaryPass {
         Map<String, String> spanText = new LinkedHashMap<>();
         for (Map.Entry<String, JBodyNode> entry : body.entrySet()) {
             JBodyNode node = entry.getValue();
-            if (SEEDABLE_KINDS.contains(node.getKind())) {
-                String text = slice(source, node.getSpan());
-                if (text != null) {
-                    spanText.put(entry.getKey(), text);
-                }
+            String text = slice(source, node.getSpan());
+            if (text != null) {
+                spanText.put(entry.getKey(), text);
             }
             if ("return".equals(node.getKind())) {
                 fn.sinks.add(entry.getKey());
@@ -206,26 +204,22 @@ public final class SummaryPass {
     }
 
     /**
-     * The body-node kinds whose {@code span} is a single statement or expression, so that matching a
-     * parameter name against the slice says something about <em>that</em> node. Deliberately omits
-     * {@code branch}, {@code loop} and {@code switch}, whose spans swallow every statement nested
-     * inside them: a name mentioned anywhere in a loop body would otherwise seed the loop node and
-     * inherit all of its def-use reach, which buys no soundness (the nested statement carrying the
-     * real flow is seeded on its own) and costs precision in bulk. {@code entry}/{@code exit} and the
-     * synthetic L4 vertices carry no span at all, so {@link #slice} skips them regardless.
-     *
-     * <p>A {@code statement} spanning a local class declaration is a container in source terms but not
-     * in body-node terms — the nested methods are separate callables with their own {@code body} maps
-     * (see {@link #walkTypes}) — so it is a leaf here and is safe to slice.
-     */
-    private static final Set<String> SEEDABLE_KINDS = Set.of("statement", "return", "call");
-
-    /**
      * Where a parameter's value is visible, syntactically: the def end of any {@code ddg} edge whose
      * access path is rooted at it, any call-site {@code actual_in} vertex whose argument text names
-     * it, and any {@link #SEEDABLE_KINDS} body node whose source text names it (see the class javadoc
-     * — a parameter has no defining node in the {@code ddg}, so text is the only thing that can put it
-     * on the map at all).
+     * it, and <em>every</em> body node whose source text names it (see the class javadoc — a parameter
+     * has no defining node in the {@code ddg}, so text is the only thing that can put it on the map at
+     * all).
+     *
+     * <p>Every kind with a span is seedable, containers included. A {@code branch}/{@code loop}/
+     * {@code switch} span swallows the statements nested inside it, so seeding one on a name mentioned
+     * anywhere within hands the parameter that whole node's def-use reach — bulk over-approximation,
+     * which this posture explicitly accepts. Excluding them is the direction that is <em>not</em>
+     * allowed: those nodes carry real defs and uses of their own ({@code DdgBuilder.collect} attributes
+     * a {@code for}-each's loop variable and iterated expression, and an {@code if}'s condition, to the
+     * container node), while the header they come from gets no node of its own — so
+     * {@code int first(int[] q) { for (int x : q) { return x; } return 0; }} names {@code q} nowhere a
+     * non-container node can see, and excluding the loop drops a real flow. {@code entry}/{@code exit}
+     * and the synthetic L4 vertices need no rule: they carry no span, so {@link #slice} skips them.
      */
     private static Set<String> seedsFor(Fn fn, String name, Map<String, String> spanText) {
         Set<String> seeds = new LinkedHashSet<>();

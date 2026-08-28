@@ -148,6 +148,26 @@ class SummaryPassTest {
     }
 
     /**
+     * A parameter named only in a {@code for}-each header — {@code Loops.first}. Real source through
+     * the real pipeline, because that is the point: {@link com.ibm.cldk.syntactic_analysis.controlflow.BodyNodeBuilder}
+     * gives a for-each exactly one {@code loop} node spanning the whole statement (the header never
+     * gets a node of its own), and {@link DdgBuilder} attributes the iterated expression and the loop
+     * variable to that node. So the loop node has a real outgoing ddg edge to {@code return x;}, but
+     * the only thing that can ever seed it for {@code q} is its own span text — a parameter has no ddg
+     * def site. With container kinds excluded from seeding, {@code flows(first)} was empty and the
+     * caller lost a summary edge for a flow that genuinely exists.
+     */
+    @Test
+    void aParameterUsedOnlyInALoopHeaderStillReachesTheReturn() throws Exception {
+        Map<String, JModule> modules = analyzed();
+        JCallable callFirst = callable(modules, "/Loops/callFirst(int[])");
+        assertNotNull(callFirst.getSummary(), "q flows out of first through the for-each, so callFirst shortcuts it");
+        assertEquals(1, callFirst.getSummary().size());
+        assertTrue(callFirst.getSummary().get(0).getSrc().endsWith("/actual_in:0"));
+        assertTrue(callFirst.getSummary().get(0).getDst().endsWith("/actual_out"));
+    }
+
+    /**
      * A parameter that reaches the return <em>through a local</em> — {@code int m(int q) { int t = q;
      * return t; }} — the commonest Java shape after {@code return q;} itself. Nothing in the ddg is
      * rooted at {@code q}: {@code DdgBuilder} gives a parameter no defining node, so the only edge is
@@ -364,8 +384,9 @@ class SummaryPassTest {
                     edges[0]++;
                 }));
         // Without this the endpoint check passes vacuously on a regression that empties every
-        // summary. Four is the fixture's whole set: Chain.a→b, Chain.b→c, Mutual.even→odd,
-        // Mutual.odd→even. Heap's two sites cannot carry one (void callee, no-arg callee).
-        assertEquals(4, edges[0], "every fixture summary edge is checked, and there are four of them");
+        // summary. Five is the fixture's whole set: Chain.a→b, Chain.b→c, Mutual.even→odd,
+        // Mutual.odd→even, Loops.callFirst→first. Heap's two sites cannot carry one (void callee,
+        // no-arg callee).
+        assertEquals(5, edges[0], "every fixture summary edge is checked, and there are five of them");
     }
 }
