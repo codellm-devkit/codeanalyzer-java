@@ -34,8 +34,9 @@ class WalaL4ModRefTest {
      * <pre>
      * 14:     public int roundTrip(int v) {
      * 15:         put(v);        // writes this.box  -> body node 15:9
-     * 16:         return get();  // reads  this.box  -> body node 16:9
-     * 17:     }
+     * 16:         int r = get(); // reads  this.box  -> body node 16:9
+     * 17:         return r;
+     * 18:     }
      * </pre>
      */
     private static final String PUT_CALL = "15:9";

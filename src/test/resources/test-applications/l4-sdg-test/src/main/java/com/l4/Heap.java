@@ -13,6 +13,7 @@ public class Heap {
 
     public int roundTrip(int v) {
         put(v);
-        return get();
+        int r = get();
+        return r;
     }
 }
