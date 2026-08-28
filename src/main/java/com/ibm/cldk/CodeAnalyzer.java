@@ -396,7 +396,7 @@ public class CodeAnalyzer implements Runnable {
                         "error: --graph-field-depth does not apply to --emit neo4j; "
                                 + "the graph is always projected at full depth");
             }
-            analysisLevel = 3;
+            analysisLevel = 4;
             externalCalls = true;
         }
         if (sourceAnalysis != null || targetFiles != null) {

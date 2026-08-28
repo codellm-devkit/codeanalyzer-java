@@ -26,6 +26,8 @@ import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.schema.V2Emitter;
 import com.ibm.cldk.syntactic_analysis.L1Extractor;
 import com.ibm.cldk.syntactic_analysis.L2CallGraph;
+import com.ibm.cldk.syntactic_analysis.dataflow.SdgVertices;
+import com.ibm.cldk.syntactic_analysis.dataflow.SummaryPass;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
@@ -38,15 +40,19 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 /**
- * Schema v2 graph conformance (no container needed): run the real L1–L3 pipeline over a fixture,
- * project with {@link V2GraphProjector}, and assert the projector only ever produces what
- * {@link V2SchemaCatalog} declares — the anti-drift guard for the 2.0.0 graph contract. Also pins
+ * Schema v2 graph conformance (no container needed): run the real L1–L3 pipeline plus the L4 SDG
+ * passes ({@link SdgVertices}, {@link SummaryPass}) over a fixture, project with
+ * {@link V2GraphProjector}, and assert the projector only ever produces what
+ * {@link V2SchemaCatalog} declares — the anti-drift guard for the 2.1.0 graph contract. Also pins
  * the convergence decisions: body nodes instead of call-site nodes, and the {@code _k}-keyed
  * CFG/DDG relationships.
  */
 public class V2Neo4jSchemaConformanceTest {
 
-    private static final Path FIXTURE = Paths.get("src/test/resources/test-applications/call-graph-test");
+    // l4-sdg-test (not call-graph-test): its calls are all 1-arg with a transitive a→b→c chain, so
+    // J_PARAM_IN/J_SUMMARY are guaranteed non-empty here. The v1/v2 conformance tests still exercise
+    // call-graph-test.
+    private static final Path FIXTURE = Paths.get("src/test/resources/test-applications/l4-sdg-test");
 
     private static GraphRows rows;
 
@@ -65,11 +71,14 @@ public class V2Neo4jSchemaConformanceTest {
             REL_BY_TYPE.put(rt.type, rt);
         }
         Map<String, JModule> modules = L1Extractor.extractAll(
-                FIXTURE, "call-graph-test", null, new LinkedHashMap<>(), 3, 3, "ast");
-        L2CallGraph.Result l2 = L2CallGraph.build("call-graph-test", modules, null, true);
+                FIXTURE, "l4-sdg-test", null, new LinkedHashMap<>(), 3, 3, "ast");
+        L2CallGraph.Result l2 = L2CallGraph.build("l4-sdg-test", modules, null, true);
+        SdgVertices.Result sdg = SdgVertices.apply(modules);
+        SummaryPass.apply(modules, l2.callGraph(), 3);
         Analysis analysis = V2Emitter.emit(
-                "call-graph-test", 3, modules, "test", l2.callGraph(), l2.externalSymbols());
-        rows = V2GraphProjector.project(analysis, "call-graph-test");
+                "l4-sdg-test", 3, modules, "test", l2.callGraph(), l2.externalSymbols(),
+                sdg.paramIn, sdg.paramOut);
+        rows = V2GraphProjector.project(analysis, "l4-sdg-test");
     }
 
     private static String specificLabel(List<String> labels) {
@@ -163,7 +172,7 @@ public class V2Neo4jSchemaConformanceTest {
 
     @Test
     public void wipeCoversBothGenerationsSoV2ReplacesAPriorV1Graph() {
-        String cypher = CypherWriter.renderCypher(rows, "call-graph-test");
+        String cypher = CypherWriter.renderCypher(rows, "l4-sdg-test");
         assertTrue(cypher.contains("J_HAS_UNIT|J_HAS_MODULE"),
                 "the wipe must traverse both generations' unit relationship");
         assertTrue(cypher.contains("MATCH (s:JSymbol) WHERE NOT (s)--() DELETE s"),
@@ -173,5 +182,17 @@ public class V2Neo4jSchemaConformanceTest {
             assertTrue(CypherWriter.DESCENDANTS.contains(rel),
                     "wipe/prune descendant traversal must include " + rel);
         }
+    }
+
+    @Test
+    void l4OverlayProjectsParamAndSummaryEdges() {
+        boolean paramIn = false;
+        boolean summary = false;
+        for (EdgeRow edge : rows.edges) {
+            paramIn |= edge.type.equals("J_PARAM_IN");
+            summary |= edge.type.equals("J_SUMMARY");
+        }
+        assertTrue(paramIn, "J_PARAM_IN projected from application param_in");
+        assertTrue(summary, "J_SUMMARY projected from callable summaries");
     }
 }

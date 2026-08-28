@@ -1,5 +1,5 @@
 {
-  "schema_version": "2.0.0",
+  "schema_version": "2.1.0",
   "generator": "codeanalyzer-java",
   "marker_labels": [
     "JEntrypoint"
@@ -156,6 +156,8 @@
         "argument_types": "string[]",
         "argument_expr": "string[]",
         "_module": "string",
+        "var": "string",
+        "call_node": "string",
         "start_line": "integer",
         "end_line": "integer"
       }

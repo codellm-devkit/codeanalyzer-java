@@ -25,6 +25,7 @@ import com.ibm.cldk.schema.JDecorator;
 import com.ibm.cldk.schema.JEnumConstant;
 import com.ibm.cldk.schema.JExternalSymbol;
 import com.ibm.cldk.schema.JField;
+import com.ibm.cldk.schema.JIdEdge;
 import com.ibm.cldk.schema.JImport;
 import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.schema.JRecordComponent;
@@ -41,10 +42,11 @@ import java.util.Map;
 
 /**
  * The schema v2 → Neo4j projection: a pure {@code (Analysis, appName) → GraphRows} function, no
- * I/O, no driver. The vocabulary is {@link V2SchemaCatalog} (graph contract 2.0.0), mirroring
+ * I/O, no driver. The vocabulary is {@link V2SchemaCatalog} (graph contract 2.1.0), mirroring
  * codeanalyzer-python's projection: call sites are {@code :JBodyNode} rows (no call-site nodes),
  * parameters flatten to {@code parameters_json}, javadoc collapses to {@code docstring}, and the
- * L3 {@code cfg}/{@code cdg}/{@code ddg} overlays become typed relationships between body nodes.
+ * L3 {@code cfg}/{@code cdg}/{@code ddg} and L4 {@code param_in}/{@code param_out}/{@code summary}
+ * overlays become typed relationships between body nodes.
  *
  * <p>Body-node identity is the global ordinal: {@code <callable-id>@<local-key>} for real
  * statements ({@code 12:5}), {@code <callable-id><local-key>} for synthetic bookends whose local
@@ -111,6 +113,21 @@ public final class V2GraphProjector {
                 p.put("signature", ext.getSignature());
                 p.put("declaring_type", ext.getDeclaringType());
                 b.node(SYMBOL_EXTERNAL, "id", e.getKey(), RowBuilder.prune(p));
+            }
+        }
+
+        if (analysis.getApplication().getParamIn() != null) {
+            for (JIdEdge e : analysis.getApplication().getParamIn()) {
+                b.edgeIfBothResolved("J_PARAM_IN",
+                        new NodeRef("JBodyNode", "id", e.getSrc()),
+                        new NodeRef("JBodyNode", "id", e.getDst()), RowBuilder.props());
+            }
+        }
+        if (analysis.getApplication().getParamOut() != null) {
+            for (JIdEdge e : analysis.getApplication().getParamOut()) {
+                b.edgeIfBothResolved("J_PARAM_OUT",
+                        new NodeRef("JBodyNode", "id", e.getSrc()),
+                        new NodeRef("JBodyNode", "id", e.getDst()), RowBuilder.props());
             }
         }
 
@@ -314,6 +331,9 @@ public final class V2GraphProjector {
             np.put("argument_expr", n.getArgumentExpr());
             putLines(np, n.getSpan());
             np.put("_module", fileKey);
+            // L4 SDG synthetic-vertex payload: absent on every non-synthetic node (prune drops nulls).
+            np.put("var", n.getOf());
+            np.put("call_node", n.getParent() == null ? null : globalOrdinal(c.getId(), n.getParent()));
             NodeRef nr = b.node(Arrays.asList("JBodyNode"), "id", id, RowBuilder.prune(np));
             b.edge("J_HAS_BODY_NODE", ref, nr);
             if (n.getCallee() != null) {
@@ -343,6 +363,14 @@ public final class V2GraphProjector {
                         + (e.getProv() == null ? "" : String.join(",", e.getProv()));
                 b.keyedEdge("J_DDG", bodyRef(c, e.getSrc()), bodyRef(c, e.getDst()),
                         RowBuilder.prune(ep), k);
+            }
+        }
+        if (c.getSummary() != null) {
+            // Endpoints are call-site-local ids on c's own body (SummaryPass.emit), same globalOrdinal
+            // rule as J_CFG_NEXT/J_CDG/J_DDG above — no resolution gating needed, unlike the
+            // application-scope param_in/param_out edges above, which cross into another callable's body.
+            for (JIdEdge e : c.getSummary()) {
+                b.edge("J_SUMMARY", bodyRef(c, e.getSrc()), bodyRef(c, e.getDst()));
             }
         }
 
