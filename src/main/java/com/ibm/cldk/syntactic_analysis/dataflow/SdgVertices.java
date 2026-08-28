@@ -111,9 +111,12 @@ public final class SdgVertices {
 
             int calleeParams = callee.getParameters().size();
             if (calleeParams > 0) {
-                int bound = Math.min(nArgs, calleeParams);
-                for (int i = 0; i < bound; i++) {
-                    int formalIndex = Math.min(i, calleeParams - 1); // varargs: tail args collapse onto it
+                // Loop over every argument, not just the first calleeParams of them: L4 is
+                // over-approximate/weak-update (may add reach, never drop it), so a call with more
+                // actuals than declared formals (varargs) must not silently lose the tail args —
+                // they all collapse onto the last formal instead of being left unconnected.
+                for (int i = 0; i < nArgs; i++) {
+                    int formalIndex = Math.min(i, calleeParams - 1);
                     paramIn.add(edge(
                             global(c, local + "/actual_in:" + i), global(callee, "@formal_in:" + formalIndex)));
                 }

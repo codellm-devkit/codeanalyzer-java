@@ -98,6 +98,26 @@ class SdgVerticesTest {
     }
 
     @Test
+    void extraVarargsArgumentsAllMapToTheLastFormal() {
+        // b(int y) has a single parameter; make the call site to it carry 3 arguments (as if the
+        // call were being resolved to a varargs-shaped callee with only one declared formal).
+        Map<String, JModule> modules = twoCallableModule();
+        JCallable a = modules.get("A.java").getTypes().get("A").getCallables().get("a(int)");
+        JBodyNode call = a.getBody().get("3:16");
+        call.getArgumentExpr().add("2");
+        call.getArgumentExpr().add("3");
+
+        SdgVertices.Result r = SdgVertices.apply(modules);
+
+        assertNotNull(a.getBody().get("3:16/actual_in:0"));
+        assertNotNull(a.getBody().get("3:16/actual_in:1"));
+        assertNotNull(a.getBody().get("3:16/actual_in:2"));
+        assertEquals(3, r.paramIn.size());
+        assertTrue(r.paramIn.stream().allMatch(e -> e.getDst().endsWith("@formal_in:0")),
+                "every extra argument beyond the last formal collapses onto it");
+    }
+
+    @Test
     void deterministicAcrossRuns() {
         SdgVertices.Result r1 = SdgVertices.apply(twoCallableModule());
         SdgVertices.Result r2 = SdgVertices.apply(twoCallableModule());
