@@ -69,6 +69,16 @@ public class JBodyNode {
     private boolean isConstructorCall;
 
     /**
+     * L4 synthetic-vertex payload: the value this vertex stands for — a parameter name on
+     * {@code formal_in}, {@code $ret} on {@code formal_out}/{@code actual_out}, {@code argN} on
+     * {@code actual_in}. Absent on every non-synthetic node.
+     */
+    private String of;
+
+    /** The call-site local id an {@code actual_in}/{@code actual_out} vertex belongs to. */
+    private String parent;
+
+    /**
      * L2 backfill plumbing (§4): the binary name of the resolved callee's <em>declaring</em> type
      * ({@code java.util.Map$Entry}) — the fact {@code dst} needs but {@code receiver_type} cannot
      * supply, since they diverge on every inherited call. L1 records it per resolved site so L2's tree

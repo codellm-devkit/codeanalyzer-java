@@ -23,4 +23,10 @@ public class JApplication {
      * edge dangles. Left {@code null} at L1 so the key is omitted.
      */
     private Map<String, JExternalSymbol> externalSymbols;
+
+    /** L4 {@code actual_in → formal_in} edges (global ordinals); null (absent) below level 4. */
+    private List<JIdEdge> paramIn;
+
+    /** L4 {@code formal_out → actual_out} edges (global ordinals); null (absent) below level 4. */
+    private List<JIdEdge> paramOut;
 }
