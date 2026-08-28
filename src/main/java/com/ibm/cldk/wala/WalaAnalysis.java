@@ -22,6 +22,7 @@ import com.ibm.wala.cast.ir.ssa.AstIRFactory;
 import com.ibm.wala.cast.java.translator.jdt.ecj.ECJClassLoaderFactory;
 import com.ibm.wala.classLoader.IBytecodeMethod;
 import com.ibm.wala.classLoader.IMethod;
+import com.ibm.wala.classLoader.Language;
 import com.ibm.wala.ipa.callgraph.AnalysisCacheImpl;
 import com.ibm.wala.ipa.callgraph.AnalysisOptions;
 import com.ibm.wala.ipa.callgraph.AnalysisOptions.ReflectionOptions;
@@ -30,6 +31,7 @@ import com.ibm.wala.ipa.callgraph.CGNode;
 import com.ibm.wala.ipa.callgraph.CallGraph;
 import com.ibm.wala.ipa.callgraph.CallGraphBuilder;
 import com.ibm.wala.ipa.callgraph.IAnalysisCacheView;
+import com.ibm.wala.ipa.callgraph.impl.PartialCallGraph;
 import com.ibm.wala.ipa.callgraph.impl.Util;
 import com.ibm.wala.ipa.callgraph.propagation.InstanceKey;
 import com.ibm.wala.ipa.callgraph.propagation.PointerAnalysis;
@@ -43,12 +45,15 @@ import com.ibm.wala.ssa.IR;
 import com.ibm.wala.util.intset.MutableMapping;
 import com.ibm.wala.util.intset.MutableSparseIntSet;
 import com.ibm.wala.util.intset.OrdinalSet;
+import com.ibm.wala.util.intset.OrdinalSetMapping;
 import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.apache.commons.io.output.NullOutputStream;
 
 /**
@@ -129,6 +134,20 @@ public final class WalaAnalysis {
      *                     skip building and stream pre-compiled {@code .class} files directly)
      */
     public static Optional<WalaAnalysis> of(String input, String dependencies, String build) {
+        return of(input, dependencies, build, "rta");
+    }
+
+    /**
+     * As {@link #of(String, String, String)}, but with an explicit pointer-analysis precision:
+     * {@code "0-cfa"} and {@code "0-1-cfa"} select WALA's context-insensitive propagation builders,
+     * anything else (including {@code null}) keeps the default RTA builder.
+     *
+     * <p>Precision is chosen here rather than later because it is a property of the call-graph
+     * builder: the pointer analysis retained for L4's mod/ref closure is the one this builder
+     * produced.
+     */
+    public static Optional<WalaAnalysis> of(
+            String input, String dependencies, String build, String precision) {
         // Mirror RtaCallGraph.endpoints: default the global so BuildProject's static initializer
         // does not NPE when it resolves the build-tool wrappers.
         if (CodeAnalyzer.projectRootPom == null) {
@@ -152,7 +171,17 @@ public final class WalaAnalysis {
             IAnalysisCacheView cache =
                     new AnalysisCacheImpl(AstIRFactory.makeDefaultFactory(), options.getSSAOptions());
 
-            CallGraphBuilder<InstanceKey> builder = Util.makeRTABuilder(options, cache, cha);
+            CallGraphBuilder<InstanceKey> builder;
+            switch (precision == null ? "rta" : precision.toLowerCase()) {
+                case "0-cfa":
+                    builder = Util.makeZeroCFABuilder(Language.JAVA, options, cache, cha);
+                    break;
+                case "0-1-cfa":
+                    builder = Util.makeZeroOneCFABuilder(Language.JAVA, options, cache, cha);
+                    break;
+                default:
+                    builder = Util.makeRTABuilder(options, cache, cha);
+            }
             CallGraph cg = builder.makeCallGraph(options, null);
             PointerAnalysis<InstanceKey> pa = builder.getPointerAnalysis();
 
@@ -207,6 +236,36 @@ public final class WalaAnalysis {
     }
 
     /**
+     * Replaces the empty-defaulting mod/ref entries with a real interprocedural closure, computed
+     * over the <em>application-scope subgraph only</em>. This is what turns L3's intraprocedural
+     * heap dependences into L4's semantic ones: with real mod/ref, {@link PDG} materializes the
+     * heap parameter statements at call sites that {@link #emptyDefaultingMap} suppresses.
+     *
+     * <p>Scope, not laziness, is the point. The global closure over a JDK-inclusive call graph is
+     * the recorded 4 GB OOM (see {@link #emptyDefaultingMap}); {@link PartialCallGraph} restricts
+     * both the per-node scan and the bottom-up fixpoint — and with them the {@code PointerKey}
+     * domain the bit vectors are sized by — to application nodes. Library nodes keep the empty
+     * defaulting entry, so heap flow mediated by a library frame is conservatively absent.
+     *
+     * <p>Nodes whose closure came back empty are stored as an empty set <em>in the computed
+     * domain</em> rather than left to the default: {@code PDG.unionHeapLocations} both reads the
+     * backing set (which is null on an empty {@code BitVectorVariable}) and takes its result
+     * mapping from the PDG's own node, so every primed node must carry a non-null backing set and
+     * the same {@link OrdinalSetMapping} as its callees.
+     */
+    public void primeL4ModRef() {
+        Set<CGNode> appNodes = new LinkedHashSet<>();
+        for (CGNode node : callGraph) {
+            if (AnalysisUtils.isApplicationClass(node.getMethod().getDeclaringClass())) {
+                appNodes.add(node);
+            }
+        }
+        CallGraph appOnly = PartialCallGraph.make(callGraph, appNodes, appNodes);
+        prime(emptyMod, modRef.computeMod(appOnly, pa));
+        prime(emptyRef, modRef.computeRef(appOnly, pa));
+    }
+
+    /**
      * The RTA call graph's edges as endpoint pairs. Delegates to
      * {@link RtaCallGraph#toEndpoints(CallGraph)} so the L2 {@code rta} overlay is byte-identical
      * whether produced here or via {@link RtaCallGraph#endpoints}.
@@ -216,6 +275,33 @@ public final class WalaAnalysis {
     }
 
     // ----- helpers ------------------------------------------------------------------------------
+
+    /**
+     * Copies {@code computed} into {@code target}, substituting a non-null-backed empty set for
+     * every entry whose backing set is null (see {@link #primeL4ModRef}). When no entry carries a
+     * domain at all — no application node touches the heap — nothing is written, leaving the
+     * empty-defaulting behaviour exactly as it was.
+     */
+    private static void prime(
+            Map<CGNode, OrdinalSet<PointerKey>> target,
+            Map<CGNode, OrdinalSet<PointerKey>> computed) {
+        OrdinalSetMapping<PointerKey> domain = null;
+        for (OrdinalSet<PointerKey> set : computed.values()) {
+            if (set.getBackingSet() != null) {
+                domain = set.getMapping();
+                break;
+            }
+        }
+        if (domain == null) {
+            return;
+        }
+        OrdinalSet<PointerKey> emptyInDomain =
+                new OrdinalSet<>(MutableSparseIntSet.makeEmpty(), domain);
+        for (Map.Entry<CGNode, OrdinalSet<PointerKey>> entry : computed.entrySet()) {
+            OrdinalSet<PointerKey> set = entry.getValue();
+            target.put(entry.getKey(), set.getBackingSet() != null ? set : emptyInDomain);
+        }
+    }
 
     private static List<MethodIr> buildApplicationMethods(CallGraph callGraph) {
         List<MethodIr> result = new ArrayList<>();
