@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import picocli.CommandLine;
 
-/** Spec §14 L4 gate over the l4-sdg-test fixture (minus summary edges — PR 2). */
+/** Spec §14 L4 gate over the l4-sdg-test fixture. */
 class L4GateTest {
 
     private static JsonObject root;
@@ -84,6 +84,13 @@ class L4GateTest {
         // no gradle on PATH, so the CLI's `auto` build fails and the run degrades (Ruling R4). Guard
         // rather than assert, so the gate still runs for real wherever a build is available.
         Assumptions.assumeTrue(pts, "points-to edges require a working WALA build; none produced here");
+    }
+
+    @Test
+    void summaryEdgeExistsForTheKnownTransitiveFlow() {
+        JsonObject a = callable(root, "Chain", "a(int)");
+        assertTrue(a.has("summary"), "caller carries summary edges");
+        assertEquals(1, a.getAsJsonArray("summary").size());
     }
 
     @Test

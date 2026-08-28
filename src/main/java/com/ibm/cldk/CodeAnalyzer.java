@@ -32,6 +32,7 @@ import com.ibm.cldk.syntactic_analysis.L1Cache;
 import com.ibm.cldk.syntactic_analysis.L1Extractor;
 import com.ibm.cldk.syntactic_analysis.L2CallGraph;
 import com.ibm.cldk.syntactic_analysis.dataflow.SdgVertices;
+import com.ibm.cldk.syntactic_analysis.dataflow.SummaryPass;
 import com.ibm.cldk.utils.BuildProject;
 import com.ibm.cldk.utils.Log;
 import com.ibm.cldk.wala.WalaAnalysis;
@@ -508,7 +509,12 @@ public class CodeAnalyzer implements Runnable {
             L2CallGraph.Result l2 = L2CallGraph.build(application, modules, rtaEndpoints, externalCalls);
             // SdgVertices needs the callee ids L2CallGraph.build just backfilled onto call body nodes,
             // and no dependency jars, so it runs here rather than inside the try block above.
-            SdgVertices.Result sdg = analysisLevel >= 4 ? SdgVertices.apply(modules) : null;
+            SdgVertices.Result sdg = null;
+            if (analysisLevel >= 4) {
+                sdg = SdgVertices.apply(modules);
+                // Summaries read the vertices SdgVertices just added, so this must follow it.
+                SummaryPass.apply(modules, l2.callGraph(), graphFieldDepth);
+            }
             analysis = V2Emitter.emit(application, analysisLevel, modules, version,
                     l2.callGraph(), l2.externalSymbols(),
                     sdg == null ? null : sdg.paramIn, sdg == null ? null : sdg.paramOut);
