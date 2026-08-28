@@ -97,7 +97,7 @@ public class CodeAnalyzer implements Runnable {
     public static String projectRootPom;
 
     @Option(names = { "-a",
-            "--analysis-level" }, description = "Level of analysis to perform. Options: 1 (for just symbol table); 2 (for call graph); 3 (for intraprocedural dataflow: cfg/cdg/ddg). Default: 1")
+            "--analysis-level" }, description = "Level of analysis to perform. Options: 1 (for just symbol table); 2 (for call graph); 3 (for intraprocedural dataflow: cfg/cdg/ddg); 4 (adds the interprocedural SDG). Default: 1")
     public static int analysisLevel = 1;
 
     @Option(names = { "--include-test-classes" }, hidden = true, description = "Print logs to console.")
@@ -158,6 +158,11 @@ public class CodeAnalyzer implements Runnable {
                     + "ast (default; source-based, no build) or wala (post-build; requires compiled "
                     + "class files — uses WALA RTA + PDG for cfg/cdg/ddg).")
     private String l3Engine = "ast";
+
+    @Option(names = {
+            "--precision" }, description = "L4 points-to precision: rta (default; reuses the L2 "
+                    + "call-graph build) | 0-cfa | 0-1-cfa (rebuild the call graph for L4).")
+    public static String precision = "rta";
 
     @Option(names = {
             "--graph-field-depth" }, description = "DDG access-path bound k at --analysis-level 3 (default 3).")
@@ -358,9 +363,16 @@ public class CodeAnalyzer implements Runnable {
      * silently different result.
      */
     private void analyzeV2() throws Exception {
-        if (analysisLevel > 3) {
+        if (analysisLevel > 4) {
             throw new ParameterException(spec.commandLine(),
-                    "error: --schema v2 currently supports --analysis-level 1, 2, and 3 only");
+                    "error: --schema v2 currently supports --analysis-level 1, 2, 3, and 4 only");
+        }
+        if (analysisLevel >= 4
+                && !"rta".equalsIgnoreCase(precision)
+                && !"0-cfa".equalsIgnoreCase(precision)
+                && !"0-1-cfa".equalsIgnoreCase(precision)) {
+            throw new ParameterException(spec.commandLine(),
+                    "error: unknown --precision '" + precision + "'; use rta, 0-cfa or 0-1-cfa");
         }
         if (analysisLevel >= 3
                 && !"ast".equalsIgnoreCase(l3Engine)
@@ -468,13 +480,15 @@ public class CodeAnalyzer implements Runnable {
             L1Cache.save(cache, application, version, modules);
         }
 
+        // maxLevel reports what was computed: 4 only once the L4 pass ran (Task 6 flips this).
+        int emittedLevel = Math.min(analysisLevel, 3);
         Analysis analysis;
         if (analysisLevel >= 2) {
             L2CallGraph.Result l2 = L2CallGraph.build(application, modules, rtaEndpoints, externalCalls);
             analysis = V2Emitter.emit(
-                    application, analysisLevel, modules, version, l2.callGraph(), l2.externalSymbols());
+                    application, emittedLevel, modules, version, l2.callGraph(), l2.externalSymbols());
         } else {
-            analysis = V2Emitter.emit(application, analysisLevel, modules, version);
+            analysis = V2Emitter.emit(application, emittedLevel, modules, version);
         }
 
         if ("neo4j".equalsIgnoreCase(emit)) {

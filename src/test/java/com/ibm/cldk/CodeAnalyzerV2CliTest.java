@@ -54,6 +54,7 @@ class CodeAnalyzerV2CliTest {
     void resetStaticOptions() throws Exception {
         set("emit", "json");
         set("analysisLevel", 1);
+        set("precision", "rta");
         set("output", null);
         set("input", null);
         set("targetFiles", null);
@@ -278,13 +279,6 @@ class CodeAnalyzerV2CliTest {
     }
 
     @Test
-    void v2WithAnalysisLevelAboveThreeFailsLoudly(@TempDir Path tmp) throws IOException {
-        Path in = project(tmp.resolve("app"));
-        assertNotEquals(0, run("-i", in.toString(), "--schema", "v2", "-a", "4"),
-                "L4 is not implemented; asking for a level beyond 3 must be an error, not an L3 payload");
-    }
-
-    @Test
     void v2WalaL3EngineDegradesClearlyWhenBuildAbsent(@TempDir Path tmp) throws IOException {
         // No class files present — WALA cannot build the call graph; must exit 0 with declared
         // edges (L2 degraded mode) rather than crashing or rejecting the flag.
@@ -443,6 +437,30 @@ class CodeAnalyzerV2CliTest {
                 .getAsJsonObject().getAsJsonObject("application");
         assertTrue(app.has("external_symbols"),
                 "--external-calls homes out-of-project targets (e.g. java.lang.Math)");
+    }
+
+    @Test
+    void analysisLevelFourIsAccepted(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "-a", "4", "--no-build"),
+                "level 4 must run; WALA-unavailable degrades, never crashes");
+        JsonObject root = JsonParser.parseString(Files.readString(out.resolve("analysis.json"))).getAsJsonObject();
+        assertTrue(root.get("max_level").getAsInt() >= 3,
+                "degraded runs report what was actually computed");
+    }
+
+    @Test
+    void analysisLevelFiveStillFailsLoudly(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        assertNotEquals(0, run("-i", in.toString(), "-a", "5"));
+    }
+
+    @Test
+    void unknownPrecisionFailsLoudly(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        assertNotEquals(0, run("-i", in.toString(), "-a", "4", "--precision", "2-cfa"),
+                "unrecognized flag values exit non-zero (CLI contract)");
     }
 
 }
