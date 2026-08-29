@@ -258,11 +258,23 @@ public final class SummaryPass {
                     //
                     // A real def site keeps its `src`. The same conflation happens there in
                     // miniature, but it is the bounded may-flow over-approximation this pass already
-                    // accepts, and narrowing it *drops* flows: doing this unconditionally costs
-                    // three daytrader8 edges at `TradeDirect.completeOrder(Connection, Integer)`,
-                    // where `orderID` reaches the return only through a WALA `points-to` edge rooted
-                    // at the node defining the returned `orderData`. Under-approximation is the one
-                    // direction the L4 posture does not allow, so the correction stops at `@entry`.
+                    // accepts. Doing this unconditionally was measured against the pre-change
+                    // baseline and found to cost three daytrader8 edges at
+                    // `TradeDirect.completeOrder(Connection, Integer)`, all under the `var` label
+                    // `orderID` — but that label is nominal, not semantic: those edges are rooted at
+                    // the node defining `orderData` and reach a `getOrderID()` call on it, so `var`
+                    // names the *field* `OrderDataBean.orderID`, not this callable's own parameter of
+                    // the same spelling. The parameter reaches the return, if at all, only through
+                    // JDBC that neither this engine nor WALA models, so the three are a conflation of
+                    // the same class this fix removes, not a real flow it would drop.
+                    //
+                    // The scoping still stops at `@entry`, though — for a narrower reason than "it
+                    // would cost something real". This branch is a regression fix: its job is
+                    // restoring the baseline it perturbed, not auditing every other instance of this
+                    // same over-seeding. And the L4 posture forbids under-approximation on evidence
+                    // this thin — widening `src` to `dst` for every rule-1 edge, not just entry-rooted
+                    // ones, is measured safe on only two corpora, not enough to rule out dropping a
+                    // real flow somewhere neither has been run. That burden belongs to a follow-on.
                     seeds.add(ControlFlowGraph.ENTRY.equals(e.getSrc()) ? e.getDst() : e.getSrc());
                 }
             }

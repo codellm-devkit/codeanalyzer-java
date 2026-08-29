@@ -565,10 +565,28 @@ at `TradeDirect.completeOrder(Connection, Integer)` argument 1 (`buy` `338:11`, 
 boolean)` `524:19`, `sell` `445:11`): 283 against `before.txt`'s 286. The mechanism is the *same*
 conflation, arriving through a WALA edge instead of a synthetic one — `completeOrder`'s `ddg` carries
 `{566:5 → …, var orderID, prov:["points-to"]}`, and `566:5` is the node that defines the returned
-`orderData`, so seeding `orderID` there borrows `orderData`'s reach to the `return`. Losing it is
-nonetheless an under-approximation, which the L4 posture does not permit, and the flow is arguably
-real (the returned row is selected by `orderID` through the database). So `@entry` gets the
-correction and ordinary def sites keep `src`.
+`orderData`, so seeding `orderID` there borrows `orderData`'s reach to the `return`.
+
+**A later read of these three edges found they are not a real flow.** The `var` match is nominal, not
+semantic: `orderID` here names the field `OrderDataBean.orderID` (`OrderDataBean.java:68`), read off
+the returned bean at the `orderData.getOrderID()` call sites this edge's `dst` reaches
+(`TradeDirect.java:597,610,623,626,634`) — not `completeOrder(Connection, Integer)`'s own parameter of
+the same spelling. That parameter is bound into a JDBC call instead (`stmt.setInt(1,
+orderID.intValue())` at `:557`), and the row the query returns only *happens* to carry a column also
+named `orderID`; neither engine models that connection. So generalising the correction would not have
+dropped a real flow here — it would have removed a same-named-field conflation of exactly the class
+the `@entry` fix exists to remove, arriving by name collision with an unrelated field rather than by a
+shared synthetic node.
+
+That changes *why* the correction stays scoped to `@entry`, not whether it should. This branch is a
+regression fix: its job is restoring the `53a4029` baseline it perturbed — the 286-edge set these
+three already belonged to — not auditing every other instance of the same over-seeding. And the L4
+posture's asymmetry still applies on its own terms: it forbids under-approximation, and "measured safe
+on `l4-sdg-test` and daytrader8" is not the same claim as "safe everywhere" — widening `e.getDst()` to
+every rule-1 edge, not just entry-rooted ones, is a precision reform whose burden of proof (that it
+drops no real flow on some corpus neither of these two happens to contain) belongs to a follow-on that
+can gather it, not to this fix riding in on two corpora's worth of evidence. So `@entry` gets the
+correction and ordinary def sites keep `src`, for now.
 
 ### Real-application aggregates
 
@@ -638,4 +656,4 @@ proven; the follow-on should re-derive the argument before relying on it.
 - **Spec coverage:** #204's three goals map to Tasks 1 (entry defs + k-limit parity), 2 (measurement), 3 (spec correction). Its fourth DoD item — `L3 ⊆ L4` still holding and the L4 gate's counts updated — is Task 2 Step 5.
 - **Placeholder scan:** the Measurement section is deliberately a template Task 2 fills; every other step carries runnable commands or complete code. Task 2 Step 2's per-rule findings cannot be pre-written because they are the experiment's output, but the procedure and the stop condition (a lost summary edge is a defect) are concrete.
 - **Type consistency:** `build(cfg, fieldDepth, formals)` and `L3Overlays.build(..., formals)` use `List<String>` in both the interface block and the code; `JParameter::getName` matches the model; `ControlFlowGraph.ENTRY` is the existing constant, not a new literal.
-- **Known risk not designed away:** Task 1 seeds defs from parameter *names*, which collides with a local of the same name in an inner scope — the reaching-definitions kill at the reassignment handles the common case (covered by `aLocalShadowingTheFormalKillsTheEntryDefinition`), but a catch parameter or a lambda parameter shadowing a formal is not covered by any test here and is called out in #204's caveats. If Task 2's measurement shows spurious edges from shadowing, that is a finding for the follow-on, not a reason to hold Task 1.
+- **Known risk not designed away:** Task 1 seeds defs from parameter *names*, which collides with a local of the same name in an inner scope — the reaching-definitions kill at the reassignment handles the common case (covered by `aReassignmentKillsTheEntryDefinition`), but a catch parameter or a lambda parameter shadowing a formal is not covered by any test here and is called out in #204's caveats. If Task 2's measurement shows spurious edges from shadowing, that is a finding for the follow-on, not a reason to hold Task 1.
