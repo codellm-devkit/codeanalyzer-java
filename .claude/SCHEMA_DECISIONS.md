@@ -60,11 +60,12 @@ found not to). Expose `--precision {rta,0-cfa,0-1-cfa}`. Coarse heap precision �
 conservative but sound-leaning semantic `ddg`.
 
 ### D7 — L4 summary edges: own summary pass
-Compute `summary` (actual_in→actual_out) edges via a dedicated pass — hammock regions
-composed bottom-up over the SCC-condensation DAG (Tarjan), k-limited to a monotone
-fixpoint — mirroring `codeanalyzer-python` (`summaries.py`/`scc.py`). WALA's HRB
-summaries are lazily computed inside its Slicer and not cleanly exposable. Heaviest
-L4 unit; lands last.
+Compute `summary` (actual_in→actual_out) edges via a dedicated pass — composed
+bottom-up over the SCC-condensation DAG (Tarjan), k-limited to a monotone fixpoint.
+The reference analyzer (`codeanalyzer-python`) operates at statement granularity,
+not via region decomposition; region decomposition remains an open refinement for
+either analyzer. WALA's HRB summaries are lazily computed inside its Slicer and not
+cleanly exposable. Heaviest L4 unit; lands last.
 
 ### D8 — Identity: `can://java/<app>/<file>/<type>/<signature>`
 Java analog of the pilot's `can://python/…`; built from the existing `signatureOf()`.
