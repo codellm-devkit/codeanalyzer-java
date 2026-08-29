@@ -54,8 +54,10 @@ class DdgBuilderEntryDefsTest {
     }
 
     @Test
-    void aLocalShadowingTheFormalKillsTheEntryDefinition() {
+    void aReassignmentKillsTheEntryDefinition() {
         // `q` is reassigned before the read, so the read depends on the assignment, not on @entry.
+        // (A local can't shadow a formal — redeclaring `q` in its own method body doesn't compile —
+        // this is a plain reassignment, which is a distinct kill case worth its own regression test.)
         List<JDdgEdge> ddg = ddgOf("class T { int m(int q) { q = 5; return q; } }", "m");
         assertTrue(ddg.stream().noneMatch(e -> "@entry".equals(e.getSrc())),
                 "the reassignment kills the entry def before any use reaches it: " + ddg);

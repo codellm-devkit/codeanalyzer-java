@@ -153,10 +153,14 @@ class SummaryPassTest {
      * the real pipeline, because that is the point: {@link com.ibm.cldk.syntactic_analysis.controlflow.BodyNodeBuilder}
      * gives a for-each exactly one {@code loop} node spanning the whole statement (the header never
      * gets a node of its own), and {@link DdgBuilder} attributes the iterated expression and the loop
-     * variable to that node. So the loop node has a real outgoing ddg edge to {@code return x;}, but
-     * the only thing that can ever seed it for {@code q} is its own span text — a parameter has no ddg
-     * def site. With container kinds excluded from seeding, {@code flows(first)} was empty and the
-     * caller lost a summary edge for a flow that genuinely exists.
+     * variable to that node. So the loop node has a real outgoing ddg edge to {@code return x;}, and
+     * {@code q} is now defined at {@code @entry} too, so {@code DdgBuilder} roots a second edge there
+     * — {@code @entry → loop node} — which the ddg-rooted seeding rule alone now rides to the return.
+     * Before {@code @entry} defined the formals, a parameter had no ddg def site at all and the loop
+     * node's own span text was the only thing that could ever seed it; that text route still finds it
+     * too, redundantly. With container kinds excluded from seeding altogether, both routes vanish and
+     * {@code flows(first)} would again be empty — the caller would lose a summary edge for a flow that
+     * genuinely exists.
      */
     @Test
     void aParameterUsedOnlyInALoopHeaderStillReachesTheReturn() throws Exception {
@@ -193,8 +197,10 @@ class SummaryPassTest {
 
     /**
      * A parameter that reaches the return <em>through a local</em> — {@code int m(int q) { int t = q;
-     * return t; }} — the commonest Java shape after {@code return q;} itself. Nothing in the ddg is
-     * rooted at {@code q}: {@code DdgBuilder} gives a parameter no defining node, so the only edge is
+     * return t; }} — the commonest Java shape after {@code return q;} itself. The fixture is built by
+     * hand with no edge rooted at {@code q}: {@code DdgBuilder} now defines every formal at
+     * {@code @entry}, but this test exists to pin the <em>textual</em> fallback in isolation, so it
+     * constructs the pre-{@code @entry} shape on purpose — the only edge is
      * {@code (decl → ret, var "t")}; there is no call site; and the return text names {@code t}, not
      * {@code q}. The seed therefore has to come from the <em>declaration statement</em>'s own text,
      * which is what the widened word-boundary rule supplies — the existing {@code decl → ret} edge
