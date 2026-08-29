@@ -89,47 +89,22 @@ public final class L3WalaOverlays {
         int totalOverApprox = 0;
 
         for (MethodIr m : wala.applicationMethods()) {
-            // Derive the join keys using the same converters as RtaCallGraph (same package).
-            String binaryType =
-                    RtaCallGraph.binaryTypeName(m.method.getDeclaringClass().getName().toString());
-            String sig = RtaCallGraph.signature(
-                    m.method.getName().toString(), m.method.getDescriptor().toString());
-
-            // Look up the JType then the JCallable.
-            TypeEntry entry = typeIndex.get(binaryType);
-            if (entry == null) {
+            Optional<Joined> joinedOpt = join(m, typeIndex, parseCache, modules);
+            if (!joinedOpt.isPresent()) {
                 skippedNoMatch++;
                 continue;
             }
-            JCallable callable = entry.type.getCallables().get(sig);
-            if (callable == null) {
-                skippedNoMatch++;
-                continue;
-            }
-
-            // Re-parse the source (memoized; source text comes from the L1 JModule).
-            CompilationUnit cu = parseOrCached(parseCache, entry.moduleKey, modules);
-            if (cu == null) {
-                skippedNoMatch++;
-                continue;
-            }
-
-            // Find the BlockStmt for this method in the re-parsed CU.
-            Optional<BlockStmt> blockOpt =
-                    findBody(cu, binaryType, entry.packageName, callable);
-            if (!blockOpt.isPresent()) {
-                skippedNoMatch++;
-                continue;
-            }
-            BlockStmt blockStmt = blockOpt.get();
+            Joined joined = joinedOpt.get();
+            JCallable callable = joined.callable;
+            BlockStmt blockStmt = joined.blockStmt;
 
             // Source text for L1BuildContext (spans need the original text for byte offsets).
-            String source = modules.get(entry.moduleKey).getSource();
+            String source = modules.get(joined.moduleKey).getSource();
 
             // Build a minimal L1BuildContext: only spanOf() is called in BodyNodeBuilder.populate;
             // the solver-dependent helpers are not used on this path.
             L1BuildContext ctx = new L1BuildContext(
-                    applicationId, entry.moduleKey, source, 3, fieldDepth, "wala");
+                    applicationId, joined.moduleKey, source, 3, fieldDepth, "wala");
 
             // Populate the body-node graph seeded with the callable's existing L1 call nodes.
             ControlFlowGraph cfg = new ControlFlowGraph();
@@ -161,13 +136,57 @@ public final class L3WalaOverlays {
                 + totalOverApprox + " sentinel over-approximation(s)");
     }
 
+    // ----- the WALA-method → JCallable join -----------------------------------------------------
+
+    /**
+     * Resolves the WALA method {@code m} to the {@link JCallable} it was compiled from and the
+     * {@link BlockStmt} of its re-parsed source, or empty when any leg of the join fails (type not
+     * in the L1 map, signature not among its callables, source absent or unparseable, body not
+     * locatable — including a callable with no body at all, whose {@code body_span} is absent).
+     *
+     * <p>Shared with {@link L4WalaOverlays} so both overlay passes reach the same callable from the
+     * same WALA node; {@code parseCache} carries the memoized compilation units across the loop.
+     */
+    static Optional<Joined> join(
+            MethodIr m,
+            Map<String, TypeEntry> typeIndex,
+            Map<String, CompilationUnit> parseCache,
+            Map<String, JModule> modules) {
+
+        // Derive the join keys using the same converters as RtaCallGraph (same package).
+        String binaryType =
+                RtaCallGraph.binaryTypeName(m.method.getDeclaringClass().getName().toString());
+        String sig = RtaCallGraph.signature(
+                m.method.getName().toString(), m.method.getDescriptor().toString());
+
+        // Look up the JType then the JCallable.
+        TypeEntry entry = typeIndex.get(binaryType);
+        if (entry == null) {
+            return Optional.empty();
+        }
+        JCallable callable = entry.type.getCallables().get(sig);
+        if (callable == null) {
+            return Optional.empty();
+        }
+
+        // Re-parse the source (memoized; source text comes from the L1 JModule).
+        CompilationUnit cu = parseOrCached(parseCache, entry.moduleKey, modules);
+        if (cu == null) {
+            return Optional.empty();
+        }
+
+        // Find the BlockStmt for this method in the re-parsed CU.
+        return findBody(cu, binaryType, entry.packageName, callable)
+                .map(block -> new Joined(entry.moduleKey, callable, block));
+    }
+
     // ----- index building -----------------------------------------------------------------------
 
     /**
      * Builds a map from WALA binary type name (e.g. {@code "com.example.Widget$Inner"}) to the
      * module key and JType that holds that type's callables.
      */
-    private static Map<String, TypeEntry> buildTypeIndex(Map<String, JModule> modules) {
+    static Map<String, TypeEntry> buildTypeIndex(Map<String, JModule> modules) {
         Map<String, TypeEntry> index = new LinkedHashMap<>();
         for (Map.Entry<String, JModule> entry : modules.entrySet()) {
             String moduleKey = entry.getKey();
@@ -357,9 +376,22 @@ public final class L3WalaOverlays {
         return last > 0 ? moduleId.substring(0, last) : moduleId;
     }
 
-    // ----- inner type ---------------------------------------------------------------------------
+    // ----- inner types --------------------------------------------------------------------------
 
-    private static final class TypeEntry {
+    /** One WALA method successfully joined to its L1 callable and re-parsed body block. */
+    static final class Joined {
+        final String moduleKey;
+        final JCallable callable;
+        final BlockStmt blockStmt;
+
+        Joined(String moduleKey, JCallable callable, BlockStmt blockStmt) {
+            this.moduleKey = moduleKey;
+            this.callable = callable;
+            this.blockStmt = blockStmt;
+        }
+    }
+
+    static final class TypeEntry {
         final String moduleKey;
         final JType type;
         final String packageName;

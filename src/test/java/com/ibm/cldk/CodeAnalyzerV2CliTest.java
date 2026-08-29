@@ -48,12 +48,16 @@ class CodeAnalyzerV2CliTest {
 
     /**
      * The pre-existing CLI options on {@link CodeAnalyzer} are static, so a value set by one test
-     * would leak into the next. Reset the ones these tests touch so each case starts from defaults.
+     * would leak into the next. Reset the ones these tests touch so each case starts from defaults —
+     * and again afterwards, so whichever test happens to run last cannot leak {@code emit=neo4j} or a
+     * deliberately bad {@code --precision} into another test class that drives the same CLI.
      */
     @BeforeEach
+    @AfterEach
     void resetStaticOptions() throws Exception {
         set("emit", "json");
         set("analysisLevel", 1);
+        set("precision", "rta");
         set("output", null);
         set("input", null);
         set("targetFiles", null);
@@ -167,10 +171,10 @@ class CodeAnalyzerV2CliTest {
         assertEquals(0, run("--emit", "schema", "-o", out.toString()));
         JsonObject doc = JsonParser.parseString(Files.readString(out.resolve("schema.neo4j.json")))
                 .getAsJsonObject();
-        assertEquals("2.0.0", doc.get("schema_version").getAsString());
+        assertEquals("2.1.0", doc.get("schema_version").getAsString());
         assertEquals(0, run("--emit", "schema", "-o", out.toString(), "--schema", "v1"),
                 "--emit schema ignores --schema");
-        assertEquals("2.0.0", JsonParser.parseString(Files.readString(out.resolve("schema.neo4j.json")))
+        assertEquals("2.1.0", JsonParser.parseString(Files.readString(out.resolve("schema.neo4j.json")))
                 .getAsJsonObject().get("schema_version").getAsString());
     }
 
@@ -275,13 +279,6 @@ class CodeAnalyzerV2CliTest {
         JsonObject root = JsonParser.parseString(json).getAsJsonObject();
         assertEquals(3, root.get("max_level").getAsInt());
         assertTrue(json.contains("\"cfg\""), "level 3 lays the cfg overlay on callables");
-    }
-
-    @Test
-    void v2WithAnalysisLevelAboveThreeFailsLoudly(@TempDir Path tmp) throws IOException {
-        Path in = project(tmp.resolve("app"));
-        assertNotEquals(0, run("-i", in.toString(), "--schema", "v2", "-a", "4"),
-                "L4 is not implemented; asking for a level beyond 3 must be an error, not an L3 payload");
     }
 
     @Test
@@ -443,6 +440,40 @@ class CodeAnalyzerV2CliTest {
                 .getAsJsonObject().getAsJsonObject("application");
         assertTrue(app.has("external_symbols"),
                 "--external-calls homes out-of-project targets (e.g. java.lang.Math)");
+    }
+
+    @Test
+    void analysisLevelFourIsAccepted(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "-a", "4", "--no-build"),
+                "level 4 must run; WALA-unavailable degrades, never crashes");
+        JsonObject root = JsonParser.parseString(Files.readString(out.resolve("analysis.json"))).getAsJsonObject();
+        assertEquals(4, root.get("max_level").getAsInt(),
+                "max_level is the requested level: the L4 vertices/param edges are engine-free and "
+                        + "still ran, even though the semantic ddg (WALA-dependent) degraded");
+    }
+
+    @Test
+    void analysisLevelFiveStillFailsLoudly(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        assertNotEquals(0, run("-i", in.toString(), "-a", "5"));
+    }
+
+    @Test
+    void unknownPrecisionFailsLoudly(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        assertNotEquals(0, run("-i", in.toString(), "-a", "4", "--precision", "2-cfa"),
+                "unrecognized flag values exit non-zero (CLI contract)");
+    }
+
+    @Test
+    void unknownPrecisionFailsLoudlyUnderEmitNeo4jToo(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        // --emit neo4j raises the level to 4 itself, and the precision check is level-gated: if it ran
+        // before the raise, this would exit 0 and silently fall back to RTA.
+        assertNotEquals(0, run("-i", in.toString(), "--emit", "neo4j", "--precision", "2-cfa"),
+                "unrecognized flag values exit non-zero (CLI contract), --emit neo4j included");
     }
 
 }

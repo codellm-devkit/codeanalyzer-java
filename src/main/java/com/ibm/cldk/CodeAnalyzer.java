@@ -31,6 +31,8 @@ import com.ibm.cldk.schema.V2Json;
 import com.ibm.cldk.syntactic_analysis.L1Cache;
 import com.ibm.cldk.syntactic_analysis.L1Extractor;
 import com.ibm.cldk.syntactic_analysis.L2CallGraph;
+import com.ibm.cldk.syntactic_analysis.dataflow.SdgVertices;
+import com.ibm.cldk.syntactic_analysis.dataflow.SummaryPass;
 import com.ibm.cldk.utils.BuildProject;
 import com.ibm.cldk.utils.Log;
 import com.ibm.cldk.wala.WalaAnalysis;
@@ -97,7 +99,7 @@ public class CodeAnalyzer implements Runnable {
     public static String projectRootPom;
 
     @Option(names = { "-a",
-            "--analysis-level" }, description = "Level of analysis to perform. Options: 1 (for just symbol table); 2 (for call graph); 3 (for intraprocedural dataflow: cfg/cdg/ddg). Default: 1")
+            "--analysis-level" }, description = "Level of analysis to perform. Options: 1 (for just symbol table); 2 (for call graph); 3 (for intraprocedural dataflow: cfg/cdg/ddg); 4 (adds the interprocedural SDG). Default: 1")
     public static int analysisLevel = 1;
 
     @Option(names = { "--include-test-classes" }, hidden = true, description = "Print logs to console.")
@@ -144,7 +146,8 @@ public class CodeAnalyzer implements Runnable {
 
     @Option(names = {
             "--no-rta" }, description = "Skip the WALA RTA overlay at --schema v2 --analysis-level 2, "
-                    + "emitting declared-only call edges without building the application.")
+                    + "emitting declared-only call edges without building the application. Does not "
+                    + "suppress the L4 WALA build at --analysis-level 4: the semantic ddg still needs it.")
     private boolean noRta = false;
 
     @Option(names = {
@@ -158,6 +161,11 @@ public class CodeAnalyzer implements Runnable {
                     + "ast (default; source-based, no build) or wala (post-build; requires compiled "
                     + "class files — uses WALA RTA + PDG for cfg/cdg/ddg).")
     private String l3Engine = "ast";
+
+    @Option(names = {
+            "--precision" }, description = "L4 points-to precision: rta (default; reuses the L2 "
+                    + "call-graph build) | 0-cfa | 0-1-cfa (rebuild the call graph for L4).")
+    public static String precision = "rta";
 
     @Option(names = {
             "--graph-field-depth" }, description = "DDG access-path bound k at --analysis-level 3 (default 3).")
@@ -353,21 +361,19 @@ public class CodeAnalyzer implements Runnable {
     }
 
     /**
-     * Emit the canonical schema v2 payload. Levels 1 (containment tree) and 2 (the {@code call_graph}
-     * overlay) are supported, whole-project, JSON. Anything else is an explicit error rather than a
-     * silently different result.
+     * Emit the canonical schema v2 payload. Levels 1 (containment tree), 2 (the {@code call_graph}
+     * overlay), 3 (the intraprocedural {@code cfg}/{@code cdg}/{@code ddg} overlays) and 4 (the
+     * interprocedural SDG overlays) are supported, whole-project, JSON. Anything else is an explicit
+     * error rather than a silently different result.
      */
     private void analyzeV2() throws Exception {
-        if (analysisLevel > 3) {
+        if (analysisLevel > 4) {
             throw new ParameterException(spec.commandLine(),
-                    "error: --schema v2 currently supports --analysis-level 1, 2, and 3 only");
+                    "error: --schema v2 currently supports --analysis-level 1, 2, 3, and 4 only");
         }
-        if (analysisLevel >= 3
-                && !"ast".equalsIgnoreCase(l3Engine)
-                && !"wala".equalsIgnoreCase(l3Engine)) {
-            throw new ParameterException(spec.commandLine(),
-                    "error: unknown --l3-engine '" + l3Engine + "'; use ast or wala");
-        }
+        // Ahead of the flag-value checks below, because it raises the effective level to 4 and those
+        // checks are level-gated: validating first would let `--emit neo4j --precision garbage` run at
+        // level 4 with an unrecognised value and silently fall back, against the CLI contract.
         if ("neo4j".equalsIgnoreCase(emit)) {
             // The graph is always full-depth (keystone depth rule): depth/section selectors cannot
             // be combined with it — error loudly rather than silently project a partial graph.
@@ -381,8 +387,21 @@ public class CodeAnalyzer implements Runnable {
                         "error: --graph-field-depth does not apply to --emit neo4j; "
                                 + "the graph is always projected at full depth");
             }
-            analysisLevel = 3;
+            analysisLevel = 4;
             externalCalls = true;
+        }
+        if (analysisLevel >= 4
+                && !"rta".equalsIgnoreCase(precision)
+                && !"0-cfa".equalsIgnoreCase(precision)
+                && !"0-1-cfa".equalsIgnoreCase(precision)) {
+            throw new ParameterException(spec.commandLine(),
+                    "error: unknown --precision '" + precision + "'; use rta, 0-cfa or 0-1-cfa");
+        }
+        if (analysisLevel >= 3
+                && !"ast".equalsIgnoreCase(l3Engine)
+                && !"wala".equalsIgnoreCase(l3Engine)) {
+            throw new ParameterException(spec.commandLine(),
+                    "error: unknown --l3-engine '" + l3Engine + "'; use ast or wala");
         }
         if (sourceAnalysis != null || targetFiles != null) {
             throw new ParameterException(spec.commandLine(),
@@ -458,6 +477,24 @@ public class CodeAnalyzer implements Runnable {
             if (wala != null) {
                 L3WalaOverlays.apply(wala, input, modules, graphFieldDepth);
             }
+            // L4: the semantic ddg needs a WALA build regardless of --l3-engine, so build it here (or
+            // reuse the instance --l3-engine wala already built above) while the jars are still live.
+            // Must run strictly after the L3 overlay above: primeL4ModRef() permanently mutates the
+            // WalaAnalysis instance's shared mod/ref maps, and every PDG built afterwards — including
+            // L3's — would see the primed closure instead of the empty-defaulting one L3 relies on.
+            if (analysisLevel >= 4) {
+                if (wala == null) {
+                    String buildCommand = noBuild ? null : (build == null ? "auto" : build);
+                    String deps = dependencyDir == null ? null : dependencyDir.toString();
+                    wala = WalaAnalysis.of(input, deps, buildCommand, precision).orElse(null);
+                }
+                if (wala != null) {
+                    L4WalaOverlays.apply(wala, modules, graphFieldDepth);
+                } else {
+                    Log.warn("L4 semantic ddg unavailable (WALA build failed); emitting the derived "
+                            + "SDG vertices and param edges only");
+                }
+            }
         } finally {
             BuildProject.cleanLibraryDependencies();
         }
@@ -468,11 +505,23 @@ public class CodeAnalyzer implements Runnable {
             L1Cache.save(cache, application, version, modules);
         }
 
+        // maxLevel reports the requested level: the L1-L3 passes above always run to that level (or
+        // degrade a specific overlay with a warning), and the L4 vertices/param edges below are
+        // engine-free, so they run whenever analysisLevel >= 4 regardless of the WALA build's fate.
         Analysis analysis;
         if (analysisLevel >= 2) {
             L2CallGraph.Result l2 = L2CallGraph.build(application, modules, rtaEndpoints, externalCalls);
-            analysis = V2Emitter.emit(
-                    application, analysisLevel, modules, version, l2.callGraph(), l2.externalSymbols());
+            // SdgVertices needs the callee ids L2CallGraph.build just backfilled onto call body nodes,
+            // and no dependency jars, so it runs here rather than inside the try block above.
+            SdgVertices.Result sdg = null;
+            if (analysisLevel >= 4) {
+                sdg = SdgVertices.apply(modules);
+                // Summaries read the vertices SdgVertices just added, so this must follow it.
+                SummaryPass.apply(modules, l2.callGraph(), graphFieldDepth);
+            }
+            analysis = V2Emitter.emit(application, analysisLevel, modules, version,
+                    l2.callGraph(), l2.externalSymbols(),
+                    sdg == null ? null : sdg.paramIn, sdg == null ? null : sdg.paramOut);
         } else {
             analysis = V2Emitter.emit(application, analysisLevel, modules, version);
         }

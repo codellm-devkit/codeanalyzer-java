@@ -38,6 +38,18 @@ public final class V2Emitter {
             String analyzerVersion,
             List<JCallEdge> callGraph,
             Map<String, JExternalSymbol> externalSymbols) {
+        return emit(appName, maxLevel, modules, analyzerVersion, callGraph, externalSymbols, null, null);
+    }
+
+    public static Analysis emit(
+            String appName,
+            int maxLevel,
+            Map<String, JModule> modules,
+            String analyzerVersion,
+            List<JCallEdge> callGraph,
+            Map<String, JExternalSymbol> externalSymbols,
+            List<JIdEdge> paramIn,
+            List<JIdEdge> paramOut) {
         JApplication application = new JApplication();
         application.setId(CanId.applicationId(appName));
 
@@ -54,6 +66,12 @@ public final class V2Emitter {
         }
         if (externalSymbols != null && !externalSymbols.isEmpty()) {
             application.setExternalSymbols(externalSymbols);
+        }
+        if (paramIn != null && !paramIn.isEmpty()) {
+            application.setParamIn(paramIn);
+        }
+        if (paramOut != null && !paramOut.isEmpty()) {
+            application.setParamOut(paramOut);
         }
 
         Analysis analysis = new Analysis();

@@ -21,7 +21,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The schema v2 Neo4j graph catalog (graph contract {@code 2.0.0}) — the in-repo source of truth
+ * The schema v2 Neo4j graph catalog (graph contract {@code 2.1.0}) — the in-repo source of truth
  * for what {@link V2GraphProjector} may emit, serialized by {@code --emit schema} and enforced by
  * the v2 conformance test. Mirrors codeanalyzer-python's {@code neo4j/schema.py} vocabulary with
  * {@code J}/{@code J_} namespacing; java-only constructs (enum constants, record components,
@@ -40,7 +40,9 @@ public final class V2SchemaCatalog {
 
     private V2SchemaCatalog() {}
 
-    public static final String SCHEMA_VERSION = "2.0.0";
+    // 2.1.0: additive MINOR — L4 SDG overlay (JBodyNode.var/call_node; J_PARAM_IN/J_PARAM_OUT/
+    // J_SUMMARY, reserved at 2.0.0, now actually emitted).
+    public static final String SCHEMA_VERSION = "2.1.0";
 
     /** Labels layered onto a node in addition to its merge + specific labels. */
     public static final List<String> MARKER_LABELS = Arrays.asList("JEntrypoint");
@@ -125,7 +127,9 @@ public final class V2SchemaCatalog {
                         .put("return_type", "string").put("accessibility", "string")
                         .put("is_constructor_call", "boolean").put("is_static_call", "boolean")
                         .put("argument_types", "string[]").put("argument_expr", "string[]")
-                        .put("_module", "string"))));
+                        .put("_module", "string")
+                        // L4 SDG synthetic-vertex payload (python-parity names).
+                        .put("var", "string").put("call_node", "string"))));
 
         n.add(node("JPackage", "JPackage", "name", new P().put("name", "string").done()));
 
@@ -168,7 +172,8 @@ public final class V2SchemaCatalog {
         r.add(rel("J_CDG", body, body, none));
         r.add(rel("J_DDG", body, body,
                 new P().put("var", "string").put("prov", "string[]").put("_k", "string").done()));
-        // L4 SDG — declared so the contract is stable; not emitted until L4 lands.
+        // L4 SDG — reserved at 2.0.0, emitted from 2.1.0: J_PARAM_IN/J_PARAM_OUT from the
+        // application-scope param_in/param_out edges, J_SUMMARY per callable.
         r.add(rel("J_PARAM_IN", body, body, new P().put("var", "string").done()));
         r.add(rel("J_PARAM_OUT", body, body, new P().put("var", "string").done()));
         r.add(rel("J_SUMMARY", body, body, none));

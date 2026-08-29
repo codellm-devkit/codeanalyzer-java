@@ -77,6 +77,9 @@ public class JCallable {
     /** L3 data-dependence edges (prov {@code ssa}) over this callable's body nodes; null below level 3. */
     private List<JDdgEdge> ddg;
 
+    /** L4 {@code actual_in → actual_out} summary edges (local ids); null (absent) below level 4. */
+    private List<JIdEdge> summary;
+
     /** Local (method-body) classes, keyed by simple name — nesting encoded by containment (D4). */
     private Map<String, JType> types = new LinkedHashMap<>();
 }
