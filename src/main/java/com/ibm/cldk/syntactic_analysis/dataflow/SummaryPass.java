@@ -9,6 +9,7 @@ import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.schema.JParameter;
 import com.ibm.cldk.schema.JType;
 import com.ibm.cldk.schema.Span;
+import com.ibm.cldk.syntactic_analysis.controlflow.ControlFlowGraph;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -36,13 +37,15 @@ import java.util.regex.Pattern;
  * <p>The relation is derived <em>syntactically</em>, in the weak-update (may-flow, never-drop)
  * posture the L4 design takes: a parameter reaches the return if the callable's {@code ddg} carries
  * it there, if a call site passes it on and that callee's own summary returns it, or if the
- * parameter is simply <em>named</em> in a body node's source text. That last rule is what makes the
- * pass useful at all on ordinary code, because {@link DdgBuilder} gives a parameter no defining node
- * — nothing in the {@code ddg} is ever rooted at one. Without it {@code int c(int z) { return z - 3;
- * }} has no def-use to follow at all, and {@code int m(int q) { int t = q; return t; }} has only
- * {@code (decl → ret, var "t")}, which no seed reaches. The cost is counting a parameter merely
+ * parameter is simply <em>named</em> in a body node's source text. That last rule is what made the
+ * pass useful at all on ordinary code back when {@link DdgBuilder} gave a parameter no defining node,
+ * so nothing in the {@code ddg} could be rooted at one: {@code int c(int z) { return z - 3; }} had no
+ * def-use to follow at all, and {@code int m(int q) { int t = q; return t; }} had only
+ * {@code (decl → ret, var "t")}, which no seed reached. The cost is counting a parameter merely
  * <em>mentioned</em> in a statement as flowing out of it. Over-approximating there is the accepted
- * trade.
+ * trade. {@code DdgBuilder} now defines the formals at {@code @entry}, so the ddg rule reaches these
+ * shapes on its own and the two text rules have been measured redundant on both corpora; retiring
+ * them is a separate change.
  */
 public final class SummaryPass {
 
@@ -204,11 +207,12 @@ public final class SummaryPass {
     }
 
     /**
-     * Where a parameter's value is visible, syntactically: the def end of any {@code ddg} edge whose
-     * access path is rooted at it, any call-site {@code actual_in} vertex whose argument text names
-     * it, and <em>every</em> body node whose source text names it (see the class javadoc — a parameter
-     * has no defining node in the {@code ddg}, so text is the only thing that can put it on the map at
-     * all).
+     * Where a parameter's value is visible, syntactically: an end of any {@code ddg} edge whose
+     * access path is rooted at it — the def end for an ordinary edge, the <em>use</em> end for one
+     * rooted at {@code @entry} (see the comment on that rule) — any call-site {@code actual_in}
+     * vertex whose argument text names it, and <em>every</em> body node whose source text names it
+     * (see the class javadoc for why the two text rules exist and why they now have nothing left to
+     * add).
      *
      * <p>Every kind with a span is seedable, containers included. A {@code branch}/{@code loop}/
      * {@code switch} span swallows the statements nested inside it, so seeding one on a name mentioned
@@ -241,7 +245,25 @@ public final class SummaryPass {
         if (ddg != null) {
             for (JDdgEdge e : ddg) {
                 if (name.equals(base(e.getVar()))) {
-                    seeds.add(e.getSrc());
+                    // For an entry-rooted edge, the *use* end — the obvious `e.getSrc()` is wrong
+                    // there. A seed is a node id, and the graph `facts` builds is keyed on node
+                    // identity alone (it discards `var`), so seeding a def node also hands this
+                    // parameter the out-edges of every *other* variable defined at that node.
+                    // `@entry` is where that bites hardest: `DdgBuilder` defines all of a callable's
+                    // formals at that one synthetic node, so `getSrc()` collapses every parameter's
+                    // seed set to `{@entry}` and lets one parameter's reach credit them all — 43
+                    // spurious summary edges on daytrader8, every one of them on a callable of arity
+                    // greater than 1. The dst is where *this* parameter's value is observed, which
+                    // is exactly what the `var`-filtered edge licenses and no more.
+                    //
+                    // A real def site keeps its `src`. The same conflation happens there in
+                    // miniature, but it is the bounded may-flow over-approximation this pass already
+                    // accepts, and narrowing it *drops* flows: doing this unconditionally costs
+                    // three daytrader8 edges at `TradeDirect.completeOrder(Connection, Integer)`,
+                    // where `orderID` reaches the return only through a WALA `points-to` edge rooted
+                    // at the node defining the returned `orderData`. Under-approximation is the one
+                    // direction the L4 posture does not allow, so the correction stops at `@entry`.
+                    seeds.add(ControlFlowGraph.ENTRY.equals(e.getSrc()) ? e.getDst() : e.getSrc());
                 }
             }
         }

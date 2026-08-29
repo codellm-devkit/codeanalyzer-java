@@ -359,7 +359,9 @@ Read that "no change" carefully, though. **Every callable in `l4-sdg-test` has a
 fixture's maximum parameter count is one. The daytrader8 run below shows the change *does* move
 `summary` edges, by a mechanism that needs two parameters in one callable to fire. So the stable
 count here is not evidence that the change is summary-neutral; it is evidence that this fixture
-cannot see the difference. That is a gap in the fixture, and the follow-on should close it.
+cannot see the difference. That is a gap in the fixture, and the follow-on should close it. (Closed:
+`com/l4/Arity.java` adds a two-parameter callable of which only one parameter flows out, which moves
+the fixture's totals to `param_in` 9, `param_out` 7, `summary` 6.)
 
 ### Seeding-rule redundancy
 
@@ -486,6 +488,88 @@ observed, not argued. The reasoning for why it should hold in general — reach 
 `var == name` edges is exactly `{dst} ∪ reach(dst)`, so seeding `dst` is the same set minus the other
 parameters' edges — is inference, and the follow-on should re-derive it rather than take it from here.
 
+#### Exact-set restoration, shown rather than asserted
+
+The claim above was originally recorded as counts. Re-derived end to end while shipping the fix, as
+**sets** — the extractor emits one `callable-id ⇥ src ⇥ dst` line per summary edge, sorted, so an
+empty `diff` is set (indeed sorted-multiset) identity and the matching digest is independent
+corroboration. Run from the repo root:
+
+```bash
+git worktree add /tmp/l3-seedfix 228f270~1
+(cd /tmp/l3-seedfix && ./gradlew fatJar -x test -q)
+./gradlew fatJar -x test -q
+
+mkdir -p /tmp/m4
+java -jar /tmp/l3-seedfix/build/libs/codeanalyzer-3.0.0.jar \
+  -i src/test/resources/test-applications/daytrader8 -a 4 --no-build -o /tmp/m4/before
+java -jar build/libs/codeanalyzer-3.0.0.jar \
+  -i src/test/resources/test-applications/daytrader8 -a 4 --no-build -o /tmp/m4/after
+
+cat > /tmp/m4/summaries.py <<'PY'
+import json, sys
+def walk(types, out):
+    for t in types.values():
+        walk(t.get("types") or {}, out)
+        for c in (t.get("callables") or {}).values():
+            walk(c.get("types") or {}, out)
+            for e in c.get("summary") or []:
+                out.append("%s\t%s\t%s" % (c["id"], e["src"], e["dst"]))
+d, out = json.load(open(sys.argv[1])), []
+for f in d["application"]["symbol_table"].values():
+    walk(f.get("types") or {}, out)
+print("\n".join(sorted(out)))
+PY
+python3 /tmp/m4/summaries.py /tmp/m4/before/analysis.json > /tmp/m4/before.txt
+python3 /tmp/m4/summaries.py /tmp/m4/after/analysis.json  > /tmp/m4/after.txt
+wc -l /tmp/m4/before.txt /tmp/m4/after.txt
+diff /tmp/m4/before.txt /tmp/m4/after.txt && echo "EXACT SET MATCH"
+shasum -a 256 /tmp/m4/before.txt /tmp/m4/after.txt
+git worktree remove /tmp/l3-seedfix
+```
+
+```
+Preparing worktree (detached HEAD 53a4029)
+HEAD is now at 53a4029 feat(l4): interprocedural SDG — param_in/param_out, semantic DDG, summary edges, graph 2.1.0 (#203)
+     286 /tmp/m4/before.txt
+     286 /tmp/m4/after.txt
+     572 total
+EXACT SET MATCH
+be6b830272fee1fc2af9125ccc1b9bec6dbdffa718d93065d23978f3926d198a  /tmp/m4/before.txt
+be6b830272fee1fc2af9125ccc1b9bec6dbdffa718d93065d23978f3926d198a  /tmp/m4/after.txt
+```
+
+The same comparison on `l4-sdg-test` (now carrying the two-parameter `Arity` discriminator) is 6
+edges on both sides with an empty `diff`. And with rules 2 and 3 disabled in a scratch worktree —
+the toggles re-applied on top of the corrected rule 1 — **corrected rule 1 alone** is also 286 and
+also `diff`-empty against `before.txt`, which is the row the retirement decision actually rests on:
+
+```bash
+java -Dseed.rule2=0 -Dseed.rule3=0 -jar /tmp/l3-r1only/build/libs/codeanalyzer-3.0.0.jar \
+  -i "$PWD/src/test/resources/test-applications/daytrader8" -a 4 --no-build -o /tmp/m4/dt-R1only
+python3 /tmp/m4/summaries.py /tmp/m4/dt-R1only/analysis.json > /tmp/m4/dt-R1only.txt
+wc -l /tmp/m4/before.txt /tmp/m4/dt-R1only.txt
+diff /tmp/m4/before.txt /tmp/m4/dt-R1only.txt && echo IDENTICAL
+```
+
+```
+     286 /tmp/m4/before.txt
+     286 /tmp/m4/dt-R1only.txt
+     572 total
+IDENTICAL
+```
+
+**The correction must stay scoped to `@entry`.** Generalising it — `seeds.add(e.getDst())` for
+*every* rule-1 edge, which the inference above invites — was measured and **loses three edges**, all
+at `TradeDirect.completeOrder(Connection, Integer)` argument 1 (`buy` `338:11`, `completeOrder(Integer,
+boolean)` `524:19`, `sell` `445:11`): 283 against `before.txt`'s 286. The mechanism is the *same*
+conflation, arriving through a WALA edge instead of a synthetic one — `completeOrder`'s `ddg` carries
+`{566:5 → …, var orderID, prov:["points-to"]}`, and `566:5` is the node that defines the returned
+`orderData`, so seeding `orderID` there borrows `orderData`'s reach to the `return`. Losing it is
+nonetheless an under-approximation, which the L4 posture does not permit, and the flow is arguably
+real (the returned row is selected by `orderID` through the database). So `@entry` gets the
+correction and ordinary def sites keep `src`.
+
 ### Real-application aggregates
 
 `daytrader8`, 1229 callables, 141 source files. Same two jars, `-a 4 --no-build`.
@@ -523,7 +607,8 @@ real code — passes: 43% more `ddg` edges for ~1% more wall clock.
 The redundancy evidence is unambiguous: on both corpora, disabling the call-argument-text rule
 (`SummaryPass.java:248-257`) or the whole-body-span-text rule (`:258-262`) loses zero summary edges,
 and rule 1 alone reproduces the entire emitted set. That is the retirement case, and entry defs are
-what created it — the same experiment run against `53a4029` gives rule 1 alone **zero** edges. But
+what created it — the same experiment run against `53a4029` gives rule 1 alone **zero** edges on the
+fixture. But
 rule 1 as currently written seeds the shared `@entry` node, which conflates all of a callable's
 formals and manufactured 43 false summary edges on daytrader8; retiring the textual rules on top of
 that would trade a documented, bounded textual over-approximation for an undocumented semantic one

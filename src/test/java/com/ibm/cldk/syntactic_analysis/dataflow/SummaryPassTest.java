@@ -9,6 +9,7 @@ import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.schema.JCallEdge;
 import com.ibm.cldk.schema.JCallable;
 import com.ibm.cldk.schema.JDdgEdge;
+import com.ibm.cldk.schema.JIdEdge;
 import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.schema.JParameter;
 import com.ibm.cldk.schema.JType;
@@ -165,6 +166,29 @@ class SummaryPassTest {
         assertEquals(1, callFirst.getSummary().size());
         assertTrue(callFirst.getSummary().get(0).getSrc().endsWith("/actual_in:0"));
         assertTrue(callFirst.getSummary().get(0).getDst().endsWith("/actual_out"));
+    }
+
+    /**
+     * Two parameters in one callable, only one of which flows out — the discriminator no other
+     * fixture callable can be, since every other has arity 0 or 1. {@code Arity.leak(p, q)} returns a
+     * copy of {@code p} and hands {@code q} to a {@code void} callee, so {@code caller} may shortcut
+     * its {@code actual_in:0} and must not shortcut its {@code actual_in:1}.
+     *
+     * <p>The negative half is the one with teeth. Seeding a parameter at the <em>def</em> end of its
+     * {@code ddg} edge seeds every formal at the one shared {@code @entry} node — the reachability
+     * graph is keyed on node identity, not on {@code var} — so the search follows {@code p}'s edge to
+     * the return on {@code q}'s behalf and {@code caller} carries two summary edges instead of one.
+     */
+    @Test
+    void onlyTheParameterThatActuallyFlowsIsShortcut() throws Exception {
+        Map<String, JModule> modules = analyzed();
+        JCallable caller = callable(modules, "/Arity/caller(int, int)");
+        assertNotNull(caller.getSummary(), "p flows out of leak, so caller shortcuts that argument");
+        List<String> shortcut = new ArrayList<>();
+        for (JIdEdge e : caller.getSummary()) {
+            shortcut.add(e.getSrc().substring(e.getSrc().lastIndexOf('/') + 1));
+        }
+        assertEquals(List.of("actual_in:0"), shortcut, "q reaches only a void callee — argument 1 is not a flow");
     }
 
     /**
@@ -384,9 +408,9 @@ class SummaryPassTest {
                     edges[0]++;
                 }));
         // Without this the endpoint check passes vacuously on a regression that empties every
-        // summary. Five is the fixture's whole set: Chain.a→b, Chain.b→c, Mutual.even→odd,
-        // Mutual.odd→even, Loops.callFirst→first. Heap's two sites cannot carry one (void callee,
-        // no-arg callee).
-        assertEquals(5, edges[0], "every fixture summary edge is checked, and there are five of them");
+        // summary. Six is the fixture's whole set: Chain.a→b, Chain.b→c, Mutual.even→odd,
+        // Mutual.odd→even, Loops.callFirst→first and Arity.caller→leak. Heap's two sites cannot
+        // carry one (void callee, no-arg callee), and neither can Arity.leak→sink (void callee).
+        assertEquals(6, edges[0], "every fixture summary edge is checked, and there are six of them");
     }
 }
