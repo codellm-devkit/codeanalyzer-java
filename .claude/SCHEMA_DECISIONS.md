@@ -62,10 +62,11 @@ conservative but sound-leaning semantic `ddg`.
 ### D7 — L4 summary edges: own summary pass
 Compute `summary` (actual_in→actual_out) edges via a dedicated pass — composed
 bottom-up over the SCC-condensation DAG (Tarjan), k-limited to a monotone fixpoint.
-The reference analyzer (`codeanalyzer-python`) operates at statement granularity,
-not via region decomposition; region decomposition remains an open refinement for
-either analyzer. WALA's HRB summaries are lazily computed inside its Slicer and not
-cleanly exposable. Heaviest L4 unit; lands last.
+The Python pilot operates at statement granularity, not via region decomposition;
+region decomposition remains an open refinement for either analyzer. Both persist
+`cfg` and `cdg` on the callable and compute post-dominators; what remains is the
+region decomposition itself. WALA's HRB summaries are lazily computed inside its
+Slicer and not cleanly exposable. Heaviest L4 unit; lands last.
 
 ### D8 — Identity: `can://java/<app>/<file>/<type>/<signature>`
 Java analog of the pilot's `can://python/…`; built from the existing `signatureOf()`.

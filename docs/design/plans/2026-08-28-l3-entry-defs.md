@@ -268,7 +268,7 @@ D7 currently reads, in both places, that the summary pass mirrors `codeanalyzer-
 
 Rewrite both mentions to say what is true: the pass composes bottom-up over the SCC condensation with a monotone fixpoint (which both analyzers do), that `codeanalyzer-python` reaches its transfer relation at statement granularity rather than by region decomposition, and that region decomposition remains an open refinement for either analyzer rather than an existing precedent. Keep the rest of D7 — SCC condensation, k-limiting, fixpoint, "heaviest unit, sequenced last" — as written; only the parity claim is wrong.
 
-Add one sentence recording that Java is better positioned than the reference for a future region pass, since it already persists both `cfg` and `cdg` on the callable and has Cooper–Harvey–Kennedy post-dominators in `CdgBuilder`.
+Add one sentence stating that both analyzers persist `cfg` and `cdg` on the callable and compute post-dominators, so what remains to implement is the region decomposition itself.
 
 - [ ] **Step 2: Verify no other document repeats the claim**
 
