@@ -56,11 +56,22 @@ public final class L3Overlays {
         }
     }
 
+    /** Existing callers keep working; a callable with no declared formals behaves exactly as before. */
     public static L3Result build(BlockStmt body, Map<String, JBodyNode> existingBody, L1BuildContext ctx,
             int fieldDepth) {
+        return build(body, existingBody, ctx, fieldDepth, List.of());
+    }
+
+    /**
+     * @param formals the callable's declared parameter names, in declaration order — passed through to
+     *     {@link DdgBuilder#build(ControlFlowGraph, int, List)} so a formal is defined at {@code @entry}
+     *     and its own dataflow can root a dependence at a parameter.
+     */
+    public static L3Result build(BlockStmt body, Map<String, JBodyNode> existingBody, L1BuildContext ctx,
+            int fieldDepth, List<String> formals) {
         ControlFlowGraph cfg = CfgBuilder.build(body, existingBody, ctx);
         List<JCdgEdge> cdg = CdgBuilder.build(cfg);
-        List<JDdgEdge> ddg = DdgBuilder.build(cfg, fieldDepth);
+        List<JDdgEdge> ddg = DdgBuilder.build(cfg, fieldDepth, formals);
         return new L3Result(cfg.nodes(), cfg.toCfgEdges(), cdg, ddg);
     }
 }
