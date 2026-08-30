@@ -116,7 +116,10 @@ public final class CallableBuilder {
             // cfg/cdg/ddg overlays. The BlockStmt and symbol solver are live only here.
             // Skipped under the wala engine — L3WalaOverlays handles that path post-build.
             if (ctx.getAnalysisLevel() >= 3 && "ast".equals(ctx.getL3Engine())) {
-                L3Overlays.L3Result l3 = L3Overlays.build(b, callable.getBody(), ctx, ctx.getGraphFieldDepth());
+                L3Overlays.L3Result l3 = L3Overlays.build(b, callable.getBody(), ctx,
+                        ctx.getGraphFieldDepth(),
+                        callable.getParameters().stream().map(JParameter::getName)
+                                .collect(Collectors.toList()));
                 callable.setBody(l3.body());
                 callable.setCfg(l3.cfg());
                 callable.setCdg(l3.cdg());

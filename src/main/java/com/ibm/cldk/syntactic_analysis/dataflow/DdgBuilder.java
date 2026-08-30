@@ -71,6 +71,11 @@ public final class DdgBuilder {
         }
     }
 
+    /** Existing callers keep working; a callable with no declared formals behaves exactly as before. */
+    public static List<JDdgEdge> build(ControlFlowGraph cfg, int fieldDepth) {
+        return build(cfg, fieldDepth, List.of());
+    }
+
     /**
      * Compute the data-dependence edges for one callable, in three phases:
      *
@@ -85,8 +90,13 @@ public final class DdgBuilder {
      *
      * Edges are deduped and sorted for determinism; each is one def→use pair for a {@code fieldDepth}-
      * limited access path.
+     *
+     * @param formals the callable's declared parameter names, in declaration order. They are defined
+     *     at {@code @entry}: a formal has no defining statement, but it is live on entry, and without
+     *     that def no dependence can root at a parameter — which is what forced downstream consumers
+     *     to recover parameter flow by matching source text.
      */
-    public static List<JDdgEdge> build(ControlFlowGraph cfg, int fieldDepth) {
+    public static List<JDdgEdge> build(ControlFlowGraph cfg, int fieldDepth, List<String> formals) {
         // Phase 1: per-node gen sets (defs) and the paths each node reads (uses).
         List<String> nodes = reachableFromEntry(cfg);
         Map<String, Set<String>> defs = new HashMap<>();
@@ -95,6 +105,11 @@ public final class DdgBuilder {
             Set<String> d = new LinkedHashSet<>();
             Set<String> u = new LinkedHashSet<>();
             collect(cfg.astNode(n), d, u, fieldDepth);
+            if (ControlFlowGraph.ENTRY.equals(n)) {
+                // A formal's access path is its bare name — a base segment, which AccessPath never
+                // truncates, so this is k-independent by construction.
+                d.addAll(formals);
+            }
             defs.put(n, d);
             uses.put(n, u);
         }

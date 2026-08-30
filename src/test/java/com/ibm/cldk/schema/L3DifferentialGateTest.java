@@ -16,6 +16,8 @@ package com.ibm.cldk.schema;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.javaparser.StaticJavaParser;
+import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.stmt.BlockStmt;
 import com.github.javaparser.ast.stmt.Statement;
 import com.ibm.cldk.CodeAnalyzer;
@@ -214,7 +216,18 @@ class L3DifferentialGateTest {
             // ---- AST engine (reference oracle) --------------------------------------------------
             ControlFlowGraph astG = CfgBuilder.build(body, new LinkedHashMap<>(), ctx);
             List<JCdgEdge> astCdg = CdgBuilder.build(astG);
-            List<JDdgEdge> astDdg = DdgBuilder.build(astG, 3);
+            // Every TARGET_METHODS entry takes at least one parameter, so building the reference
+            // oracle's ddg without formals (the legacy two-arg overload) would leave it blind to the
+            // @entry-rooted edges the shipped engine now emits — exactly the divergence this gate
+            // exists to compare against WALA. Extract the formals the same way
+            // DdgBuilderEntryDefsTest.ddgOf does and use the three-arg overload instead.
+            MethodDeclaration astMethod = StaticJavaParser.parse(FIXTURE)
+                    .findAll(MethodDeclaration.class).stream()
+                    .filter(m -> m.getNameAsString().equals(methodName))
+                    .findFirst().orElseThrow();
+            List<String> formals = astMethod.getParameters().stream()
+                    .map(p -> p.getNameAsString()).collect(Collectors.toList());
+            List<JDdgEdge> astDdg = DdgBuilder.build(astG, 3, formals);
 
             // ---- WALA engine -------------------------------------------------------------------
             WalaAnalysis.MethodIr mir = findMethod(wala, methodName);

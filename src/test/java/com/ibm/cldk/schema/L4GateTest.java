@@ -69,37 +69,40 @@ class L4GateTest {
     }
 
     /**
-     * §14's "arity matches" as an actual count. Hand-derived from the four fixture files and
+     * §14's "arity matches" as an actual count. Hand-derived from the five fixture files and
      * confirmed against this run:
      *
      * <ul>
-     *   <li>{@code param_in} = 6 — one per argument at each of the six in-project call sites with
-     *       arguments: {@code a→b}, {@code b→c}, {@code even→odd}, {@code odd→even},
-     *       {@code roundTrip→put}, {@code callFirst→first}. {@code roundTrip→get()} passes none, so
-     *       it contributes none.
-     *   <li>{@code param_out} = 6 — one per site whose callee returns a value: the same four
-     *       {@code Chain}/{@code Mutual} sites, plus {@code callFirst→first} and
-     *       {@code roundTrip→get()}; {@code put} is {@code void}, so that site has no
-     *       {@code actual_out} to reach.
-     *   <li>{@code summary} = 5 — {@code Chain.a}, {@code Chain.b}, {@code Mutual.even},
-     *       {@code Mutual.odd} and {@code Loops.callFirst}, one shortcut each.
+     *   <li>{@code param_in} = 9 — one per argument at each in-project call site that passes any:
+     *       {@code a→b}, {@code b→c}, {@code even→odd}, {@code odd→even}, {@code roundTrip→put},
+     *       {@code callFirst→first} and {@code leak→sink} contribute one each; {@code caller→leak}
+     *       contributes two. {@code roundTrip→get()} passes none, so it contributes none.
+     *   <li>{@code param_out} = 7 — one per site whose callee returns a value: the same four
+     *       {@code Chain}/{@code Mutual} sites, plus {@code callFirst→first},
+     *       {@code roundTrip→get()} and {@code caller→leak}; {@code put} and {@code sink} are
+     *       {@code void}, so those sites have no {@code actual_out} to reach.
+     *   <li>{@code summary} = 6 — {@code Chain.a}, {@code Chain.b}, {@code Mutual.even},
+     *       {@code Mutual.odd}, {@code Loops.callFirst} and {@code Arity.caller}, one shortcut each.
      *       {@code Heap.roundTrip}'s two sites are a void callee and a no-arg callee, so neither can
-     *       carry one. {@code Loops.callFirst}'s is the one that needs container nodes to be
-     *       seedable: {@code first}'s parameter is named only in its {@code for}-each header.
+     *       carry one, and neither can {@code Arity.leak}'s single void site. {@code Loops.callFirst}'s
+     *       is the one that needs container nodes to be seedable: {@code first}'s parameter is named
+     *       only in its {@code for}-each header. {@code Arity.caller}'s is the one that needs
+     *       per-parameter seeding: its site passes two arguments and only the first comes back, so a
+     *       seed shared across formals would make it two ({@code SummaryPassTest} pins which).
      * </ul>
      */
     @Test
     void overlayCountsAreExactlyWhatTheFixtureImplies() {
         JsonObject app = root.getAsJsonObject("application");
-        assertEquals(6, app.getAsJsonArray("param_in").size(), "param_in: one per argument at a resolved site");
-        assertEquals(6, app.getAsJsonArray("param_out").size(), "param_out: one per value-returning site");
+        assertEquals(9, app.getAsJsonArray("param_in").size(), "param_in: one per argument at a resolved site");
+        assertEquals(7, app.getAsJsonArray("param_out").size(), "param_out: one per value-returning site");
 
         int summaries = 0;
         for (JsonObject c : callablesById(root).values()) {
             JsonArray summary = c.getAsJsonArray("summary");
             summaries += summary == null ? 0 : summary.size();
         }
-        assertEquals(5, summaries, "summary: one shortcut per pass-through call site");
+        assertEquals(6, summaries, "summary: one shortcut per pass-through call site");
     }
 
     @Test
