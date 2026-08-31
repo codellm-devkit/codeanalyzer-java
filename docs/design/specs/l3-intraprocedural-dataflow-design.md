@@ -21,7 +21,7 @@ Both pass one **conformance gate**; a **differential gate** cross-validates `cfg
 
 | Change type | Analyzers | SDKs | Docs |
 | --- | --- | --- | --- |
-| L3 intraprocedural overlays (`cfg`/`cdg`/`ddg`) for Java, JSON projection | `codeanalyzer-java` (`syntactic_analysis` dataflow builders + schema defs) | `python-sdk` (later rung: L3 views, `get_program_dependency_graph`) | this spec + parent §8 |
+| L3 intraprocedural overlays (`cfg`/`cdg`/`ddg`) for Java, JSON projection | `codeanalyzer-java` (`syntactic_analysis` dataflow builders + schema defs) | this spec + parent §8 |
 
 ## 3. Scope & non-goals
 

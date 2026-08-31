@@ -9,7 +9,7 @@
 | Changes `analysis.json` v2 shape? | No. Projects the existing v2 model; JSON emission unchanged per schema. |
 | Changes the graph contract? | Yes — new graph generation `2.0.0` (labels/rels below), replacing the v1 graph as the default projection. |
 | Changes CLI defaults? | Yes — `--schema` defaults to **v2** everywhere (json and neo4j); `--schema v1` opts into the legacy model. Breaking → **version 3.0.0**. |
-| Repos touched | `codeanalyzer-java` (this spec's PR). `python-sdk` follow-on: exact pin `codeanalyzer-java == "2.4.1"` shields it until its compat PR (bump + pass `--schema v1` explicitly). Docs: repo-root `schema.neo4j.json` artifact replaced by the v2 catalog. |
+| Repos touched | `codeanalyzer-java` (this spec's PR). Docs: repo-root `schema.neo4j.json` artifact replaced by the v2 catalog. |
 
 ## Decisions (user-approved 2026-08-27)
 
@@ -89,7 +89,6 @@ Reuse unchanged: `GraphRows`, `RowBuilder` (add the optional edge `_k` discrimin
 ## Release plan
 
 1. `codeanalyzer-java` **3.0.0**: this spec's PR (projection + default flip + catalog). One PR closes #198.
-2. `python-sdk` compat PR (separate work item, filed when picked up): bump pin to 3.0.0 and pass `--schema v1` explicitly; its real v2-model migration is separate future work. Until then the exact `== "2.4.1"` pin shields it.
 
 ## Definition of done
 

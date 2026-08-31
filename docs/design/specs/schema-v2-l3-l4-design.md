@@ -10,7 +10,6 @@ Migrate `codeanalyzer-java` from the legacy v1 output (`{symbol_table, call_grap
 - **L3 — intraprocedural dataflow** — the rest of `body{}` (statements) plus `cfg`/`cdg`/`ddg` (syntactic, `prov:["ssa"]`) edge overlays, per callable.
 - **L4 — interprocedural SDG** — synthetic `formal_in/out` + `actual_in/out` vertices, `param_in`/`param_out`/`summary` edges, and semantic `ddg` (`prov:["points-to"]`).
 
-The python-sdk Java models migrate to v2 in lockstep behind a **frozen public API** (two-layer model), as a later rung.
 
 **CLDK context:** CLDK is actively migrating v1 → v2. The v2 keystone is a *proposal we refine as we implement*; this spec records the Java-specific refinements.
 
@@ -24,9 +23,9 @@ The python-sdk Java models migrate to v2 in lockstep behind a **frozen public AP
 
 | Change type | Analyzers | SDKs | Docs |
 | --- | --- | --- | --- |
-| Schema v2 migration + new analysis levels (L3/L4) for Java | `codeanalyzer-java` (emission layer + Neo4j projection) | `python-sdk` (Java models → v2 views; new `get_program_dependency_graph`) | user-facing schema/levels docs (later, `finishing-cldk-work`) |
+| Schema v2 migration + new analysis levels (L3/L4) for Java | `codeanalyzer-java` (emission layer + Neo4j projection) | user-facing schema/levels docs (later, `finishing-cldk-work`) |
 
-**Repos touched:** `codeanalyzer-java`, `python-sdk`. (TS SDK not in scope for this effort.)
+**Repos touched:** `codeanalyzer-java`.
 
 ---
 
@@ -34,7 +33,6 @@ The python-sdk Java models migrate to v2 in lockstep behind a **frozen public AP
 
 **In scope**
 - `codeanalyzer-java`: v2 emission for L1/L2; new L3 and L4; Neo4j v2 projection; CLI contract alignment; conformance/monotonicity/determinism gates.
-- `python-sdk`: Java model migration to v2 behind a stable public API (later rung; usually starts after the analyzer's v2 release is cut).
 
 **Non-goals**
 - Slicing / taint engines in the analyzer. The analyzer is a **pure graph provider**; slicing/taint/reachability are **SDK queries** over the emitted graph (`cldk-sdk-frontend`).
@@ -182,19 +180,13 @@ Reuse the existing `neo4j/` skeleton (`GraphProjector`/`RowBuilder`/`GraphRows`/
 - **Relationships (`J_` prefix):** `J_HAS_MODULE`, `J_DECLARES`, `J_HAS_CALLABLE`, `J_HAS_FIELD`, `J_RESOLVES_TO`, `J_CALLS`(weight,prov), `J_EXTENDS`, `J_IMPLEMENTS`; at L3/L4 `J_HAS_BODY_NODE`, `J_HAS_CFG_NODE`, `J_CFG_NEXT`(kind), `J_CDG`, `J_DDG`(var,prov), `J_PARAM_IN`, `J_PARAM_OUT`, `J_SUMMARY`.
 - **Depth rule:** `--emit neo4j` always full depth; deferred-edge (no-dangling) gate; cross-projection gate asserts node/edge counts match JSON at `max_level` (modulo explicit `HAS_*` containment).
 
-## 12. python-sdk migration (later rung)
-
-Two-layer model: canonical models once + **Java views** preserving every public accessor's name/signature/return type (`JCallable`/`JType`/`JApplication`; `get_call_graph`, `get_system_dependency_graph`, **new** `get_program_dependency_graph`; `AnalysisLevel` gains L3/L4). Document the sanctioned semantic shifts (nx node keys → `can://` ids; `.code`/`.call_sites` become computed views; rich edges retire; envelope keys change). Major SDK version bump; pin the analyzer only **after** its v2 release is cut.
-
-**Open question (resolve at the frontend rung):** the SDK schema-contract prescribes a shared `cldk/models/cpg/` layer, but `python-sdk` `origin/release/2.0` instead shows per-language `projections.py` (no `cpg/`). Reconcile which pattern Java follows then, with a targeted read of `release/2.0`.
-
-## 13. Module architecture
+## 12. Module architecture
 
 Refactor the current static `SymbolTable`/`SystemDependencyGraph` toward the analyzer skeleton, as much as serves the work (not gratuitous): `core` orchestrator (delegates each stage), `syntactic_analysis` (L1 builder), `semantic_analysis/{call_graph, dataflow}` (L2 + the L3/L4 builders split per stage: cfg, dominance/cdg, defuse/ddg, sdg, summaries), `schema/` (v2 Lombok models), `neo4j/` (existing emitter), keep the framework/entrypoint detectors behind their seam. Lombok `@Data`/builders as today; Gson `LOWER_CASE_WITH_UNDERSCORES`.
 
 ---
 
-## 14. Testing & gates
+## 13. Testing & gates
 
 Per-level conformance gate is a hard gate (no advance while red). Fixture project under `src/test/resources` exercising each construct with **specific-value** assertions.
 
@@ -208,11 +200,11 @@ Slice/taint gates are **frontend** gates (SDK), not analyzer gates.
 
 ---
 
-## 15. Decomposition & release plan
+## 14. Decomposition & release plan
 
-**Live tracking is the epic, not this spec.** Filed as an **Epic + 8-child sub-issue stack** in [codellm-devkit/.github#42](https://github.com/codellm-devkit/.github/issues/42) — one PR per child across `codeanalyzer-java` and `python-sdk`. The epic is the single source of truth for scope and status; the shape below is a snapshot for orientation only.
+**Live tracking is the epic, not this spec.** Filed as an **Epic + 8-child sub-issue stack** in [codellm-devkit/.github#42](https://github.com/codellm-devkit/.github/issues/42) — one PR per child. The epic is the single source of truth for scope and status; the shape below is a snapshot for orientation only.
 
-Shape (snapshot): L1 tree → L2 `call_graph` → L3 (`cfg`/`cdg`/`ddg`) → L4 SDG (`param_in`/`param_out` + semantic `ddg`) → L4 summary pass → **consolidated Neo4j projection** → python-sdk v2 views → SDK slice/taint queries. The JSON levels land first; **all Neo4j projection work — the base relabel plus the L3/L4 overlays — is one consolidated pass after L4** (issue #182), so the graph schema is mapped once against the fully-stabilized JSON schema rather than reworked per level. L3 can ship/tag before L4; the summary pass lands after the rest of L4. **Consequence:** the v2 default-output flip (below), gated on the Neo4j projection, moves to post-L4; the analyzer major can still be cut on the JSON levels beforehand.
+Shape (snapshot): L1 tree → L2 `call_graph` → L3 (`cfg`/`cdg`/`ddg`) → L4 SDG (`param_in`/`param_out` + semantic `ddg`) → L4 summary pass → **consolidated Neo4j projection**. The JSON levels land first; **all Neo4j projection work — the base relabel plus the L3/L4 overlays — is one consolidated pass after L4** (issue #182), so the graph schema is mapped once against the fully-stabilized JSON schema rather than reworked per level. L3 can ship/tag before L4; the summary pass lands after the rest of L4. **Consequence:** the v2 default-output flip (below), gated on the Neo4j projection, moves to post-L4; the analyzer major can still be cut on the JSON levels beforehand.
 
 **Release / lockstep (enduring):**
 - Analyzer = **major** release (breaking output; CHANGELOG *Changed/Breaking*). L1–L4 are independently shippable behind `-a`, so cut the major once L1/L2 v2 (± L3) are green and grow L4 in a follow-up minor.
@@ -223,7 +215,7 @@ Shape (snapshot): L1 tree → L2 `call_graph` → L3 (`cfg`/`cdg`/`ddg`) → L4 
 
 ---
 
-## 16. Risks & open questions
+## 15. Risks & open questions
 
 1. **SSA → source-statement projection fidelity (D5).** Multiple SSA instructions per line, synthetic phi/pi with no source, compiler-introduced temporaries. Mitigation: group by enclosing statement span; fold/drop synthetic nodes; **fallback to AST-built CFG (Option B)** if unresolvable — recorded as a live option, not a silent one.
 2. **Summary-pass cost/termination (D7).** Mitigated by mandatory k-limiting + bounded label sets + SCC fixpoint; content-hash caching. Heaviest unit; can ship after the rest of L4.
@@ -232,7 +224,7 @@ Shape (snapshot): L1 tree → L2 `call_graph` → L3 (`cfg`/`cdg`/`ddg`) → L4 
 5. **WALA version.** Consider bumping WALA (the prior SDG branch used 1.6.10) if L3/L4 need newer APIs; validate the call-graph baseline is unchanged.
 6. **Debug info dependency.** Source positions rely on the ECJ/CAst source frontend; confirm positions are present for all app classes; degrade gracefully (sentinel) where absent.
 
-## 17. References
+## 16. References
 
 - Keystone: `cldk-devtools/…/canonical-schema.md`
 - Methods: `…/level-1-symbol-table.md`, `…/level-2-call-graph.md`, `…/level-3-intraprocedural-dataflow.md`, `…/level-4-interprocedural-sdg.md`

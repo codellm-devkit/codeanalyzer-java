@@ -202,7 +202,7 @@ The full contract (node labels, their keys and typed properties, relationship ty
 plus the constraint/index DDL) lives in [`schema.neo4j.json`](./schema.neo4j.json) and is visualized
 in [`neo4j-schema.drawio`](./neo4j-schema.drawio). All node labels are `J`-prefixed and relationship
 types `J_`-prefixed (e.g. `:JType`, `:JCallable`, `J_CALLS`) so a Java graph can share a Neo4j
-database with the Python (`Py*`/`PY_*`) and TypeScript (`TS*`/`TS_*`) backends without colliding.
+database with another language's backend without colliding.
 `SCHEMA_VERSION` is stamped onto the `:JApplication` node of every emitted graph.
 
 ### 4.1. Cypher snapshot (no database required)
