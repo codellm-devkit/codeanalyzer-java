@@ -188,7 +188,13 @@ public class AnalysisUtils {
      * @return Iterable<Entrypoint> entry points
      */
     public static Iterable<Entrypoint> getEntryPoints(IClassHierarchy cha) {
-        List<Entrypoint> entrypoints = StreamSupport.stream(cha.spliterator(), true).filter(AnalysisUtils::isApplicationClass).flatMap(c -> {
+        // Sequential, not parallel: the class hierarchy's spliterator is unordered, so collecting it in
+        // parallel yields a different entrypoint order per run, and RTA reaches a slightly different set
+        // from a different order — which made the call graph irreproducible (on daytrader8, edge counts
+        // varying 1875/1876 and the declared/rta provenance split swinging across ~14 edges between runs).
+        // The parallel flag bought no measurable time here; entrypoint construction is a sliver of the
+        // total, and the whole analysis measured the same wall clock either way.
+        List<Entrypoint> entrypoints = StreamSupport.stream(cha.spliterator(), false).filter(AnalysisUtils::isApplicationClass).flatMap(c -> {
             try {
                 return c.getDeclaredMethods().stream();
             } catch (NullPointerException nullPointerException) {
