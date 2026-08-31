@@ -45,6 +45,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -303,20 +305,57 @@ public class V2Neo4jSchemaConformanceTest {
     }
 
     @Test
-    void wipeReachesArtifactAndConfigKeySoARepushLeavesNoOrphans() {
-        // Same cypher-text-assertion shape as wipeCoversBothGenerationsSoV2ReplacesAPriorV1Graph
-        // above (no in-process Neo4j to actually execute the wipe against and check for orphans).
-        // The scenario this pins: push, then remove a config-bearing artifact from the analyzed
-        // repo and push again -- without HAS_ARTIFACT on the app anchor's first hop, the wipe's
-        // OPTIONAL MATCH (a)-[...]->(c) never binds the prior push's :Artifact nodes at all, so
-        // DETACH DELETE never reaches them (or their :ConfigKey rows via DEFINES_CONFIG), and both
-        // survive the second push as permanent orphans.
-        String cypher = CypherWriter.renderCypher(rows, "l4-sdg-test");
-        assertTrue(cypher.contains("J_HAS_UNIT|J_HAS_MODULE|HAS_ARTIFACT"),
-                "the wipe's app-anchor hop must also reach this app's :Artifact nodes via HAS_ARTIFACT");
-        assertTrue(CypherWriter.DESCENDANTS.contains("DEFINES_CONFIG"),
-                "wipe/prune descendant traversal must include DEFINES_CONFIG so a wiped "
-                        + "Artifact's ConfigKeys are swept too");
+    void wipeStaysOffTheCrossLanguageArtifactPackageSubgraph() {
+        // The negative counterpart to wipeCoversBothGenerationsSoV2ReplacesAPriorV1Graph above,
+        // which asserts what the wipe DOES reach; nothing asserted what it must NOT, which is
+        // exactly how a well-intentioned widening (fold Artifact/ConfigKey into the same wipe that
+        // already unifies v1/v2) shipped and had to be reverted. :Artifact, :ConfigKey and :Package
+        // are un-prefixed cross-language merge targets (CanId.artifactId's own javadoc: the
+        // `artifact` id segment exists so a sibling-language analyzer over the same repository
+        // lands on the same node, not a duplicate). A wipe reaching any of them would DETACH DELETE
+        // that other analyzer's own edges on every Java re-push of the same app -- silent
+        // corruption in a tool this one cannot see or repair. Read CypherWriter.DESCENDANTS'
+        // javadoc before ever widening either pattern checked below.
+        assertTrue(CypherWriter.renderCypher(rows, "l4-sdg-test")
+                        .contains("OPTIONAL MATCH (a)-[:J_HAS_UNIT|J_HAS_MODULE]->(c)"),
+                "the wipe's app-anchor hop must stay exactly J_HAS_UNIT|J_HAS_MODULE -- widening it "
+                        + "to HAS_ARTIFACT lets a Java re-push delete another analyzer's edges on "
+                        + "the shared :Artifact merge target");
+        for (String rel : new String[] {"HAS_ARTIFACT", "DEFINES_CONFIG", "DECLARES_DEPENDENCY", "LOCKS"}) {
+            assertFalse(CypherWriter.DESCENDANTS.contains(rel),
+                    "wipe/prune descendant traversal must never include " + rel + " -- "
+                            + "Artifact/Package/ConfigKey are cross-language merge targets a wipe must not touch");
+        }
+    }
+
+    @Test
+    void constraintsStayInSyncWithTheCatalog() {
+        // Schema.CONSTRAINTS is the hand-maintained list CypherWriter/BoltWriter actually execute;
+        // V2SchemaCatalog.uniquenessConstraints() is what the emitted schema.neo4j.json document
+        // promises (one entry per distinct (merge_label, key)). The two must agree semantically --
+        // not byte-for-byte: Schema.CONSTRAINTS predates the derived naming/alias convention and
+        // keeps its own descriptive names (e.g. `j_symbol_id`, alias `s`) rather than the derived
+        // form (`jsymbol_id`, alias `x`) -- but a promised constraint no load ever creates is
+        // exactly the contract-overpromise defect class this conformance test class already guards
+        // against, one level up (#197 review: schema.neo4j.json shipped promising three constraints
+        // no load created because Schema.CONSTRAINTS was never extended alongside the catalog).
+        Pattern labelAndKey = Pattern.compile("FOR \\(\\w+:(\\w+)\\) REQUIRE \\w+\\.(\\w+) IS UNIQUE");
+        for (String derived : V2SchemaCatalog.uniquenessConstraints()) {
+            Matcher dm = labelAndKey.matcher(derived);
+            assertTrue(dm.find(), "unparseable derived constraint: " + derived);
+            Pattern expected = Pattern.compile(
+                    "FOR \\(\\w+:" + dm.group(1) + "\\) REQUIRE \\w+\\." + dm.group(2) + " IS UNIQUE");
+            boolean present = false;
+            for (String executed : Schema.CONSTRAINTS) {
+                if (expected.matcher(executed).find()) {
+                    present = true;
+                    break;
+                }
+            }
+            assertTrue(present, "Schema.CONSTRAINTS has no uniqueness constraint for ("
+                    + dm.group(1) + ", " + dm.group(2) + ") -- schema.neo4j.json promises one but no load "
+                    + "would create it");
+        }
     }
 
     private static NodeRow findNode(String mergeLabel, String value) {

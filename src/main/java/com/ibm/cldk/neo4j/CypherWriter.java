@@ -34,18 +34,24 @@ public final class CypherWriter {
     /**
      * Every containment relationship either graph generation emits — v1 (unit-rooted) and v2
      * (module-rooted) together, so a v2 push wipes/prunes a prior v1 graph of the same app and vice
-     * versa (spec: one app name = one graph, latest push wins). {@code DEFINES_CONFIG} rides along
-     * too: {@link #wipe} widens the app anchor's first hop with {@code HAS_ARTIFACT} so {@code c}
-     * can also bind an {@code :Artifact}, and this pattern then reaches that artifact's
-     * {@code :ConfigKey}s the same way it reaches a module's types/callables/etc. — one wipe
-     * mechanism, not two. {@code :Package} is deliberately NOT reachable here, same as
-     * {@code :JPackage}/{@code :JAnnotation} below: a purl-keyed Package is a cross-app,
-     * cross-language merge target, not owned by any one application's push.
+     * versa (spec: one app name = one graph, latest push wins). {@code :Package}, {@code :Artifact}
+     * and {@code :ConfigKey} are all deliberately unreachable from this wipe, same as
+     * {@code :JPackage}/{@code :JAnnotation} below: all three are un-prefixed cross-language merge
+     * targets ({@code CanId.artifactId}'s own javadoc: the {@code artifact} id segment exists so a
+     * sibling-language analyzer scanning the same repository lands on the same node rather than a
+     * duplicate). That other analyzer's own edges may be attached to the very node this wipe would
+     * {@code DETACH DELETE}, destroying data this tool cannot see and did not write — corruption
+     * neither detectable nor repairable from here. A stale {@code :Artifact}/{@code :ConfigKey}
+     * left behind after a file is removed from the analyzed repo is the accepted tradeoff instead:
+     * recoverable with a full re-push or a separate sweep, unlike another tool's silently deleted
+     * edges. (Tried once, reverted: see git history — widening this to reach {@code :Artifact}/
+     * {@code :ConfigKey} was implemented and shipped before this exact hazard was caught in
+     * review.)
      */
     static final String DESCENDANTS = "[:J_DECLARES_TYPE|J_HAS_NESTED_TYPE|J_HAS_CALLABLE|J_HAS_FIELD|J_HAS_PARAMETER"
             + "|J_HAS_CALLSITE|J_DECLARES_VAR|J_HAS_ENUM_CONSTANT|J_HAS_RECORD_COMPONENT|J_HAS_INIT_BLOCK"
             + "|J_HAS_CRUD_OPERATION|J_HAS_CRUD_QUERY|J_HAS_COMMENT"
-            + "|J_DECLARES|J_HAS_METHOD|J_HAS_BODY_NODE|DEFINES_CONFIG*1..]";
+            + "|J_DECLARES|J_HAS_METHOD|J_HAS_BODY_NODE*1..]";
 
     private CypherWriter() {}
 
@@ -61,7 +67,7 @@ public final class CypherWriter {
         }
 
         out.add("");
-        out.add("// ── wipe this project's prior subgraph (packages/annotations/Package are shared) ──");
+        out.add("// ── wipe this project's prior subgraph (packages/annotations/artifacts/config keys are shared) ──");
         out.add(wipe(appName));
 
         out.add("");
@@ -78,17 +84,16 @@ public final class CypherWriter {
 
     private static String wipe(String appName) {
         // The unit hop is unlabeled and lists both generations' rel types (v1 J_HAS_UNIT →
-        // :JCompilationUnit, v2 J_HAS_MODULE → :JModule) PLUS HAS_ARTIFACT → :Artifact, so either
-        // generation's push replaces whichever generation the DB currently holds for this app, AND
-        // this app's artifact subtree (DEFINES_CONFIG → :ConfigKey, folded into DESCENDANTS) goes
-        // with it — an Artifact/ConfigKey removed from a later analysis of the same app must not
-        // survive as an orphan (same bug class the v1/v2 unification above already guards against).
-        // The second statement sweeps fully-isolated :JSymbol nodes the containment traversal cannot
-        // reach — v1's import-materialized bodyless :JType stubs hang off units via J_IMPORTS only,
-        // so the DETACH DELETE above orphans them; degree-0 symbols are unreferencable junk in any
+        // :JCompilationUnit, v2 J_HAS_MODULE → :JModule) so either generation's push replaces
+        // whichever generation the DB currently holds for this app. Deliberately does NOT include
+        // HAS_ARTIFACT → :Artifact: see DESCENDANTS' javadoc for why the whole artifact/config-key
+        // subtree stays outside every wipe this class runs. The second statement sweeps
+        // fully-isolated :JSymbol nodes the containment traversal cannot reach — v1's
+        // import-materialized bodyless :JType stubs hang off units via J_IMPORTS only, so the
+        // DETACH DELETE above orphans them; degree-0 symbols are unreferencable junk in any
         // generation, and a symbol another application still uses keeps its edges and survives.
         return "MATCH (a:JApplication {name: " + cypherValue(appName) + "})\n"
-                + "OPTIONAL MATCH (a)-[:J_HAS_UNIT|J_HAS_MODULE|HAS_ARTIFACT]->(c)\n"
+                + "OPTIONAL MATCH (a)-[:J_HAS_UNIT|J_HAS_MODULE]->(c)\n"
                 + "OPTIONAL MATCH (c)-" + DESCENDANTS + "->(x)\n"
                 + "DETACH DELETE x, c, a;\n"
                 + "MATCH (s:JSymbol) WHERE NOT (s)--() DELETE s;";
