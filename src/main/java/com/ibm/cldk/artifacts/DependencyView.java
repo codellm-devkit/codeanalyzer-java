@@ -165,8 +165,15 @@ public final class DependencyView {
      * controls), so extraction must not silently degrade under either flag. {@code null} means the
      * file could not be read or is not valid UTF-8; the caller marks that artifact {@code partial}
      * and skips it rather than handing unreliable text to a parser.
+     *
+     * <p>Deliberately {@code public}, a narrow named exception to this class's "public surface is
+     * just {@code build}" rule: the design plan requires this from-disk logic to exist exactly
+     * once, in contrast to the reference implementation, which duplicates it verbatim across two
+     * modules with a "keep the two in sync" comment. The config-key extraction pass ({@code
+     * ConfigKeys}/{@code CodeAnalyzer}, package {@code com.ibm.cldk}) needs the identical read and
+     * must call this rather than re-write it -- do not shrink this back to {@code private}.
      */
-    private static String readFromDisk(Path projectDir, String relativePath) {
+    public static String readFromDisk(Path projectDir, String relativePath) {
         try {
             byte[] raw = Files.readAllBytes(projectDir.resolve(relativePath));
             return StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(raw)).toString();
