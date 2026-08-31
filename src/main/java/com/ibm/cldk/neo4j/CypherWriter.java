@@ -14,6 +14,8 @@ package com.ibm.cldk.neo4j;
 
 import com.ibm.cldk.neo4j.GraphRows.EdgeRow;
 import com.ibm.cldk.neo4j.GraphRows.NodeRow;
+import java.io.IOException;
+import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -55,31 +57,81 @@ public final class CypherWriter {
 
     private CypherWriter() {}
 
+    /**
+     * Render the whole script into a {@code String}. Convenience for callers holding a small graph
+     * (tests, diagnostics); it delegates to {@link #writeCypher} so the two can never drift.
+     *
+     * <p><b>Prefer {@link #writeCypher} for anything user-facing.</b> A large repository's script
+     * exceeds the JVM's maximum {@code String} length and this method then throws
+     * {@code OutOfMemoryError: Requested string length exceeds VM limit} — a ceiling on one array,
+     * not a heap shortage, so no {@code -Xmx} avoids it (#209).
+     */
     public static String renderCypher(GraphRows rows, String appName) {
-        List<String> out = new ArrayList<>();
+        StringWriter out = new StringWriter();
+        try {
+            writeCypher(out, rows, appName);
+        } catch (IOException impossible) {
+            // StringWriter never throws; it only declares IOException to satisfy Writer.
+            throw new IllegalStateException(impossible);
+        }
+        return out.toString();
+    }
 
-        out.add("// ── constraints & indexes ──");
+    /**
+     * Stream the script to {@code out}, one statement at a time. Nothing larger than a single batch
+     * is ever held as a {@code String}, so peak memory is bounded by {@link #BATCH} rather than by
+     * the size of the graph.
+     *
+     * <p>{@code out} is written to incrementally and is not flushed or closed here — the caller owns
+     * it, and should hand in a buffered writer so that per-statement writes do not become
+     * per-statement syscalls.
+     */
+    public static void writeCypher(Appendable out, GraphRows rows, String appName) throws IOException {
+        Statements s = new Statements(out);
+        s.add("// ── constraints & indexes ──");
         for (String stmt : Schema.CONSTRAINTS) {
-            out.add(stmt + ";");
+            s.add(stmt + ";");
         }
         for (String stmt : Schema.INDEXES) {
-            out.add(stmt + ";");
+            s.add(stmt + ";");
         }
 
-        out.add("");
-        out.add("// ── wipe this project's prior subgraph (packages/annotations/artifacts/config keys are shared) ──");
-        out.add(wipe(appName));
+        s.add("");
+        s.add("// ── wipe this project's prior subgraph (packages/annotations/artifacts/config keys are shared) ──");
+        s.add(wipe(appName));
 
-        out.add("");
-        out.add("// ── nodes ──");
-        out.addAll(nodeStatements(rows.nodes));
+        s.add("");
+        s.add("// ── nodes ──");
+        writeNodeStatements(s, rows.nodes);
 
-        out.add("");
-        out.add("// ── relationships ──");
-        out.addAll(edgeStatements(rows.edges));
+        s.add("");
+        s.add("// ── relationships ──");
+        writeEdgeStatements(s, rows.edges);
 
-        out.add("");
-        return String.join("\n", out);
+        s.add("");
+    }
+
+    /**
+     * Writes statements separated by newlines, exactly as {@code String.join("\n", ...)} did:
+     * the separator goes BETWEEN statements, so the script does not gain a trailing newline the
+     * rendered form never had. Emitting {@code statement + "\n"} each time would append one extra
+     * byte at the end — small, but this file is compared byte-for-byte across versions.
+     */
+    private static final class Statements {
+        private final Appendable out;
+        private boolean first = true;
+
+        Statements(Appendable out) {
+            this.out = out;
+        }
+
+        void add(String statement) throws IOException {
+            if (!first) {
+                out.append('\n');
+            }
+            first = false;
+            out.append(statement);
+        }
     }
 
     private static String wipe(String appName) {
@@ -103,14 +155,13 @@ public final class CypherWriter {
     // Nodes — grouped by their full label set + key property, batched into UNWIND lists.
     // ----------------------------------------------------------------------------------------------
 
-    private static List<String> nodeStatements(List<NodeRow> nodes) {
+    private static void writeNodeStatements(Statements out, List<NodeRow> nodes) throws IOException {
         Map<String, List<NodeRow>> groups = new LinkedHashMap<>();
         for (NodeRow n : nodes) {
             String k = String.join(":", n.labels) + "|" + n.keyProp;
             groups.computeIfAbsent(k, x -> new ArrayList<>()).add(n);
         }
 
-        List<String> blocks = new ArrayList<>();
         for (List<NodeRow> group : groups.values()) {
             NodeRow head = group.get(0);
             String mergeLabel = head.labels.get(0);
@@ -121,19 +172,18 @@ public final class CypherWriter {
                 for (NodeRow n : batch) {
                     list.add("  {k: " + cypherValue(n.value) + ", p: " + cypherMap(n.props) + "}");
                 }
-                blocks.add("UNWIND [\n" + String.join(",\n", list) + "\n] AS row\n"
+                out.add("UNWIND [\n" + String.join(",\n", list) + "\n] AS row\n"
                         + "MERGE (n:" + mergeLabel + " {" + head.keyProp + ": row.k})\n"
                         + "SET n += row.p" + setLabels + ";");
             }
         }
-        return blocks;
     }
 
     // ----------------------------------------------------------------------------------------------
     // Edges — grouped by (type, endpoint labels + key props), batched.
     // ----------------------------------------------------------------------------------------------
 
-    private static List<String> edgeStatements(List<EdgeRow> edges) {
+    private static void writeEdgeStatements(Statements out, List<EdgeRow> edges) throws IOException {
         Map<String, List<EdgeRow>> groups = new LinkedHashMap<>();
         for (EdgeRow e : edges) {
             String k = e.type + "|" + e.from.label + "." + e.from.keyProp + "|" + e.to.label + "." + e.to.keyProp
@@ -141,7 +191,6 @@ public final class CypherWriter {
             groups.computeIfAbsent(k, x -> new ArrayList<>()).add(e);
         }
 
-        List<String> blocks = new ArrayList<>();
         for (List<EdgeRow> group : groups.values()) {
             EdgeRow head = group.get(0);
             boolean keyed = head.key != null;
@@ -152,14 +201,13 @@ public final class CypherWriter {
                             + (keyed ? ", k: " + cypherValue(e.key) : "")
                             + ", p: " + cypherMap(e.props) + "}");
                 }
-                blocks.add("UNWIND [\n" + String.join(",\n", list) + "\n] AS row\n"
+                out.add("UNWIND [\n" + String.join(",\n", list) + "\n] AS row\n"
                         + "MATCH (a:" + head.from.label + " {" + head.from.keyProp + ": row.f})\n"
                         + "MATCH (b:" + head.to.label + " {" + head.to.keyProp + ": row.t})\n"
                         + "MERGE (a)-[r:" + head.type + (keyed ? " {_k: row.k}" : "") + "]->(b)\n"
                         + "SET r += row.p;");
             }
         }
-        return blocks;
     }
 
     // ----------------------------------------------------------------------------------------------
