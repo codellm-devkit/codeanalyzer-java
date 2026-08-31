@@ -8,10 +8,12 @@ import com.ibm.cldk.schema.Spans;
 import java.io.IOException;
 import java.io.StringReader;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
@@ -155,6 +157,9 @@ public final class ConfigKeys {
                         artifact.getId(), "env", recognizeComposeEnv(flat), captureValue, false,
                         k -> CanId.configKeyEnvDualMintId(artifact.getId(), k)));
             } else if ("xml".equals(artifact.getFormat())) {
+                if (!isConfigXml(artifact.getPath())) {
+                    return new Result(List.of(), true);
+                }
                 keys = extractXml(artifact.getId(), text, captureValue);
             } else {
                 return new Result(List.of(), true);
@@ -164,6 +169,79 @@ public final class ConfigKeys {
         } catch (Exception e) {
             return new Result(List.of(), false);
         }
+    }
+
+    /**
+     * XML basenames worth flattening. Discovery classifies every {@code *.xml} in a repository as an
+     * artifact, and the flattener mints a key per element path -- which is what configuration looks
+     * like, and also what a data file looks like. On ThingsBoard v4.0 that produced 39,551 keys from
+     * 453 XML files, 30,408 of them from LwM2M object registries under {@code src/main/data/}: static
+     * data resources, not settings (#210).
+     *
+     * <p>No size threshold separates the two -- that repository's {@code pom.xml} legitimately carries
+     * 1332 keys while a data registry carries 615 -- so recognition is by name, not by volume. A file
+     * that is not recognized stays in the artifact inventory with its {@code source}, {@code sha256}
+     * and roles intact; only flattening is skipped, so nothing disappears from the file listing and
+     * the result is {@code ok=true}, not a parse failure.
+     *
+     * <p>A name list alone is not enough, because vendor deployment descriptors are open-ended
+     * ({@code ibm-web-bnd.xml}, {@code jboss-web.xml}, {@code weblogic.xml}, ...) -- daytrader8's two
+     * {@code ibm-web-*.xml} descriptors are real configuration and no plausible list contains them.
+     * So location counts too: {@code WEB-INF/} and {@code META-INF/} are directories the servlet and
+     * Java EE specifications define to hold descriptors, so an XML sitting directly in one is
+     * configuration by construction rather than by guess. Data resources do not live there.
+     *
+     * <p>The accepted cost is a project whose configuration lives in an unlisted XML name outside
+     * those directories. That file is still inventoried and still discoverable; it just contributes
+     * no {@code config_keys}. Adding a name here is the fix when one turns up -- prefer that to
+     * widening the rule to "any XML under a config-ish directory", which is how the unbounded
+     * behaviour arose in the first place.
+     */
+    private static final Set<String> CONFIG_XML_NAMES = new HashSet<>(Arrays.asList(
+            "pom.xml", "web.xml", "ejb-jar.xml", "application.xml", "persistence.xml",
+            "beans.xml", "faces-config.xml", "server.xml", "context.xml", "settings.xml",
+            "ivy.xml", "struts.xml", "hibernate.cfg.xml", "logback.xml", "logback-test.xml",
+            "log4j.xml", "log4j2.xml", "checkstyle.xml", "spotbugs.xml", "pmd.xml",
+            "jboss-web.xml", "weblogic.xml", "orm.xml", "validation.xml", "portlet.xml",
+            "tiles.xml", "sun-jaxb.episode", "liquibase.xml", "AndroidManifest.xml"));
+
+    /** Recognized suffixes, for families that are named by convention rather than by one filename. */
+    private static final List<String> CONFIG_XML_SUFFIXES =
+            Arrays.asList("-context.xml", "-config.xml", "-configuration.xml", "-beans.xml",
+                    "-servlet.xml", "-ds.xml", "-mapper.xml", "-changelog.xml");
+
+    /**
+     * Whether an XML artifact is a configuration file worth flattening: a recognized basename, a
+     * conventional suffix, or any XML in a descriptor directory. A suffix never matches bare --
+     * {@code notweb.xml} must not pass as {@code web.xml}.
+     *
+     * @param path the artifact's project-relative path (the directory part carries the location signal)
+     */
+    static boolean isConfigXml(String path) {
+        String lower = basename(path).toLowerCase(Locale.ROOT);
+        if (CONFIG_XML_NAMES.contains(lower)) {
+            return true;
+        }
+        for (String suffix : CONFIG_XML_SUFFIXES) {
+            // A suffix match needs something in front of it, so "-context.xml" itself is not a match.
+            if (lower.length() > suffix.length() && lower.endsWith(suffix)) {
+                return true;
+            }
+        }
+        return inDescriptorDirectory(path);
+    }
+
+    /** True when the file sits directly inside a {@code WEB-INF} or {@code META-INF} directory. */
+    private static boolean inDescriptorDirectory(String path) {
+        String normalized = path.replace('\\', '/');
+        int slash = normalized.lastIndexOf('/');
+        if (slash < 0) {
+            return false;
+        }
+        String parent = normalized.substring(0, slash);
+        int parentSlash = parent.lastIndexOf('/');
+        String dir = parentSlash < 0 ? parent : parent.substring(parentSlash + 1);
+        return "WEB-INF".equalsIgnoreCase(dir) || "META-INF".equalsIgnoreCase(dir);
     }
 
     // ---- properties: java.util.Properties handles key=value/key:value, `\` continuations, and
