@@ -3,6 +3,7 @@ package com.ibm.cldk.artifacts;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -98,8 +99,51 @@ class ConfigKeysTest {
         assertEquals(1, envKeys.size());
         assertEquals("localhost", envKeys.get(0).getValue());
         assertEquals(
-                CanId.configKeyId(art.getId(), "env.DB_HOST"), envKeys.get(0).getId(),
-                "env dual-mint id must be disambiguated so it cannot collide with a top-level yaml key of the same name");
+                art.getId() + "@key:env/DB_HOST", envKeys.get(0).getId(),
+                "env dual-mint id must use a delimiter distinct from configKeyId's \"@key/\" so it can never "
+                        + "collide with a plain yaml dotted path of the same text (see ENV_DUAL_MINT_ID_DELIMITER)");
+    }
+
+    @Test
+    void extract_yamlTopLevelScalarDocumentYieldsNoKeysNotAnEmptyKeyEntry() {
+        // new Yaml().load("hello world") returns the String "hello world" -- neither null, a Map,
+        // nor a List. Must be treated like an empty document (properties' own degenerate case
+        // already does this correctly), not flattened into a single entry with key="".
+        JArtifact art = artifact("weird.yml", "yaml");
+
+        ConfigKeys.Result result = ConfigKeys.extract(art, "hello world", true);
+
+        assertTrue(result.ok);
+        assertTrue(result.keys.isEmpty(), "a top-level scalar has nothing to flatten, like an empty document");
+    }
+
+    @Test
+    void extract_yamlTopLevelEnvBlockDoesNotCollideWithComposeEnvDualMintId() {
+        // A plain yaml dotted path CAN legitimately be "env.DB_HOST" (a top-level "env:" block one
+        // level deep) -- the exact same string the compose dual-mint would otherwise construct for
+        // a bare "DB_HOST" var. Both must be minted, with different ids: no two JConfigKey records
+        // extracted from one artifact may share an id.
+        JArtifact art = artifact("docker-compose.yml", "yaml");
+        String text = "env:\n  DB_HOST: from-top-level\n"
+                + "services:\n  web:\n    environment:\n      DB_HOST: from-compose\n";
+
+        ConfigKeys.Result result = ConfigKeys.extract(art, text, true);
+
+        assertTrue(result.ok);
+        JConfigKey plainYamlKey = find(result.keys, "env.DB_HOST").orElseThrow();
+        assertEquals("yaml", plainYamlKey.getNamespace());
+        assertEquals("from-top-level", plainYamlKey.getValue());
+
+        JConfigKey dualMintKey = result.keys.stream()
+                .filter(k -> "env".equals(k.getNamespace()) && k.getKey().equals("DB_HOST"))
+                .findFirst().orElseThrow();
+        assertEquals("from-compose", dualMintKey.getValue());
+
+        assertNotEquals(
+                plainYamlKey.getId(), dualMintKey.getId(),
+                "a top-level env.DB_HOST yaml path and a compose-recognized DB_HOST var must not collide");
+        long distinctIds = result.keys.stream().map(JConfigKey::getId).distinct().count();
+        assertEquals(result.keys.size(), distinctIds, "every key extracted from one artifact must have a unique id");
     }
 
     @Test

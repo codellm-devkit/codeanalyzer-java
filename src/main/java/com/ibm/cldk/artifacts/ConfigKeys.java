@@ -51,9 +51,10 @@ import org.yaml.snakeyaml.Yaml;
  * {@code ENV X=$X} is common, the {@code ARG} mint's <em>id</em> (not its {@code key} field) is
  * disambiguated with an {@code arg.} prefix so the two do not collide. A {@code yaml}-format
  * artifact additionally recognizes a compose {@code services.<name>.environment} map and
- * dual-mints those into namespace {@code env} too, on the bare var name, with the same kind of
- * collision guard (an {@code env.} id prefix, since a top-level yaml key could otherwise share a
- * bare name with a recognized env var).
+ * dual-mints those into namespace {@code env} too, on the bare var name, with an analogous but
+ * structurally different collision guard: see {@link #ENV_DUAL_MINT_ID_DELIMITER} for why a plain
+ * text prefix (the dockerfile ARG approach) is not provably safe for yaml's unrestricted dotted
+ * paths the way it is for dockerfile's identifier-restricted keys.
  *
  * <p>{@code value} is populated only when {@code captureValue} is {@code true}; {@code key},
  * {@code namespace}, {@code span}, and {@code references} are extracted unconditionally either
@@ -140,16 +141,20 @@ public final class ConfigKeys {
                         artifact.getId(), "env", dockerfileEnvEntries(text), captureValue, true, null));
                 keys.addAll(buildKeys(
                         artifact.getId(), "dockerfile", dockerfileArgEntries(text), captureValue, true,
-                        k -> "arg." + k));
+                        k -> CanId.configKeyId(artifact.getId(), "arg." + k)));
             } else if ("properties".equals(artifact.getFormat())) {
                 keys = buildKeys(artifact.getId(), "properties", parseProperties(text), captureValue, false, null);
             } else if ("yaml".equals(artifact.getFormat())) {
                 Object data = new Yaml().load(text);
-                List<Entry> flat = flatten(data == null ? new LinkedHashMap<>() : data, "");
+                // Anything that isn't a Map or a List (null for an empty doc, but also a bare
+                // top-level scalar like "hello world" or "42") has nothing to flatten -- must not
+                // fall into flatten()'s leaf branch, which would mint a spurious key="" entry.
+                Object root = data instanceof Map || data instanceof List ? data : new LinkedHashMap<>();
+                List<Entry> flat = flatten(root, "");
                 keys = new ArrayList<>(buildKeys(artifact.getId(), "yaml", flat, captureValue, false, null));
                 keys.addAll(buildKeys(
                         artifact.getId(), "env", recognizeComposeEnv(flat), captureValue, false,
-                        k -> "env." + k));
+                        k -> artifact.getId() + ENV_DUAL_MINT_ID_DELIMITER + k));
             } else if ("xml".equals(artifact.getFormat())) {
                 keys = extractXml(artifact.getId(), text, captureValue);
             } else {
@@ -205,6 +210,23 @@ public final class ConfigKeys {
     // "KEY=value"/bare "KEY" strings) -- python's k8s `env[].name`/`.value` list-shape recognition
     // is deliberately not ported, the brief names compose only.
     private static final Pattern COMPOSE_ENV = Pattern.compile("^services\\.[^.]+\\.environment\\.(.+)$");
+
+    /**
+     * Id delimiter for a compose env-dual-mint entry, used in place of {@code
+     * CanId.configKeyId}'s {@code "@key/"}. A plain yaml dotted path is an UNRESTRICTED string (any
+     * map key can be quoted to contain literally anything), so it can legitimately equal
+     * {@code "env.<name>"} -- e.g. a document with both a top-level {@code env:} block one level
+     * deep and a {@code services.x.environment} block recognizes the same bare name from two
+     * places. Prefixing "env." onto the bare key and still going through {@code configKeyId}'s
+     * {@code "@key/"} delimiter therefore cannot be proven collision-free: it works only because no
+     * test happened to construct that yaml shape, i.e. by luck, not by construction. Using a
+     * DIFFERENT fixed delimiter instead makes the two id families diverge at a fixed character
+     * position (right after {@code "@key"}, {@code ':'} here vs. plain {@code configKeyId}'s
+     * {@code '/'}) that no dotted-key content can ever reach, regardless of what the yaml
+     * document's keys contain -- an unconditional guarantee, the same rigor the dockerfile
+     * {@code arg.} prefix has (there, {@code ENV_KEY_NAME} forbids dots on both sides instead).
+     */
+    private static final String ENV_DUAL_MINT_ID_DELIMITER = "@key:env/";
 
     private static List<Entry> recognizeComposeEnv(List<Entry> flat) {
         List<Entry> out = new ArrayList<>();
@@ -378,76 +400,84 @@ public final class ConfigKeys {
         return tokens;
     }
 
-    private static List<Entry> dockerfileEnvEntries(String text) {
+    /**
+     * Shared scaffolding for both {@code ENV} and {@code ARG} scanning: split into lines, skip
+     * blank/comment/non-matching ones, join backslash continuations, recover the directive's
+     * {@code rest} text and its {@code span}, and hand {@code rest} to {@code parseTail} for the
+     * part that actually differs between the two directives (multi-key-vs-legacy for {@code ENV},
+     * {@code key[=default]} for {@code ARG}). {@code parseTail}'s returned entries carry no span of
+     * their own (irrelevant -- this method always attaches the one it already computed).
+     */
+    private static List<Entry> scanDockerfileDirective(
+            String text, Pattern directive, Function<String, List<Entry>> parseTail) {
         List<Entry> out = new ArrayList<>();
         String[] lines = text.split("\n", -1);
         int i = 0;
         while (i < lines.length) {
             String stripped = lines[i].trim();
-            if (stripped.isEmpty() || stripped.startsWith("#") || !DOCKER_ENV.matcher(stripped).matches()) {
+            if (stripped.isEmpty() || stripped.startsWith("#") || !directive.matcher(stripped).matches()) {
                 i++;
                 continue;
             }
             int startLineno = i + 1;
             Joined joined = joinContinuations(lines, i);
             i = joined.lastIndex;
-            // Re-run against the JOINED text (continuation lines add content after "ENV "): still
-            // guaranteed to match, since (.*) is greedy to end-of-string regardless of length.
-            Matcher dm = DOCKER_ENV.matcher(joined.text);
+            // Re-run against the JOINED text (continuation lines add content after the keyword):
+            // still guaranteed to match, since (.*) is greedy to end-of-string regardless of length.
+            Matcher dm = directive.matcher(joined.text);
             dm.matches();
             String rest = dm.group(1).trim();
             Span span = lineSpan(text, lines[startLineno - 1], startLineno);
-            String firstToken = rest.isEmpty() ? "" : rest.split("\\s+", 2)[0];
-            if (firstToken.contains("=")) {
-                // multi-key form: ENV a=1 b=2
-                for (String tok : splitWsRespectingQuotes(rest)) {
-                    int eq = tok.indexOf('=');
-                    if (eq >= 0) {
-                        String key = tok.substring(0, eq);
-                        if (ENV_KEY_NAME.matcher(key).matches()) {
-                            out.add(new Entry(key, envValue(tok.substring(eq + 1)), span));
-                        }
-                    }
-                }
-            } else {
-                // legacy single-key form: ENV KEY value -- value taken verbatim, no quote processing
-                String[] parts = rest.split("\\s+", 2);
-                if (parts.length == 2 && ENV_KEY_NAME.matcher(parts[0]).matches()) {
-                    out.add(new Entry(parts[0], parts[1], span));
-                }
+            for (Entry partial : parseTail.apply(rest)) {
+                out.add(new Entry(partial.key, partial.value, span));
             }
             i++;
         }
         return out;
     }
 
+    private static List<Entry> dockerfileEnvEntries(String text) {
+        return scanDockerfileDirective(text, DOCKER_ENV, ConfigKeys::parseEnvDirectiveTail);
+    }
+
     private static List<Entry> dockerfileArgEntries(String text) {
+        return scanDockerfileDirective(text, DOCKER_ARG, ConfigKeys::parseArgDirectiveTail);
+    }
+
+    // rest = everything after "ENV " on the (possibly continuation-joined) logical line.
+    private static List<Entry> parseEnvDirectiveTail(String rest) {
         List<Entry> out = new ArrayList<>();
-        String[] lines = text.split("\n", -1);
-        int i = 0;
-        while (i < lines.length) {
-            String stripped = lines[i].trim();
-            if (stripped.isEmpty() || stripped.startsWith("#") || !DOCKER_ARG.matcher(stripped).matches()) {
-                i++;
-                continue;
+        String firstToken = rest.isEmpty() ? "" : rest.split("\\s+", 2)[0];
+        if (firstToken.contains("=")) {
+            // multi-key form: ENV a=1 b=2
+            for (String tok : splitWsRespectingQuotes(rest)) {
+                int eq = tok.indexOf('=');
+                if (eq >= 0) {
+                    String key = tok.substring(0, eq);
+                    if (ENV_KEY_NAME.matcher(key).matches()) {
+                        out.add(new Entry(key, envValue(tok.substring(eq + 1)), null));
+                    }
+                }
             }
-            int startLineno = i + 1;
-            Joined joined = joinContinuations(lines, i);
-            i = joined.lastIndex;
-            // Same re-run-against-the-joined-text guarantee as dockerfileEnvEntries above.
-            Matcher dm = DOCKER_ARG.matcher(joined.text);
-            dm.matches();
-            String rest = dm.group(1).trim();
-            Span span = lineSpan(text, lines[startLineno - 1], startLineno);
-            int eq = rest.indexOf('=');
-            String key = (eq >= 0 ? rest.substring(0, eq) : rest).trim();
-            if (ENV_KEY_NAME.matcher(key).matches()) {
-                // No "=default" means value=null (distinct from "" for an explicitly empty value).
-                out.add(new Entry(key, eq >= 0 ? envValue(rest.substring(eq + 1)) : null, span));
+        } else {
+            // legacy single-key form: ENV KEY value -- value taken verbatim, no quote processing
+            String[] parts = rest.split("\\s+", 2);
+            if (parts.length == 2 && ENV_KEY_NAME.matcher(parts[0]).matches()) {
+                out.add(new Entry(parts[0], parts[1], null));
             }
-            i++;
         }
         return out;
+    }
+
+    // rest = everything after "ARG " on the (possibly continuation-joined) logical line.
+    private static List<Entry> parseArgDirectiveTail(String rest) {
+        int eq = rest.indexOf('=');
+        String key = (eq >= 0 ? rest.substring(0, eq) : rest).trim();
+        if (!ENV_KEY_NAME.matcher(key).matches()) {
+            return List.of();
+        }
+        // No "=default" means value=null (distinct from "" for an explicitly empty value).
+        return List.of(new Entry(key, eq >= 0 ? envValue(rest.substring(eq + 1)) : null, null));
     }
 
     // ---- env-family files (.env, .env.*): `KEY=value`, `#` comments, optional `export ` prefix,
@@ -558,13 +588,14 @@ public final class ConfigKeys {
      * into {@link JConfigKey} records for one namespace. {@code rawValue=true} (dockerfile) passes
      * the parsed value straight through instead of {@link #stringify}-ing it, so an ARG's absent
      * default surfaces as {@code value=null} rather than {@code stringify}'s {@code ""} for a
-     * modeled null. {@code idKey} remaps the dotted/bare key for ID CONSTRUCTION only -- the {@code
-     * key} FIELD always stays the bare key; see the class javadoc for why the dockerfile ARG and
-     * yaml env-dual-mint call sites need it.
+     * modeled null. {@code idOf} builds the FULL id from the bare/dotted key -- defaulting to
+     * {@code CanId.configKeyId(artifactId, key)} when {@code null} -- while the {@code key} FIELD
+     * always stays the bare key regardless; see the class javadoc for why the dockerfile ARG and
+     * yaml env-dual-mint call sites need a non-default one.
      */
     private static List<JConfigKey> buildKeys(
             String artifactId, String namespace, List<Entry> entries, boolean captureValue,
-            boolean rawValue, Function<String, String> idKey) {
+            boolean rawValue, Function<String, String> idOf) {
         Map<String, Entry> coalesced = new LinkedHashMap<>();
         for (Entry e : entries) {
             coalesced.put(e.key, e);
@@ -573,7 +604,7 @@ public final class ConfigKeys {
         for (Entry e : coalesced.values()) {
             String textValue = rawValue ? (String) e.value : stringify(e.value);
             JConfigKey key = new JConfigKey();
-            key.setId(CanId.configKeyId(artifactId, idKey != null ? idKey.apply(e.key) : e.key));
+            key.setId(idOf != null ? idOf.apply(e.key) : CanId.configKeyId(artifactId, e.key));
             key.setKey(e.key);
             key.setNamespace(namespace);
             key.setValue(captureValue ? textValue : null);
