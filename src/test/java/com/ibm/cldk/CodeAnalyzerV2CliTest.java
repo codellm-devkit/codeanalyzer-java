@@ -3,17 +3,28 @@ package com.ibm.cldk;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.networknt.schema.JsonSchema;
+import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.SpecVersion;
+import com.networknt.schema.ValidationMessage;
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 import javax.tools.ToolProvider;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -63,6 +74,8 @@ class CodeAnalyzerV2CliTest {
         set("targetFiles", null);
         set("sourceAnalysis", null);
         CodeAnalyzer.projectRootPom = null;
+        CodeAnalyzer.artifactText = true;
+        CodeAnalyzer.artifactTextMaxBytes = 262144;
     }
 
     private static void set(String field, Object value) throws Exception {
@@ -474,6 +487,178 @@ class CodeAnalyzerV2CliTest {
         // before the raise, this would exit 0 and silently fall back to RTA.
         assertNotEquals(0, run("-i", in.toString(), "--emit", "neo4j", "--precision", "2-cfa"),
                 "unrecognized flag values exit non-zero (CLI contract), --emit neo4j included");
+    }
+
+    // ---- repository-artifact layer ------------------------------------------------------------
+
+    /**
+     * A project with a {@code pom.xml} (one declared dependency), an {@code application.properties}
+     * config file, and the usual {@code Widget.java} -- exercises all three repository-artifact
+     * layer sections (inventory, dependencies, config keys) at once. {@code junit:junit} is the
+     * declared dependency because it is already present in any local Maven repository that has ever
+     * built a Java project, so resolving it during the library-download step is instant and offline.
+     */
+    private static Path artifactProject(Path root) throws IOException {
+        project(root);
+        Files.writeString(root.resolve("pom.xml"),
+                "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n"
+                        + "  <modelVersion>4.0.0</modelVersion>\n"
+                        + "  <groupId>com.example</groupId>\n"
+                        + "  <artifactId>widgets</artifactId>\n"
+                        + "  <version>1.0</version>\n"
+                        + "  <dependencies>\n"
+                        + "    <dependency>\n"
+                        + "      <groupId>junit</groupId>\n"
+                        + "      <artifactId>junit</artifactId>\n"
+                        + "      <version>4.13.2</version>\n"
+                        + "    </dependency>\n"
+                        + "  </dependencies>\n"
+                        + "</project>\n",
+                StandardCharsets.UTF_8);
+        Files.writeString(root.resolve("application.properties"), "server.port=8080\n", StandardCharsets.UTF_8);
+        return root;
+    }
+
+    private static JsonObject application(Path outputDir) throws IOException {
+        JsonObject root = JsonParser.parseString(Files.readString(outputDir.resolve("analysis.json")))
+                .getAsJsonObject();
+        return root.getAsJsonObject("application");
+    }
+
+    /**
+     * Validates a written {@code analysis.json} against the canonical (strict, additionalProperties:
+     * false) v2 schema -- so a key this task adds to the emitted payload must also be reflected in
+     * the schema, and an accidentally misnamed one fails here rather than reaching consumers.
+     */
+    private static void assertConformsToV2Schema(Path outputDir) throws IOException {
+        JsonNode payload = new ObjectMapper().readTree(Files.readString(outputDir.resolve("analysis.json")));
+        try (InputStream schemaIn =
+                CodeAnalyzerV2CliTest.class.getResourceAsStream("/schema/analysis.v2.schema.json")) {
+            assertNotNull(schemaIn, "the canonical v2 schema must be on the test classpath");
+            JsonSchema schema = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012).getSchema(schemaIn);
+            Set<ValidationMessage> problems = schema.validate(payload);
+            assertTrue(problems.isEmpty(),
+                    "output must validate against the canonical v2 schema, but got:\n  "
+                            + problems.stream().map(ValidationMessage::getMessage)
+                                    .collect(Collectors.joining("\n  ")));
+        }
+    }
+
+    @Test
+    void v2EmitsArtifactsAndDependenciesAtLevelOne(@TempDir Path tmp) throws IOException {
+        Path in = artifactProject(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "-a", "1", "--app-name", "widgets"));
+
+        JsonObject app = application(out);
+        assertTrue(app.has("artifacts"), "the repository-artifact inventory must be attached");
+        JsonObject artifacts = app.getAsJsonObject("artifacts");
+        assertTrue(artifacts.has("pom.xml"), "pom.xml is a dependency-manifest artifact: " + artifacts.keySet());
+        assertTrue(artifacts.has("application.properties"),
+                "and application.properties is a config artifact: " + artifacts.keySet());
+
+        JsonObject pom = artifacts.getAsJsonObject("pom.xml");
+        assertEquals("xml", pom.get("format").getAsString());
+        assertEquals("full", pom.get("extraction").getAsString());
+
+        JsonObject props = artifacts.getAsJsonObject("application.properties");
+        assertEquals("properties", props.get("format").getAsString());
+        JsonArray propsKeys = props.getAsJsonArray("config_keys");
+        assertEquals(1, propsKeys.size());
+        JsonObject serverPort = propsKeys.get(0).getAsJsonObject();
+        assertEquals("server.port", serverPort.get("key").getAsString());
+        assertEquals("8080", serverPort.get("value").getAsString());
+
+        assertTrue(app.has("dependencies"), "the pom.xml's declared dependency must be attached");
+        JsonArray deps = app.getAsJsonArray("dependencies");
+        boolean sawJunit = false;
+        for (JsonElement e : deps) {
+            JsonObject d = e.getAsJsonObject();
+            if ("junit".equals(d.get("group").getAsString()) && "junit".equals(d.get("name").getAsString())) {
+                sawJunit = true;
+            }
+        }
+        assertTrue(sawJunit, "expected the declared junit dependency, got: " + deps);
+
+        assertConformsToV2Schema(out);
+    }
+
+    @Test
+    void v2ArtifactLayerIsByteIdenticalAcrossAnalysisLevels(@TempDir Path tmp) throws IOException {
+        // This layer is L1 data assembled once from the filesystem, independent of --analysis-level --
+        // python's own gate, and the property most likely to break under careless wiring.
+        Path in = artifactProject(tmp.resolve("app"));
+        Path outLevel1 = tmp.resolve("out1");
+        Path outLevel4 = tmp.resolve("out4");
+
+        assertEquals(0, run("-i", in.toString(), "-o", outLevel1.toString(), "-a", "1", "--app-name", "widgets"));
+        assertEquals(0, run("-i", in.toString(), "-o", outLevel4.toString(),
+                "-a", "4", "--no-build", "--app-name", "widgets"));
+
+        JsonObject app1 = application(outLevel1);
+        JsonObject app4 = application(outLevel4);
+
+        assertTrue(app1.has("artifacts") && app1.has("dependencies"), "precondition: level 1 carries the layer");
+        assertTrue(app4.has("artifacts") && app4.has("dependencies"), "precondition: level 4 carries it too");
+
+        assertEquals(app1.get("artifacts").toString(), app4.get("artifacts").toString(),
+                "the artifact inventory (including nested config_keys) must be byte-identical across levels");
+        assertEquals(app1.get("dependencies").toString(), app4.get("dependencies").toString(),
+                "declared dependencies must be byte-identical across levels");
+    }
+
+    @Test
+    void noArtifactTextEmptiesSourceAndValueButKeepsInventory(@TempDir Path tmp) throws IOException {
+        Path in = artifactProject(tmp.resolve("app"));
+        Path outWith = tmp.resolve("out-with");
+        Path outWithout = tmp.resolve("out-without");
+
+        assertEquals(0, run("-i", in.toString(), "-o", outWith.toString(), "--app-name", "widgets"));
+        assertEquals(0, run("-i", in.toString(), "-o", outWithout.toString(),
+                "--app-name", "widgets", "--no-artifact-text"));
+
+        JsonObject artifactsWith = application(outWith).getAsJsonObject("artifacts");
+        JsonObject artifactsWithout = application(outWithout).getAsJsonObject("artifacts");
+        assertEquals(artifactsWith.keySet(), artifactsWithout.keySet(), "the inventory itself must not change");
+
+        boolean sawCapturedSource = false;
+        boolean sawCapturedValue = false;
+        for (String path : artifactsWith.keySet()) {
+            JsonObject with = artifactsWith.getAsJsonObject(path);
+            JsonObject without = artifactsWithout.getAsJsonObject(path);
+
+            assertEquals("", without.get("source").getAsString(), "--no-artifact-text must empty source: " + path);
+            sawCapturedSource |= !with.get("source").getAsString().isEmpty();
+
+            assertEquals(with.get("sha256"), without.get("sha256"), "hashing is unaffected by the capture flag");
+            assertEquals(with.get("size_bytes"), without.get("size_bytes"));
+            assertEquals(with.get("extraction"), without.get("extraction"),
+                    "extraction must not silently degrade under the capture flag: " + path);
+
+            JsonArray keysWith = with.getAsJsonArray("config_keys");
+            JsonArray keysWithout = without.getAsJsonArray("config_keys");
+            assertEquals(keysWith.size(), keysWithout.size(), "the keys themselves must survive: " + path);
+            for (int i = 0; i < keysWith.size(); i++) {
+                JsonObject kw = keysWith.get(i).getAsJsonObject();
+                JsonObject kwo = keysWithout.get(i).getAsJsonObject();
+                assertEquals(kw.get("key"), kwo.get("key"));
+                assertEquals(kw.get("namespace"), kwo.get("namespace"));
+                assertFalse(kwo.has("value"), "--no-artifact-text must null out value: " + path);
+                sawCapturedValue |= kw.has("value");
+            }
+        }
+        assertTrue(sawCapturedSource, "precondition: the default run must actually capture some source text");
+        assertTrue(sawCapturedValue, "precondition: the default run must actually capture some config value");
+    }
+
+    @Test
+    void v2OmitsArtifactsAndDependenciesWhenNoNonSourceFilesExist(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString()));
+        JsonObject app = application(out);
+        assertFalse(app.has("artifacts"), "no non-source files means the artifact layer has nothing to say");
+        assertFalse(app.has("dependencies"), "no manifests means no declared dependencies");
     }
 
 }

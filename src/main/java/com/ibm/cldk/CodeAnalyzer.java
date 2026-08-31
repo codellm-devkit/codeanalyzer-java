@@ -21,10 +21,15 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.ibm.cldk.artifacts.ArtifactDiscovery;
+import com.ibm.cldk.artifacts.ConfigKeys;
+import com.ibm.cldk.artifacts.DependencyView;
 import com.ibm.cldk.entities.JavaCompilationUnit;
 import com.ibm.cldk.neo4j.BoltConfig;
 import com.ibm.cldk.neo4j.Neo4jEmitter;
 import com.ibm.cldk.schema.Analysis;
+import com.ibm.cldk.schema.JArtifact;
+import com.ibm.cldk.schema.JDependency;
 import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.schema.V2Emitter;
 import com.ibm.cldk.schema.V2Json;
@@ -170,6 +175,20 @@ public class CodeAnalyzer implements Runnable {
     @Option(names = {
             "--graph-field-depth" }, description = "DDG access-path bound k at --analysis-level 3 (default 3).")
     private int graphFieldDepth = 3;
+
+    // fallbackValue = "true" works around a picocli 4.1.0 bug (the version this project is pinned
+    // to): without it, a bare --artifact-text/--no-artifact-text (no explicit =value) resolves to
+    // the opposite of what negatable=true implies. Verified empirically against the resolved
+    // picocli-4.1.0.jar; --artifact-text=true/false and --no-artifact-text=true/false are unaffected
+    // either way.
+    @Option(names = { "--artifact-text" }, negatable = true, fallbackValue = "true",
+            description = "Capture non-source file text into artifact nodes (default: true).")
+    public static boolean artifactText = true;
+
+    @Option(names = { "--artifact-text-max-bytes" },
+            description = "Byte cap on captured artifact text (default: 262144). "
+                    + "Dependency manifests are exempt — they are always captured whole.")
+    public static int artifactTextMaxBytes = 262144;
 
     /** Handle used to report flag-validation errors as clean, non-zero picocli failures. */
     @Spec
@@ -361,6 +380,16 @@ public class CodeAnalyzer implements Runnable {
     }
 
     /**
+     * An artifact's full on-disk text, for config-key extraction. Never {@link JArtifact#getSource()},
+     * which {@code --artifact-text}/{@code --artifact-text-max-bytes} may have emptied or truncated —
+     * delegates to {@link DependencyView#readFromDisk} rather than re-reading the file itself, so that
+     * from-disk logic exists exactly once in this codebase.
+     */
+    private static String readFully(JArtifact artifact) {
+        return DependencyView.readFromDisk(Paths.get(input), artifact.getPath());
+    }
+
+    /**
      * Emit the canonical schema v2 payload. Levels 1 (containment tree), 2 (the {@code call_graph}
      * overlay), 3 (the intraprocedural {@code cfg}/{@code cdg}/{@code ddg} overlays) and 4 (the
      * interprocedural SDG overlays) are supported, whole-project, JSON. Anything else is an explicit
@@ -505,6 +534,28 @@ public class CodeAnalyzer implements Runnable {
             L1Cache.save(cache, application, version, modules);
         }
 
+        // The repository-artifact layer (build manifests, config files, declared dependencies) sits
+        // beside the call-graph/SDG assembly below because both are application-scope data built once
+        // -- but unlike them it is L1 data and runs at EVERY analysis level, so it is computed here,
+        // ahead of the level gate, rather than inside either branch of it.
+        Map<String, JArtifact> artifacts =
+                ArtifactDiscovery.discover(Paths.get(input), application, artifactText, artifactTextMaxBytes);
+        List<JDependency> dependencies = DependencyView.build(Paths.get(input), artifacts);
+        for (JArtifact a : artifacts.values()) {
+            if (ConfigKeys.isEligible(a)) {
+                // Re-read from disk: `source` may be truncated or suppressed, and extraction
+                // must not silently degrade with a capture flag.
+                ConfigKeys.Result r = ConfigKeys.extract(a, readFully(a), artifactText);
+                a.setConfigKeys(r.keys);
+                // A pre-existing "partial" from the dependency pass is never overwritten.
+                if (!r.ok) {
+                    a.setExtraction("partial");
+                } else if ("none".equals(a.getExtraction())) {
+                    a.setExtraction("full");
+                }
+            }
+        }
+
         // maxLevel reports the requested level: the L1-L3 passes above always run to that level (or
         // degrade a specific overlay with a warning), and the L4 vertices/param edges below are
         // engine-free, so they run whenever analysisLevel >= 4 regardless of the WALA build's fate.
@@ -521,9 +572,11 @@ public class CodeAnalyzer implements Runnable {
             }
             analysis = V2Emitter.emit(application, analysisLevel, modules, version,
                     l2.callGraph(), l2.externalSymbols(),
-                    sdg == null ? null : sdg.paramIn, sdg == null ? null : sdg.paramOut);
+                    sdg == null ? null : sdg.paramIn, sdg == null ? null : sdg.paramOut,
+                    artifacts, dependencies);
         } else {
-            analysis = V2Emitter.emit(application, analysisLevel, modules, version);
+            analysis = V2Emitter.emit(application, analysisLevel, modules, version,
+                    null, null, null, null, artifacts, dependencies);
         }
 
         if ("neo4j".equalsIgnoreCase(emit)) {
