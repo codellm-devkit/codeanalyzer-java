@@ -15,19 +15,28 @@ package com.ibm.cldk.neo4j;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.ibm.cldk.artifacts.ArtifactDiscovery;
+import com.ibm.cldk.artifacts.ConfigKeys;
+import com.ibm.cldk.artifacts.DependencyView;
 import com.ibm.cldk.neo4j.GraphRows.EdgeRow;
 import com.ibm.cldk.neo4j.GraphRows.NodeRow;
 import com.ibm.cldk.neo4j.SchemaCatalog.NodeLabel;
 import com.ibm.cldk.neo4j.SchemaCatalog.RelType;
 import com.ibm.cldk.schema.Analysis;
+import com.ibm.cldk.schema.CanId;
+import com.ibm.cldk.schema.JArtifact;
+import com.ibm.cldk.schema.JDependency;
 import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.schema.V2Emitter;
 import com.ibm.cldk.syntactic_analysis.L1Extractor;
 import com.ibm.cldk.syntactic_analysis.L2CallGraph;
 import com.ibm.cldk.syntactic_analysis.dataflow.SdgVertices;
 import com.ibm.cldk.syntactic_analysis.dataflow.SummaryPass;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
@@ -38,12 +47,13 @@ import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Schema v2 graph conformance (no container needed): run the real L1–L3 pipeline plus the L4 SDG
  * passes ({@link SdgVertices}, {@link SummaryPass}) over a fixture, project with
  * {@link V2GraphProjector}, and assert the projector only ever produces what
- * {@link V2SchemaCatalog} declares — the anti-drift guard for the 2.1.0 graph contract. Also pins
+ * {@link V2SchemaCatalog} declares — the anti-drift guard for the 2.2.0 graph contract. Also pins
  * the convergence decisions: body nodes instead of call-site nodes, and the {@code _k}-keyed
  * CFG/DDG relationships.
  */
@@ -53,6 +63,13 @@ public class V2Neo4jSchemaConformanceTest {
     // J_PARAM_IN/J_SUMMARY are guaranteed non-empty here. The v1/v2 conformance tests still exercise
     // call-graph-test.
     private static final Path FIXTURE = Paths.get("src/test/resources/test-applications/l4-sdg-test");
+
+    // A throwaway repository-artifact fixture, independent of FIXTURE above: ArtifactDiscovery /
+    // DependencyView / ConfigKeys only care about non-.java files, so this is populated with a
+    // pom.xml, a matching gradle.lockfile pin and an application.properties -- one manifest declared
+    // AND locked, so HAS_ARTIFACT/DEFINES_CONFIG/DECLARES_DEPENDENCY/LOCKS are all non-empty below.
+    @TempDir
+    static Path ARTIFACT_TMP;
 
     private static GraphRows rows;
 
@@ -75,9 +92,33 @@ public class V2Neo4jSchemaConformanceTest {
         L2CallGraph.Result l2 = L2CallGraph.build("l4-sdg-test", modules, null, true);
         SdgVertices.Result sdg = SdgVertices.apply(modules);
         SummaryPass.apply(modules, l2.callGraph(), 3);
+
+        // Repository-artifact layer (Task 7): mirrors CodeAnalyzer's own wiring (discover, then
+        // build dependencies, then flatten config keys) over ARTIFACT_TMP.
+        Files.writeString(ARTIFACT_TMP.resolve("pom.xml"),
+                "<project><dependencies>"
+                        + "<dependency><groupId>org.example</groupId><artifactId>widget</artifactId>"
+                        + "<version>1.0.0</version></dependency>"
+                        + "</dependencies></project>",
+                StandardCharsets.UTF_8);
+        Files.writeString(ARTIFACT_TMP.resolve("gradle.lockfile"),
+                "org.example:widget:1.0.0=compileClasspath,runtimeClasspath\n", StandardCharsets.UTF_8);
+        Files.writeString(ARTIFACT_TMP.resolve("application.properties"),
+                "server.port=8080\nspring.datasource.url=${DB_URL}\n", StandardCharsets.UTF_8);
+        Map<String, JArtifact> artifacts =
+                ArtifactDiscovery.discover(ARTIFACT_TMP, "l4-sdg-test", true, 262144);
+        List<JDependency> dependencies = DependencyView.build(ARTIFACT_TMP, artifacts);
+        for (JArtifact a : artifacts.values()) {
+            if (ConfigKeys.isEligible(a)) {
+                ConfigKeys.Result r = ConfigKeys.extract(
+                        a, DependencyView.readFromDisk(ARTIFACT_TMP, a.getPath()), true);
+                a.setConfigKeys(r.keys);
+            }
+        }
+
         Analysis analysis = V2Emitter.emit(
                 "l4-sdg-test", 3, modules, "test", l2.callGraph(), l2.externalSymbols(),
-                sdg.paramIn, sdg.paramOut);
+                sdg.paramIn, sdg.paramOut, artifacts, dependencies);
         rows = V2GraphProjector.project(analysis, "l4-sdg-test");
     }
 
@@ -197,5 +238,76 @@ public class V2Neo4jSchemaConformanceTest {
         assertTrue(paramIn, "J_PARAM_IN projected from application param_in");
         assertTrue(paramOut, "J_PARAM_OUT projected from application param_out");
         assertTrue(summary, "J_SUMMARY projected from callable summaries");
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Repository-artifact layer (Task 7): Artifact/Package/ConfigKey, graph contract 2.2.0.
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void artifactLayerNodesAreEmitted() {
+        boolean sawArtifact = false;
+        boolean sawPackage = false;
+        boolean sawConfigKey = false;
+        for (NodeRow node : rows.nodes) {
+            String merge = node.labels.get(0);
+            sawArtifact |= merge.equals("Artifact");
+            sawPackage |= merge.equals("Package");
+            sawConfigKey |= merge.equals("ConfigKey");
+        }
+        assertTrue(sawArtifact, "no :Artifact rows projected");
+        assertTrue(sawPackage, "no :Package rows projected");
+        assertTrue(sawConfigKey, "no :ConfigKey rows projected");
+    }
+
+    @Test
+    void packageNodeIsKeyedByPurlAndCarriesMavenCoordinates() {
+        String pkgId = CanId.purlMaven("org.example", "widget");
+        NodeRow pkg = findNode("Package", pkgId);
+        assertNotNull(pkg, "expected a :Package node keyed on " + pkgId);
+        assertEquals("maven", pkg.props.get("ecosystem"));
+        assertEquals("org.example", pkg.props.get("group"));
+        assertEquals("widget", pkg.props.get("name"));
+    }
+
+    @Test
+    void artifactLayerEdgesAreEmittedAndDeclaresDependencyIsKeyedByKind() {
+        boolean hasArtifact = false;
+        boolean definesConfig = false;
+        boolean declaresDependency = false;
+        boolean locks = false;
+        String declaresDependencyKey = null;
+        String pkgId = CanId.purlMaven("org.example", "widget");
+        for (EdgeRow edge : rows.edges) {
+            hasArtifact |= edge.type.equals("HAS_ARTIFACT");
+            definesConfig |= edge.type.equals("DEFINES_CONFIG");
+            if (edge.type.equals("DECLARES_DEPENDENCY") && edge.to.value.equals(pkgId)) {
+                declaresDependency = true;
+                declaresDependencyKey = edge.key;
+                assertEquals("1.0.0", edge.props.get("spec"));
+                assertEquals("runtime", edge.props.get("kind"));
+                assertEquals(Boolean.TRUE, edge.props.get("direct"));
+            }
+            if (edge.type.equals("LOCKS") && edge.to.value.equals(pkgId)) {
+                locks = true;
+                assertEquals("1.0.0", edge.props.get("version"));
+                assertNull(edge.key, "LOCKS carries no _k discriminant");
+            }
+        }
+        assertTrue(hasArtifact, "no HAS_ARTIFACT edges projected");
+        assertTrue(definesConfig, "no DEFINES_CONFIG edges projected");
+        assertTrue(declaresDependency, "no DECLARES_DEPENDENCY edge for the fixture's declared package");
+        assertTrue(locks, "no LOCKS edge for the fixture's locked package");
+        assertEquals("runtime", declaresDependencyKey,
+                "DECLARES_DEPENDENCY must carry the _k=kind MERGE discriminant");
+    }
+
+    private static NodeRow findNode(String mergeLabel, String value) {
+        for (NodeRow node : rows.nodes) {
+            if (node.labels.get(0).equals(mergeLabel) && node.value.equals(value)) {
+                return node;
+            }
+        }
+        return null;
     }
 }

@@ -21,7 +21,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The schema v2 Neo4j graph catalog (graph contract {@code 2.1.0}) — the in-repo source of truth
+ * The schema v2 Neo4j graph catalog (graph contract {@code 2.2.0}) — the in-repo source of truth
  * for what {@link V2GraphProjector} may emit, serialized by {@code --emit schema} and enforced by
  * the v2 conformance test. Mirrors codeanalyzer-python's {@code neo4j/schema.py} vocabulary with
  * {@code J}/{@code J_} namespacing; java-only constructs (enum constants, record components,
@@ -42,7 +42,10 @@ public final class V2SchemaCatalog {
 
     // 2.1.0: additive MINOR — L4 SDG overlay (JBodyNode.var/call_node; J_PARAM_IN/J_PARAM_OUT/
     // J_SUMMARY, reserved at 2.0.0, now actually emitted).
-    public static final String SCHEMA_VERSION = "2.1.0";
+    // 2.2.0: additive MINOR — the repository-artifact layer (#197): Artifact/Package/ConfigKey
+    // reserved at 2.0.0, now actually emitted, plus HAS_ARTIFACT/DEFINES_CONFIG/
+    // DECLARES_DEPENDENCY/LOCKS.
+    public static final String SCHEMA_VERSION = "2.2.0";
 
     /** Labels layered onto a node in addition to its merge + specific labels. */
     public static final List<String> MARKER_LABELS = Arrays.asList("JEntrypoint");
@@ -135,6 +138,32 @@ public final class V2SchemaCatalog {
 
         n.add(node("JAnnotation", "JAnnotation", "name", new P().put("name", "string").done()));
 
+        // Neutral artifact/dependency subgraph (the repository-artifact layer, #197). No `J`/`J_`
+        // prefix on these three nodes or the containment edges below -- deliberate: `Artifact`,
+        // `Package` and `ConfigKey` are cross-language merge targets, so a sibling-language analyzer
+        // over the same repository lands on the same nodes instead of a per-language duplicate.
+        // Mirrors codeanalyzer-python's identical un-prefixed vocabulary and its rationale.
+        n.add(node("Artifact", "Artifact", "id",
+                new P().put("id", "string").put("path", "string").put("format", "string")
+                        .put("roles", "string[]").put("size_bytes", "integer").put("sha256", "string")
+                        .put("source", "string").put("text_truncated", "boolean")
+                        .put("extraction", "string").done()));
+
+        // `group` is additive over codeanalyzer-python's `Package` (PyPI names are single-segment);
+        // Maven splits a coordinate into groupId + artifactId, so both are carried.
+        n.add(node("Package", "Package", "id",
+                new P().put("id", "string").put("ecosystem", "string").put("group", "string")
+                        .put("name", "string").done()));
+
+        // A configuration key flattened out of a config-bearing Artifact. Neutral vocabulary like
+        // Artifact/Package -- a properties/yaml/xml/env key is not a Java concept. `value` is
+        // omitted (not null) when the source model's value is null (--no-artifact-text, or a
+        // namespace with no value at that path); `references` is omitted only when empty (the
+        // general list-property rule every other node in this catalog already follows).
+        n.add(node("ConfigKey", "ConfigKey", "id",
+                lines(new P().put("id", "string").put("key", "string").put("namespace", "string")
+                        .put("value", "string").put("references", "string[]"))));
+
         return n;
     }
 
@@ -177,6 +206,20 @@ public final class V2SchemaCatalog {
         r.add(rel("J_PARAM_IN", body, body, new P().put("var", "string").done()));
         r.add(rel("J_PARAM_OUT", body, body, new P().put("var", "string").done()));
         r.add(rel("J_SUMMARY", body, body, none));
+
+        // Neutral artifact/dependency subgraph (the repository-artifact layer, #197) -- no `J_`
+        // prefix, same cross-language-merge-target reasoning as the Artifact/Package/ConfigKey
+        // nodes above.
+        r.add(rel("HAS_ARTIFACT", Arrays.asList("JApplication"), Arrays.asList("Artifact"), none));
+        r.add(rel("DEFINES_CONFIG", Arrays.asList("Artifact"), Arrays.asList("ConfigKey"), none));
+        // `_k` (merges per `kind`): the same manifest may declare one package twice under different
+        // kinds (e.g. a runtime dependency re-listed under an optional extra) -- same endpoint pair,
+        // so without the discriminant the plain MERGE collapses the two declarations into one row.
+        r.add(rel("DECLARES_DEPENDENCY", Arrays.asList("Artifact"), Arrays.asList("Package"),
+                new P().put("spec", "string").put("kind", "string").put("extras", "string[]")
+                        .put("prov", "string[]").put("direct", "boolean").put("_k", "string").done()));
+        r.add(rel("LOCKS", Arrays.asList("Artifact"), Arrays.asList("Package"),
+                new P().put("version", "string").done()));
 
         return r;
     }

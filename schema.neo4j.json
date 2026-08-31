@@ -1,5 +1,5 @@
 {
-  "schema_version": "2.1.0",
+  "schema_version": "2.2.0",
   "generator": "codeanalyzer-java",
   "marker_labels": [
     "JEntrypoint"
@@ -176,6 +176,47 @@
       "key": "name",
       "properties": {
         "name": "string"
+      }
+    },
+    {
+      "label": "Artifact",
+      "merge_label": "Artifact",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "path": "string",
+        "format": "string",
+        "roles": "string[]",
+        "size_bytes": "integer",
+        "sha256": "string",
+        "source": "string",
+        "text_truncated": "boolean",
+        "extraction": "string"
+      }
+    },
+    {
+      "label": "Package",
+      "merge_label": "Package",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "ecosystem": "string",
+        "group": "string",
+        "name": "string"
+      }
+    },
+    {
+      "label": "ConfigKey",
+      "merge_label": "ConfigKey",
+      "key": "id",
+      "properties": {
+        "id": "string",
+        "key": "string",
+        "namespace": "string",
+        "value": "string",
+        "references": "string[]",
+        "start_line": "integer",
+        "end_line": "integer"
       }
     }
   ],
@@ -407,6 +448,55 @@
         "JBodyNode"
       ],
       "properties": {}
+    },
+    {
+      "type": "HAS_ARTIFACT",
+      "from": [
+        "JApplication"
+      ],
+      "to": [
+        "Artifact"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "DEFINES_CONFIG",
+      "from": [
+        "Artifact"
+      ],
+      "to": [
+        "ConfigKey"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "DECLARES_DEPENDENCY",
+      "from": [
+        "Artifact"
+      ],
+      "to": [
+        "Package"
+      ],
+      "properties": {
+        "spec": "string",
+        "kind": "string",
+        "extras": "string[]",
+        "prov": "string[]",
+        "direct": "boolean",
+        "_k": "string"
+      }
+    },
+    {
+      "type": "LOCKS",
+      "from": [
+        "Artifact"
+      ],
+      "to": [
+        "Package"
+      ],
+      "properties": {
+        "version": "string"
+      }
     }
   ],
   "constraints": [
@@ -419,7 +509,10 @@
     "CREATE CONSTRAINT jrecordcomponent_id IF NOT EXISTS FOR (x:JRecordComponent) REQUIRE x.id IS UNIQUE",
     "CREATE CONSTRAINT jbodynode_id IF NOT EXISTS FOR (x:JBodyNode) REQUIRE x.id IS UNIQUE",
     "CREATE CONSTRAINT jpackage_name IF NOT EXISTS FOR (x:JPackage) REQUIRE x.name IS UNIQUE",
-    "CREATE CONSTRAINT jannotation_name IF NOT EXISTS FOR (x:JAnnotation) REQUIRE x.name IS UNIQUE"
+    "CREATE CONSTRAINT jannotation_name IF NOT EXISTS FOR (x:JAnnotation) REQUIRE x.name IS UNIQUE",
+    "CREATE CONSTRAINT artifact_id IF NOT EXISTS FOR (x:Artifact) REQUIRE x.id IS UNIQUE",
+    "CREATE CONSTRAINT package_id IF NOT EXISTS FOR (x:Package) REQUIRE x.id IS UNIQUE",
+    "CREATE CONSTRAINT configkey_id IF NOT EXISTS FOR (x:ConfigKey) REQUIRE x.id IS UNIQUE"
   ],
   "indexes": [
     "CREATE INDEX j_callable_name IF NOT EXISTS FOR (c:JCallable) ON (c.name)",
