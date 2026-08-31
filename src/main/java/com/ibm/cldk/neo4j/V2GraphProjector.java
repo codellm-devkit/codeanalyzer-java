@@ -479,6 +479,17 @@ public final class V2GraphProjector {
                 // (DependencyView.build), so there is no per-lock-file attribution left to split on --
                 // a dependency locked with N lock artifacts present gets N LOCKS edges (matches
                 // analysis.json; a known limitation carried over from codeanalyzer-python as-is).
+                //
+                // Deliberately WITHOUT the `seen` set the reference guards this mint with
+                // (codeanalyzer-python neo4j/project.py:350-359). LOCKS is a per-PACKAGE fact, so a
+                // package declared in two manifests walks this loop twice for one (lock, package)
+                // pair -- but python's RowBuilder.finish() only sorts its edge list, while ours
+                // dedupes by (type, from, to, _k) there, already collapsing the repeat mint. Same
+                // emitted row count either way, so a guard here would be dead code. Pinned by
+                // V2Neo4jSchemaConformanceTest#oneLocksRowSurvivesWhenTwoManifestsDeclareTheSameLockedCoordinate:
+                // dropping that dedupe fails a test instead of silently duplicating rows.
+                // DECLARES_DEPENDENCY above needs no such collapse and must not get one -- its
+                // source ref differs per declaring manifest, so one row per declaration is correct.
                 if (dep.getLockedVersion() != null) {
                     for (NodeRef lockRef : lockRefs) {
                         Map<String, Object> lp = RowBuilder.props();

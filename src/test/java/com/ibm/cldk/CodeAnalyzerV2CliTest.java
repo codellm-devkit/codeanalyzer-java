@@ -652,6 +652,37 @@ class CodeAnalyzerV2CliTest {
     }
 
     @Test
+    void bareArtifactTextFlagMeansTheDefaultRatherThanItsNegation(@TempDir Path tmp) throws IOException {
+        // Pins CodeAnalyzer's `fallbackValue = "true"` on --artifact-text. That fallback exists only
+        // because picocli 4.1.0 resolves a bare negatable flag (no explicit =value) to the OPPOSITE
+        // of what negatable=true implies; --artifact-text=true and --no-artifact-text are unaffected
+        // and were already covered, so nothing pinned the bare positive form and a "this looks
+        // redundant" cleanup of the fallback would silently invert a user-visible flag.
+        Path in = artifactProject(tmp.resolve("app"));
+        Path outDefault = tmp.resolve("out-default");
+        Path outBare = tmp.resolve("out-bare");
+
+        // Default run first, while the reset in @BeforeEach still holds: were the fallback removed,
+        // the buggy bare run below could otherwise leave the static field false for a later default.
+        assertEquals(0, run("-i", in.toString(), "-o", outDefault.toString(), "--app-name", "widgets"));
+        assertEquals(0, run("-i", in.toString(), "-o", outBare.toString(),
+                "--app-name", "widgets", "--artifact-text"));
+
+        JsonObject artifactsDefault = application(outDefault).getAsJsonObject("artifacts");
+        JsonObject artifactsBare = application(outBare).getAsJsonObject("artifacts");
+        assertEquals(artifactsDefault.toString(), artifactsBare.toString(),
+                "a bare --artifact-text must mean what the no-flag default means, not its negation");
+
+        boolean sawCapturedSource = false;
+        for (String path : artifactsBare.keySet()) {
+            sawCapturedSource |= !artifactsBare.getAsJsonObject(path).get("source").getAsString().isEmpty();
+        }
+        // Equality alone would also hold if BOTH runs captured nothing, which is the exact failure
+        // an inverted flag produces -- so the bare run has to be shown capturing for real.
+        assertTrue(sawCapturedSource, "the bare flag must leave text capture ON");
+    }
+
+    @Test
     void v2OmitsArtifactsAndDependenciesWhenNoNonSourceFilesExist(@TempDir Path tmp) throws IOException {
         Path in = project(tmp.resolve("app"));
         Path out = tmp.resolve("out");

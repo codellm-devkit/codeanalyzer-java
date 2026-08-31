@@ -280,18 +280,44 @@ public class V2Neo4jSchemaConformanceTest {
         boolean locks = false;
         String declaresDependencyKey = null;
         String pkgId = CanId.purlMaven("org.example", "widget");
+        // Every one of the four types asserts BOTH endpoints. Asserting only `to` is the same
+        // one-sided coverage that let a wrong decision ship on this layer once already (see
+        // wipeStaysOffTheCrossLanguageArtifactPackageSubgraph below, which exists because only the
+        // positive case had ever been asserted): a mis-sourced edge still lands on the expected
+        // target, so nothing except the source endpoint can catch it.
+        String appName = "l4-sdg-test";
+        String pomId = CanId.artifactId(appName, "pom.xml");
+        String lockId = CanId.artifactId(appName, "gradle.lockfile");
         for (EdgeRow edge : rows.edges) {
-            hasArtifact |= edge.type.equals("HAS_ARTIFACT");
-            definesConfig |= edge.type.equals("DEFINES_CONFIG");
+            if (edge.type.equals("HAS_ARTIFACT")) {
+                hasArtifact = true;
+                assertEquals("JApplication", edge.from.label, "HAS_ARTIFACT runs application -> artifact");
+                assertEquals(appName, edge.from.value, "the application is the source endpoint");
+                assertEquals("Artifact", edge.to.label);
+            }
+            if (edge.type.equals("DEFINES_CONFIG")) {
+                definesConfig = true;
+                assertEquals("Artifact", edge.from.label, "DEFINES_CONFIG runs artifact -> config key");
+                assertEquals("ConfigKey", edge.to.label);
+                assertTrue(edge.to.value.startsWith(edge.from.value + "@key"),
+                        "a config key nests under the artifact that defines it: " + edge.to.value);
+            }
             if (edge.type.equals("DECLARES_DEPENDENCY") && edge.to.value.equals(pkgId)) {
                 declaresDependency = true;
                 declaresDependencyKey = edge.key;
+                assertEquals("Artifact", edge.from.label, "DECLARES_DEPENDENCY runs manifest -> package");
+                assertEquals(pomId, edge.from.value, "the declaring manifest is the source endpoint");
+                assertEquals("Package", edge.to.label);
                 assertEquals("1.0.0", edge.props.get("spec"));
                 assertEquals("runtime", edge.props.get("kind"));
                 assertEquals(Boolean.TRUE, edge.props.get("direct"));
             }
             if (edge.type.equals("LOCKS") && edge.to.value.equals(pkgId)) {
                 locks = true;
+                assertEquals("Artifact", edge.from.label, "LOCKS runs lock artifact -> package");
+                assertEquals(lockId, edge.from.value,
+                        "the lock file is the source endpoint -- the package does not lock the lockfile");
+                assertEquals("Package", edge.to.label);
                 assertEquals("1.0.0", edge.props.get("version"));
                 assertNull(edge.key, "LOCKS carries no _k discriminant");
             }
@@ -302,6 +328,60 @@ public class V2Neo4jSchemaConformanceTest {
         assertTrue(locks, "no LOCKS edge for the fixture's locked package");
         assertEquals("runtime", declaresDependencyKey,
                 "DECLARES_DEPENDENCY must carry the _k=kind MERGE discriminant");
+    }
+
+    @Test
+    void oneLocksRowSurvivesWhenTwoManifestsDeclareTheSameLockedCoordinate(@TempDir Path tmp)
+            throws Exception {
+        // Two build.gradle files of one multi-module build declaring the same coordinate, with a
+        // single gradle.lockfile pinning it. `dependencies` then carries that coordinate twice,
+        // both copies with a lockedVersion, so projectArtifacts walks the LOCKS mint twice for one
+        // (lock artifact, package) pair -- LOCKS is a per-PACKAGE fact, unlike DECLARES_DEPENDENCY,
+        // whose source ref differs per declaring manifest and which is correctly one row per
+        // declaration. GraphRows promises "a deterministic, deduped bag"; this pins that promise at
+        // the observable boundary, whichever layer keeps it.
+        Files.writeString(tmp.resolve("build.gradle"),
+                "dependencies { implementation 'org.example:widget:1.0.0' }\n", StandardCharsets.UTF_8);
+        Files.createDirectories(tmp.resolve("mod"));
+        Files.writeString(tmp.resolve("mod/build.gradle"),
+                "dependencies { implementation 'org.example:widget:1.0.0' }\n", StandardCharsets.UTF_8);
+        Files.writeString(tmp.resolve("gradle.lockfile"),
+                "org.example:widget:1.0.0=compileClasspath,runtimeClasspath\n", StandardCharsets.UTF_8);
+
+        Map<String, JArtifact> artifacts = ArtifactDiscovery.discover(tmp, "dup", true, 262144);
+        List<JDependency> dependencies = DependencyView.build(tmp, artifacts);
+        String pkgId = CanId.purlMaven("org.example", "widget");
+
+        int lockedDeclarations = 0;
+        for (JDependency d : dependencies) {
+            if ("widget".equals(d.getName()) && d.getLockedVersion() != null) {
+                lockedDeclarations++;
+            }
+        }
+        assertEquals(2, lockedDeclarations,
+                "precondition: both manifests must declare the coordinate and both copies must be locked");
+
+        GraphRows dupRows = V2GraphProjector.project(
+                V2Emitter.emit("dup", 1, new LinkedHashMap<>(), "test", null, null, null, null,
+                        artifacts, dependencies),
+                "dup");
+
+        int locks = 0;
+        int declares = 0;
+        for (EdgeRow edge : dupRows.edges) {
+            if (edge.to.value.equals(pkgId)) {
+                if (edge.type.equals("LOCKS")) {
+                    locks++;
+                    assertEquals("1.0.0", edge.props.get("version"));
+                } else if (edge.type.equals("DECLARES_DEPENDENCY")) {
+                    declares++;
+                }
+            }
+        }
+        assertEquals(1, locks, "one lock artifact pinning one package is exactly one LOCKS row, "
+                + "however many manifests declared that package");
+        assertEquals(2, declares, "DECLARES_DEPENDENCY stays one row per declaring manifest -- "
+                + "its source ref differs per manifest, so it must NOT be deduped per package");
     }
 
     @Test
