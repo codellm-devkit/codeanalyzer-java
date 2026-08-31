@@ -258,4 +258,26 @@ class ArtifactDiscoveryTest {
         assertEquals(List.copyOf(first.keySet()), List.copyOf(second.keySet()));
         assertEquals(List.of("k8s/deploy.yml", "notes.txt", "pom.xml"), List.copyOf(first.keySet()));
     }
+
+    @Test
+    void discover_slashContainingPatternMatchesTheFullPathNotJustTheBasename(@TempDir Path tmp) throws IOException {
+        Path k8s = tmp.resolve("k8s");
+        Files.createDirectories(k8s);
+        Files.writeString(k8s.resolve("deploy.yml"), "kind: Deployment", StandardCharsets.UTF_8);
+        // A bare "*.yml" elsewhere must NOT get k8s's service-topology role -- only "k8s/*.yml"
+        // does, proving the pattern's '/' is matched against the full repo-relative path rather
+        // than collapsing to a basename check like every slash-free rule in the table.
+        Files.writeString(tmp.resolve("other.yml"), "not a k8s manifest", StandardCharsets.UTF_8);
+
+        Map<String, JArtifact> artifacts = ArtifactDiscovery.discover(tmp, "app", true, 262144);
+
+        JArtifact deploy = artifacts.get("k8s/deploy.yml");
+        assertNotNull(deploy);
+        assertEquals("yaml", deploy.getFormat());
+        assertEquals(List.of("service-topology"), deploy.getRoles());
+
+        JArtifact other = artifacts.get("other.yml");
+        assertNotNull(other);
+        assertEquals(List.of("unknown"), other.getRoles(), "a plain *.yml outside k8s/ falls to the generic rule");
+    }
 }
