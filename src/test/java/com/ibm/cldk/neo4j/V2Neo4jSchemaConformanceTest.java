@@ -302,6 +302,23 @@ public class V2Neo4jSchemaConformanceTest {
                 "DECLARES_DEPENDENCY must carry the _k=kind MERGE discriminant");
     }
 
+    @Test
+    void wipeReachesArtifactAndConfigKeySoARepushLeavesNoOrphans() {
+        // Same cypher-text-assertion shape as wipeCoversBothGenerationsSoV2ReplacesAPriorV1Graph
+        // above (no in-process Neo4j to actually execute the wipe against and check for orphans).
+        // The scenario this pins: push, then remove a config-bearing artifact from the analyzed
+        // repo and push again -- without HAS_ARTIFACT on the app anchor's first hop, the wipe's
+        // OPTIONAL MATCH (a)-[...]->(c) never binds the prior push's :Artifact nodes at all, so
+        // DETACH DELETE never reaches them (or their :ConfigKey rows via DEFINES_CONFIG), and both
+        // survive the second push as permanent orphans.
+        String cypher = CypherWriter.renderCypher(rows, "l4-sdg-test");
+        assertTrue(cypher.contains("J_HAS_UNIT|J_HAS_MODULE|HAS_ARTIFACT"),
+                "the wipe's app-anchor hop must also reach this app's :Artifact nodes via HAS_ARTIFACT");
+        assertTrue(CypherWriter.DESCENDANTS.contains("DEFINES_CONFIG"),
+                "wipe/prune descendant traversal must include DEFINES_CONFIG so a wiped "
+                        + "Artifact's ConfigKeys are swept too");
+    }
+
     private static NodeRow findNode(String mergeLabel, String value) {
         for (NodeRow node : rows.nodes) {
             if (node.labels.get(0).equals(mergeLabel) && node.value.equals(value)) {

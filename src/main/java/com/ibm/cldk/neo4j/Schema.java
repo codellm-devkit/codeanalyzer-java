@@ -43,7 +43,15 @@ public final class Schema {
             // Schema v2 (graph 2.0.0) additions — the writers run the union so either generation's
             // graph stays constraint-protected in a shared database.
             "CREATE CONSTRAINT j_module_id IF NOT EXISTS FOR (m:JModule) REQUIRE m.id IS UNIQUE",
-            "CREATE CONSTRAINT j_body_node_id IF NOT EXISTS FOR (bn:JBodyNode) REQUIRE bn.id IS UNIQUE");
+            "CREATE CONSTRAINT j_body_node_id IF NOT EXISTS FOR (bn:JBodyNode) REQUIRE bn.id IS UNIQUE",
+            // Repository-artifact layer (graph 2.2.0) additions — no `j_` prefix, matching the
+            // labels themselves (Artifact/Package/ConfigKey are un-prefixed cross-language merge
+            // targets, see V2SchemaCatalog). Names/alias match V2SchemaCatalog.uniquenessConstraints()'s
+            // auto-derived output verbatim so the emitted schema.neo4j.json document and this
+            // executed DDL agree on these three, not merely both existing.
+            "CREATE CONSTRAINT artifact_id IF NOT EXISTS FOR (x:Artifact) REQUIRE x.id IS UNIQUE",
+            "CREATE CONSTRAINT package_id IF NOT EXISTS FOR (x:Package) REQUIRE x.id IS UNIQUE",
+            "CREATE CONSTRAINT configkey_id IF NOT EXISTS FOR (x:ConfigKey) REQUIRE x.id IS UNIQUE");
 
     public static final List<String> INDEXES = Arrays.asList(
             "CREATE INDEX j_callable_name IF NOT EXISTS FOR (c:JCallable) ON (c.name)",
