@@ -506,22 +506,17 @@ java -jar /tmp/l3-seedfix/build/libs/codeanalyzer-3.0.0.jar \
 java -jar build/libs/codeanalyzer-3.0.0.jar \
   -i src/test/resources/test-applications/daytrader8 -a 4 --no-build -o /tmp/m4/after
 
-cat > /tmp/m4/summaries.py <<'PY'
-import json, sys
-def walk(types, out):
-    for t in types.values():
-        walk(t.get("types") or {}, out)
-        for c in (t.get("callables") or {}).values():
-            walk(c.get("types") or {}, out)
-            for e in c.get("summary") or []:
-                out.append("%s\t%s\t%s" % (c["id"], e["src"], e["dst"]))
-d, out = json.load(open(sys.argv[1])), []
-for f in d["application"]["symbol_table"].values():
-    walk(f.get("types") or {}, out)
-print("\n".join(sorted(out)))
-PY
-python3 /tmp/m4/summaries.py /tmp/m4/before/analysis.json > /tmp/m4/before.txt
-python3 /tmp/m4/summaries.py /tmp/m4/after/analysis.json  > /tmp/m4/after.txt
+# Every summary edge as "<callable id>\t<src>\t<dst>", sorted. The recursive descent picks up
+# callables at any nesting depth (member types, and types local to a callable) -- a callable is
+# the only node carrying both `id` and `summary`.
+cat > /tmp/m4/summaries.jq <<'JQ'
+[ .application.symbol_table[]
+  | .. | objects | select(has("summary") and has("id"))
+  | . as $c | $c.summary[] | "\($c.id)\t\(.src)\t\(.dst)"
+] | sort | .[]
+JQ
+jq -r -f /tmp/m4/summaries.jq /tmp/m4/before/analysis.json > /tmp/m4/before.txt
+jq -r -f /tmp/m4/summaries.jq /tmp/m4/after/analysis.json  > /tmp/m4/after.txt
 wc -l /tmp/m4/before.txt /tmp/m4/after.txt
 diff /tmp/m4/before.txt /tmp/m4/after.txt && echo "EXACT SET MATCH"
 shasum -a 256 /tmp/m4/before.txt /tmp/m4/after.txt
@@ -547,7 +542,7 @@ also `diff`-empty against `before.txt`, which is the row the retirement decision
 ```bash
 java -Dseed.rule2=0 -Dseed.rule3=0 -jar /tmp/l3-r1only/build/libs/codeanalyzer-3.0.0.jar \
   -i "$PWD/src/test/resources/test-applications/daytrader8" -a 4 --no-build -o /tmp/m4/dt-R1only
-python3 /tmp/m4/summaries.py /tmp/m4/dt-R1only/analysis.json > /tmp/m4/dt-R1only.txt
+jq -r -f /tmp/m4/summaries.jq /tmp/m4/dt-R1only/analysis.json > /tmp/m4/dt-R1only.txt
 wc -l /tmp/m4/before.txt /tmp/m4/dt-R1only.txt
 diff /tmp/m4/before.txt /tmp/m4/dt-R1only.txt && echo IDENTICAL
 ```
