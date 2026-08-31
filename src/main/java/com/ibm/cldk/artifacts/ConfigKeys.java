@@ -51,10 +51,11 @@ import org.yaml.snakeyaml.Yaml;
  * {@code ENV X=$X} is common, the {@code ARG} mint's <em>id</em> (not its {@code key} field) is
  * disambiguated with an {@code arg.} prefix so the two do not collide. A {@code yaml}-format
  * artifact additionally recognizes a compose {@code services.<name>.environment} map and
- * dual-mints those into namespace {@code env} too, on the bare var name, with an analogous but
- * structurally different collision guard: see {@link #ENV_DUAL_MINT_ID_DELIMITER} for why a plain
- * text prefix (the dockerfile ARG approach) is not provably safe for yaml's unrestricted dotted
- * paths the way it is for dockerfile's identifier-restricted keys.
+ * dual-mints those into namespace {@code env} too, on the bare var name, via {@link
+ * CanId#configKeyEnvDualMintId} -- see its javadoc for why a plain text prefix funneled through
+ * {@link CanId#configKeyId} (the dockerfile ARG approach) is not provably safe for yaml's
+ * unrestricted dotted paths the way it is for dockerfile's identifier-restricted keys, and so gets
+ * its own {@code CanId} construction method rather than a prefix.
  *
  * <p>{@code value} is populated only when {@code captureValue} is {@code true}; {@code key},
  * {@code namespace}, {@code span}, and {@code references} are extracted unconditionally either
@@ -154,7 +155,7 @@ public final class ConfigKeys {
                 keys = new ArrayList<>(buildKeys(artifact.getId(), "yaml", flat, captureValue, false, null));
                 keys.addAll(buildKeys(
                         artifact.getId(), "env", recognizeComposeEnv(flat), captureValue, false,
-                        k -> artifact.getId() + ENV_DUAL_MINT_ID_DELIMITER + k));
+                        k -> CanId.configKeyEnvDualMintId(artifact.getId(), k)));
             } else if ("xml".equals(artifact.getFormat())) {
                 keys = extractXml(artifact.getId(), text, captureValue);
             } else {
@@ -210,23 +211,6 @@ public final class ConfigKeys {
     // "KEY=value"/bare "KEY" strings) -- python's k8s `env[].name`/`.value` list-shape recognition
     // is deliberately not ported, the brief names compose only.
     private static final Pattern COMPOSE_ENV = Pattern.compile("^services\\.[^.]+\\.environment\\.(.+)$");
-
-    /**
-     * Id delimiter for a compose env-dual-mint entry, used in place of {@code
-     * CanId.configKeyId}'s {@code "@key/"}. A plain yaml dotted path is an UNRESTRICTED string (any
-     * map key can be quoted to contain literally anything), so it can legitimately equal
-     * {@code "env.<name>"} -- e.g. a document with both a top-level {@code env:} block one level
-     * deep and a {@code services.x.environment} block recognizes the same bare name from two
-     * places. Prefixing "env." onto the bare key and still going through {@code configKeyId}'s
-     * {@code "@key/"} delimiter therefore cannot be proven collision-free: it works only because no
-     * test happened to construct that yaml shape, i.e. by luck, not by construction. Using a
-     * DIFFERENT fixed delimiter instead makes the two id families diverge at a fixed character
-     * position (right after {@code "@key"}, {@code ':'} here vs. plain {@code configKeyId}'s
-     * {@code '/'}) that no dotted-key content can ever reach, regardless of what the yaml
-     * document's keys contain -- an unconditional guarantee, the same rigor the dockerfile
-     * {@code arg.} prefix has (there, {@code ENV_KEY_NAME} forbids dots on both sides instead).
-     */
-    private static final String ENV_DUAL_MINT_ID_DELIMITER = "@key:env/";
 
     private static List<Entry> recognizeComposeEnv(List<Entry> flat) {
         List<Entry> out = new ArrayList<>();

@@ -2,6 +2,7 @@ package com.ibm.cldk.schema;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -21,6 +22,23 @@ class ArtifactModelTest {
     void configKeyIdNestsUnderItsArtifact() {
         String art = CanId.artifactId("myapp", "src/main/resources/application.yml");
         assertEquals(art + "@key/server.port", CanId.configKeyId(art, "server.port"));
+    }
+
+    @Test
+    void configKeyEnvDualMintIdNeverCollidesWithConfigKeyId() {
+        String art = CanId.artifactId("myapp", "docker-compose.yml");
+        // A real yaml document can flatten a top-level "env:" block one level deep into exactly
+        // the dotted key "env.DB_HOST" -- the same text a naive "env." prefix through configKeyId
+        // would build for a compose-recognized bare "DB_HOST" var. configKeyEnvDualMintId must use
+        // a different delimiter so the two can never collide, for any key/var name whatsoever.
+        String plainYamlId = CanId.configKeyId(art, "env.DB_HOST");
+        String dualMintId = CanId.configKeyEnvDualMintId(art, "DB_HOST");
+
+        assertEquals(art + "@key/env.DB_HOST", plainYamlId);
+        assertEquals(art + "@key:env/DB_HOST", dualMintId);
+        assertNotEquals(plainYamlId, dualMintId,
+                "the two share \"<artifactId>@key\" and must diverge right after it (':' vs '/'), before "
+                        + "either consumes any key content, so no dotted key or bare variable name can equalize them");
     }
 
     @Test

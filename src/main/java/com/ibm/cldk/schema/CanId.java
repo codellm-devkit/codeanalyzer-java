@@ -64,6 +64,26 @@ public final class CanId {
         return artifactId + "@key/" + dottedKey;
     }
 
+    /**
+     * {@code <artifactId>@key:env/<bareKey>} — a compose-recognized environment variable
+     * dual-minted into namespace {@code env} from a yaml artifact's {@code
+     * services.<name>.environment} block (see {@code ConfigKeys}). Deliberately a DIFFERENT
+     * delimiter from {@link #configKeyId}'s {@code "@key/"}, not a prefixed dotted key routed
+     * through it: a plain yaml dotted path is an unrestricted string (any map key can be quoted to
+     * contain literally anything), so it can legitimately equal {@code "env.<name>"} itself — e.g.
+     * a top-level {@code env:} block one level deep — which a text prefix inside {@link
+     * #configKeyId}'s argument could not be proven never to collide with.
+     *
+     * <p>The two id forms share the identical {@code <artifactId>@key} prefix and diverge at a
+     * fixed character position right after it ({@code :} here vs. {@code configKeyId}'s {@code /}),
+     * before either side has consumed any dotted-key or variable-name content — so the two can
+     * never collide for any {@code dottedKey}/{@code bareKey} whatsoever, not merely for whatever
+     * shape a test happens to construct.
+     */
+    public static String configKeyEnvDualMintId(String artifactId, String bareKey) {
+        return artifactId + "@key:env/" + bareKey;
+    }
+
     /** {@code pkg:maven/<group>/<name>} — a two-segment Package URL for Maven coordinates. */
     public static String purlMaven(String group, String name) {
         return "pkg:maven/" + group + "/" + name;
