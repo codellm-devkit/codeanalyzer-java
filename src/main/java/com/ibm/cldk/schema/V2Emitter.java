@@ -50,6 +50,28 @@ public final class V2Emitter {
             Map<String, JExternalSymbol> externalSymbols,
             List<JIdEdge> paramIn,
             List<JIdEdge> paramOut) {
+        return emit(appName, maxLevel, modules, analyzerVersion, callGraph, externalSymbols,
+                paramIn, paramOut, null, null);
+    }
+
+    /**
+     * As above, additionally attaching the repository-artifact layer: build manifests, config files,
+     * and declared dependencies. {@code artifacts} and {@code dependencies} are set only when
+     * non-{@code null} and non-empty, the same "absence means no fact" rule every other
+     * application-scope overlay here follows. Unlike the others, this layer is L1 data — a caller
+     * passes it at every analysis level, not only when a level-gated overlay is available.
+     */
+    public static Analysis emit(
+            String appName,
+            int maxLevel,
+            Map<String, JModule> modules,
+            String analyzerVersion,
+            List<JCallEdge> callGraph,
+            Map<String, JExternalSymbol> externalSymbols,
+            List<JIdEdge> paramIn,
+            List<JIdEdge> paramOut,
+            Map<String, JArtifact> artifacts,
+            List<JDependency> dependencies) {
         JApplication application = new JApplication();
         application.setId(CanId.applicationId(appName));
 
@@ -72,6 +94,12 @@ public final class V2Emitter {
         }
         if (paramOut != null && !paramOut.isEmpty()) {
             application.setParamOut(paramOut);
+        }
+        if (artifacts != null && !artifacts.isEmpty()) {
+            application.setArtifacts(artifacts);
+        }
+        if (dependencies != null && !dependencies.isEmpty()) {
+            application.setDependencies(dependencies);
         }
 
         Analysis analysis = new Analysis();

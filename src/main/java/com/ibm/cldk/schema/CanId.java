@@ -46,4 +46,64 @@ public final class CanId {
     public static String externalId(String appName, String binaryType, String signature) {
         return applicationId(appName) + "/@external/" + binaryType + "/" + signature;
     }
+
+    /**
+     * {@code can://artifact/<app>/<rel-path>} — a language-neutral artifact id. The {@code artifact}
+     * segment is deliberately chosen over {@code java} so a sibling-language analyzer scanning the same
+     * repository lands on the same node rather than a duplicate.
+     */
+    public static String artifactId(String appName, String relPath) {
+        return "can://artifact/" + appName + "/" + relPath;
+    }
+
+    /**
+     * {@code <artifactId>@key/<dotted.key>} — a configuration key nested under its defining artifact,
+     * making it discoverable and addressable as a sub-node.
+     */
+    public static String configKeyId(String artifactId, String dottedKey) {
+        return artifactId + "@key/" + dottedKey;
+    }
+
+    /**
+     * {@code <artifactId>@key:env/<bareKey>} — a compose-recognized environment variable
+     * dual-minted into namespace {@code env} from a yaml artifact's {@code
+     * services.<name>.environment} block (see {@code ConfigKeys}). Deliberately a DIFFERENT
+     * delimiter from {@link #configKeyId}'s {@code "@key/"}, not a prefixed dotted key routed
+     * through it: a plain yaml dotted path is an unrestricted string (any map key can be quoted to
+     * contain literally anything), so it can legitimately equal {@code "env.<name>"} itself — e.g.
+     * a top-level {@code env:} block one level deep — which a text prefix inside {@link
+     * #configKeyId}'s argument could not be proven never to collide with.
+     *
+     * <p>The two id forms share the identical {@code <artifactId>@key} prefix and diverge at a
+     * fixed character position right after it ({@code :} here vs. {@code configKeyId}'s {@code /}),
+     * before either side has consumed any dotted-key or variable-name content — so the two can
+     * never collide for any {@code dottedKey}/{@code bareKey} whatsoever, not merely for whatever
+     * shape a test happens to construct.
+     *
+     * <p><b>Deliberate divergence from the reference implementation.</b> codeanalyzer-python mints
+     * this id as {@code <artifactId>@key/env.<NAME>} — a plain {@code "env."} prefix routed through
+     * its {@code config_key_id} ({@code artifacts/config_keys.py:577} into {@code schema/ids.py:39}).
+     * We mint {@code <artifactId>@key:env/<NAME>} instead, and this grammar is the correct one: the
+     * reference's provably self-collides, because a yaml dotted path can itself begin with the
+     * segment {@code env.}, so one document carrying both a top-level {@code env:} block and a
+     * compose {@code environment:} block yields two different records under one id. The reference
+     * guarded the bare-name collision and missed the dotted-path one; {@code
+     * ArtifactModelTest#configKeyEnvDualMintIdNeverCollidesWithConfigKeyId} pins exactly that case
+     * here. <b>Do not "converge" this back to the reference's spelling.</b>
+     *
+     * <p>The consequence, stated plainly: {@code ConfigKey} is an un-prefixed cross-language merge
+     * target (see {@link #artifactId}), so for a {@code docker-compose.yml} in a polyglot repo the
+     * two analyzers currently mint <i>different</i> nodes for the same environment variable,
+     * splitting the very nodes that un-prefixed label exists to share. That split stands until the
+     * reference adopts this grammar; it is the price of not shipping a known id collision, and the
+     * convergence has to happen on the reference's side.
+     */
+    public static String configKeyEnvDualMintId(String artifactId, String bareKey) {
+        return artifactId + "@key:env/" + bareKey;
+    }
+
+    /** {@code pkg:maven/<group>/<name>} — a two-segment Package URL for Maven coordinates. */
+    public static String purlMaven(String group, String name) {
+        return "pkg:maven/" + group + "/" + name;
+    }
 }

@@ -118,6 +118,11 @@ dependencies {
 
     implementation('org.json:json:20231013')
     implementation('com.google.code.gson:gson:2.10.1')
+    // YAML config-key flattening (ConfigKeys, task 5 of the repository-artifact layer). Declared
+    // explicitly at the version already resolved transitively in this project's dependency graph
+    // (org.yaml:snakeyaml:2.2) -- relying on the transitive alone is how a build breaks the day an
+    // unrelated dependency drops it.
+    implementation('org.yaml:snakeyaml:2.2')
     implementation('org.jgrapht:jgrapht-core:1.5.2')
     implementation('org.jgrapht:jgrapht-io:1.5.2')
     implementation('org.jgrapht:jgrapht-ext:1.5.2')

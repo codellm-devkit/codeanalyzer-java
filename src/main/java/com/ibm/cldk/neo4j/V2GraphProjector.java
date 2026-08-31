@@ -14,14 +14,19 @@ package com.ibm.cldk.neo4j;
 
 import com.ibm.cldk.neo4j.GraphRows.NodeRef;
 import com.ibm.cldk.schema.Analysis;
+import com.ibm.cldk.schema.CanId;
+import com.ibm.cldk.schema.JApplication;
+import com.ibm.cldk.schema.JArtifact;
 import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.schema.JCallEdge;
 import com.ibm.cldk.schema.JCallable;
 import com.ibm.cldk.schema.JCdgEdge;
 import com.ibm.cldk.schema.JCfgEdge;
 import com.ibm.cldk.schema.JComment;
+import com.ibm.cldk.schema.JConfigKey;
 import com.ibm.cldk.schema.JDdgEdge;
 import com.ibm.cldk.schema.JDecorator;
+import com.ibm.cldk.schema.JDependency;
 import com.ibm.cldk.schema.JEnumConstant;
 import com.ibm.cldk.schema.JExternalSymbol;
 import com.ibm.cldk.schema.JField;
@@ -42,7 +47,7 @@ import java.util.Map;
 
 /**
  * The schema v2 → Neo4j projection: a pure {@code (Analysis, appName) → GraphRows} function, no
- * I/O, no driver. The vocabulary is {@link V2SchemaCatalog} (graph contract 2.1.0), mirroring
+ * I/O, no driver. The vocabulary is {@link V2SchemaCatalog} (graph contract 2.2.0), mirroring
  * codeanalyzer-python's projection: call sites are {@code :JBodyNode} rows (no call-site nodes),
  * parameters flatten to {@code parameters_json}, javadoc collapses to {@code docstring}, and the
  * L3 {@code cfg}/{@code cdg}/{@code ddg} and L4 {@code param_in}/{@code param_out}/{@code summary}
@@ -142,6 +147,8 @@ public final class V2GraphProjector {
                         RowBuilder.prune(p));
             }
         }
+
+        projectArtifacts(b, analysis.getApplication(), app);
 
         return b.finish();
     }
@@ -387,6 +394,117 @@ public final class V2GraphProjector {
     /** {@code @entry}-style synthetic keys concatenate; real {@code line:col} keys get an {@code @}. */
     private static String globalOrdinal(String callableId, String localKey) {
         return localKey.startsWith("@") ? callableId + localKey : callableId + "@" + localKey;
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Repository-artifact layer: build manifests, config files, declared dependencies.
+    // ------------------------------------------------------------------------------------------
+
+    // Mirrors DependencyView.LOCK_BASENAMES (kept duplicated locally rather than exposing a new
+    // cross-package constant for one entry -- codeanalyzer-python accepts the identical tradeoff
+    // for its own two independent lock-basename constants).
+    private static final String LOCK_BASENAME = "gradle.lockfile";
+
+    /**
+     * Neutral {@code Artifact}/{@code Package}/{@code ConfigKey} subgraph -- no {@code J}/{@code J_}
+     * prefix (see {@link V2SchemaCatalog}'s declaration comment: these are cross-language merge
+     * targets, unlike everything else this class projects). L1 data, present at every analysis
+     * level regardless of {@code -a} (mirrors {@code analysis.json}: {@link JApplication#getArtifacts()}
+     * / {@link JApplication#getDependencies()} are populated ahead of the level gate).
+     */
+    private static void projectArtifacts(RowBuilder b, JApplication application, NodeRef app) {
+        Map<String, JArtifact> artifacts = application.getArtifacts();
+        List<NodeRef> lockRefs = new ArrayList<>();
+        if (artifacts != null) {
+            for (Map.Entry<String, JArtifact> e : artifacts.entrySet()) {
+                JArtifact art = e.getValue();
+                Map<String, Object> ap = RowBuilder.props();
+                ap.put("id", art.getId());
+                ap.put("path", art.getPath());
+                ap.put("format", art.getFormat());
+                ap.put("roles", art.getRoles());
+                ap.put("size_bytes", art.getSizeBytes());
+                ap.put("sha256", art.getSha256());
+                ap.put("source", art.getSource());
+                if (art.isTextTruncated()) {
+                    ap.put("text_truncated", true);
+                }
+                ap.put("extraction", art.getExtraction());
+                NodeRef artRef = b.node(Arrays.asList("Artifact"), "id", art.getId(), RowBuilder.prune(ap));
+                b.edge("HAS_ARTIFACT", app, artRef);
+
+                for (JConfigKey ck : art.getConfigKeys()) {
+                    Map<String, Object> cp = RowBuilder.props();
+                    cp.put("id", ck.getId());
+                    cp.put("key", ck.getKey());
+                    cp.put("namespace", ck.getNamespace());
+                    cp.put("value", ck.getValue());
+                    cp.put("references", ck.getReferences());
+                    putLines(cp, ck.getSpan());
+                    NodeRef ckRef = b.node(Arrays.asList("ConfigKey"), "id", ck.getId(), RowBuilder.prune(cp));
+                    b.edge("DEFINES_CONFIG", artRef, ckRef);
+                }
+
+                if (isLockArtifact(e.getKey())) {
+                    lockRefs.add(artRef);
+                }
+            }
+        }
+
+        List<JDependency> dependencies = application.getDependencies();
+        if (dependencies != null) {
+            for (JDependency dep : dependencies) {
+                String pkgId = CanId.purlMaven(dep.getGroup(), dep.getName());
+                Map<String, Object> pp = RowBuilder.props();
+                pp.put("id", pkgId);
+                pp.put("ecosystem", dep.getEcosystem());
+                pp.put("group", dep.getGroup());
+                pp.put("name", dep.getName());
+                NodeRef pkgRef = b.node(Arrays.asList("Package"), "id", pkgId, RowBuilder.prune(pp));
+
+                // `_k` (merges per `kind`): the same manifest may declare one package twice under
+                // different kinds -- same endpoint pair, so a plain MERGE would collapse the two
+                // declarations into one row.
+                Map<String, Object> dp = RowBuilder.props();
+                dp.put("spec", dep.getSpec());
+                dp.put("kind", dep.getKind());
+                dp.put("extras", dep.getExtras());
+                dp.put("prov", dep.getProv());
+                dp.put("direct", dep.isDirect());
+                b.keyedEdge("DECLARES_DEPENDENCY", new NodeRef("Artifact", "id", dep.getDeclaredIn()), pkgRef,
+                        RowBuilder.prune(dp), dep.getKind());
+
+                // Every lock artifact present LOCKS every dependency it pinned. Pins from every lock
+                // file are already merged into one lockedVersion per dependency upstream
+                // (DependencyView.build), so there is no per-lock-file attribution left to split on --
+                // a dependency locked with N lock artifacts present gets N LOCKS edges (matches
+                // analysis.json; a known limitation carried over from codeanalyzer-python as-is).
+                //
+                // Deliberately WITHOUT the `seen` set the reference guards this mint with
+                // (codeanalyzer-python neo4j/project.py:350-359). LOCKS is a per-PACKAGE fact, so a
+                // package declared in two manifests walks this loop twice for one (lock, package)
+                // pair -- but python's RowBuilder.finish() only sorts its edge list, while ours
+                // dedupes by (type, from, to, _k) there, already collapsing the repeat mint. Same
+                // emitted row count either way, so a guard here would be dead code. Pinned by
+                // V2Neo4jSchemaConformanceTest#oneLocksRowSurvivesWhenTwoManifestsDeclareTheSameLockedCoordinate:
+                // dropping that dedupe fails a test instead of silently duplicating rows.
+                // DECLARES_DEPENDENCY above needs no such collapse and must not get one -- its
+                // source ref differs per declaring manifest, so one row per declaration is correct.
+                if (dep.getLockedVersion() != null) {
+                    for (NodeRef lockRef : lockRefs) {
+                        Map<String, Object> lp = RowBuilder.props();
+                        lp.put("version", dep.getLockedVersion());
+                        b.edge("LOCKS", lockRef, pkgRef, RowBuilder.prune(lp));
+                    }
+                }
+            }
+        }
+    }
+
+    private static boolean isLockArtifact(String path) {
+        int slash = path.lastIndexOf('/');
+        String base = slash < 0 ? path : path.substring(slash + 1);
+        return LOCK_BASENAME.equals(base);
     }
 
     // ------------------------------------------------------------------------------------------

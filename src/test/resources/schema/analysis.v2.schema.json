@@ -119,7 +119,16 @@
           "additionalProperties": { "$ref": "#/$defs/externalSymbol" }
         },
         "param_in": { "type": "array" },
-        "param_out": { "type": "array" }
+        "param_out": { "type": "array" },
+        "artifacts": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^(?!/)(?!.*\\.\\.).*$",
+            "description": "Keys are repo-relative paths: never absolute, never escaping the root."
+          },
+          "additionalProperties": { "$ref": "#/$defs/artifact" }
+        },
+        "dependencies": { "type": "array", "items": { "$ref": "#/$defs/dependency" } }
       }
     },
 
@@ -207,6 +216,63 @@
           "minLength": 1,
           "description": "Dotted source spelling; the id carries the binary name."
         }
+      }
+    },
+
+    "artifactCanId": {
+      "type": "string",
+      "pattern": "^can://artifact/",
+      "description": "Id of a repository-artifact node: a language-neutral scheme, distinct from can://java/."
+    },
+
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "path", "format", "roles", "size_bytes", "sha256", "source", "extraction", "config_keys"],
+      "properties": {
+        "id": { "$ref": "#/$defs/artifactCanId" },
+        "kind": { "const": "artifact" },
+        "path": { "type": "string", "minLength": 1 },
+        "format": { "type": "string" },
+        "roles": { "$ref": "#/$defs/stringList" },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "source": { "type": "string" },
+        "text_truncated": { "type": "boolean" },
+        "extraction": { "enum": ["none", "partial", "full"] },
+        "config_keys": { "type": "array", "items": { "$ref": "#/$defs/configKey" } }
+      }
+    },
+
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["group", "name", "ecosystem", "spec", "kind", "extras", "declared_in", "direct", "prov"],
+      "properties": {
+        "group": { "type": "string" },
+        "name": { "type": "string", "minLength": 1 },
+        "ecosystem": { "type": "string" },
+        "spec": { "type": "string" },
+        "kind": { "type": "string" },
+        "extras": { "$ref": "#/$defs/stringList" },
+        "declared_in": { "type": "string" },
+        "direct": { "type": "boolean" },
+        "locked_version": { "type": "string" },
+        "prov": { "$ref": "#/$defs/stringList" }
+      }
+    },
+
+    "configKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "key", "namespace", "references"],
+      "properties": {
+        "id": { "$ref": "#/$defs/artifactCanId" },
+        "key": { "type": "string" },
+        "namespace": { "type": "string" },
+        "value": { "type": "string" },
+        "span": { "$ref": "#/$defs/span" },
+        "references": { "$ref": "#/$defs/stringList" }
       }
     },
 
