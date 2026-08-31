@@ -38,8 +38,10 @@ public class JApplication {
     private Map<String, JArtifact> artifacts;
 
     /**
-     * Dependencies declared in the repository's artifacts, indexed by their canonical purl or
-     * project-level id. {@code null} (absent) when the layer produces no dependencies.
+     * Dependencies declared in the repository's artifacts — one entry per declaration, so a
+     * coordinate declared in two manifests appears twice, each entry naming its own {@code
+     * declaredIn}. Sorted by {@code (name, declaredIn)}. {@code null} (absent) when the layer
+     * produces no dependencies.
      */
     private List<JDependency> dependencies;
 }

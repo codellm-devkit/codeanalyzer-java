@@ -12,9 +12,16 @@ import lombok.Data;
  *
  * <p>{@code format} is free-vocabulary and identifies the parser: {@code xml}, {@code yaml},
  * {@code json}, {@code properties}, {@code gradle}, {@code dockerfile}, {@code text}, {@code binary}.
- * {@code roles} are also free-vocabulary — {@code build}, {@code ci}, {@code deploy}, {@code config},
- * {@code dependency-lock} — and are user-assigned per artifact. A build manifest is both a build
- * artifact and a dependency declaration.
+ *
+ * <p>{@code roles} are assigned by {@code ArtifactDiscovery}'s first-match-wins classification
+ * rules, not by a user, and the vocabulary the rules actually emit is exactly: {@code
+ * dependency-manifest}, {@code tool-config}, {@code container-image}, {@code service-topology},
+ * {@code iac}, {@code ci}, {@code env}, {@code legal}, {@code docs}, {@code script}, {@code
+ * unknown}. One artifact may carry several — a {@code build.gradle} is both a {@code
+ * dependency-manifest} and a {@code tool-config}. The list is open in the schema (a consumer must
+ * tolerate an unseen role), but this analyzer emits no role outside it: {@code
+ * dependency-manifest} in particular is load-bearing, gating both the text-capture cap exemption
+ * and dependency extraction.
  */
 @Data
 public class JArtifact {
@@ -27,7 +34,7 @@ public class JArtifact {
     /** Format identifier: xml|yaml|json|properties|gradle|dockerfile|text|binary. */
     private String format;
 
-    /** Semantic roles, free-vocabulary: build, ci, deploy, config, dependency-lock, etc. */
+    /** Rule-assigned semantic roles; see the class javadoc for the vocabulary actually emitted. */
     private List<String> roles = new ArrayList<>();
 
     /** File size in bytes. */

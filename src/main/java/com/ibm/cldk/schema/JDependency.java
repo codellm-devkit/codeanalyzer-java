@@ -10,9 +10,10 @@ import lombok.Data;
  * (codeanalyzer-python), which has no analogue since PyPI names are single-segment; in Maven each
  * coordinate is split into a {@code group} and {@code name} ({@code artifactId}).
  *
- * <p>{@code ecosystem} and {@code kind} are free-vocabulary, matching the reference implementation:
- * ecosystems include {@code maven}, {@code npm}, {@code gradle}, {@code pypi}, {@code golang};
- * kinds include {@code runtime}, {@code dev}, {@code optional}, {@code build}.
+ * <p>{@code ecosystem} exists for SDK symmetry with purl and is always {@code "maven"} — the only
+ * ecosystem this analyzer emits, exactly as the reference is candid about {@code "pypi"} being the
+ * only one it emits ({@code schema/py_schema.py:560}). {@code kind} is free-vocabulary; the values
+ * actually produced are {@code runtime}, {@code dev}, {@code optional} and {@code build}.
  *
  * <p>{@code lockedVersion} is {@code null} (omitted from JSON) when the dependency is unpinned —
  * recorded only when found in a lock file or package manager.
@@ -25,7 +26,7 @@ public class JDependency {
     /** Maven {@code artifactId} (the package name). */
     private String name;
 
-    /** Package ecosystem: maven|npm|gradle|pypi|golang, etc. Defaults to maven. */
+    /** Package ecosystem; always {@code maven} — the only one this analyzer emits. */
     private String ecosystem = "maven";
 
     /** Declared version range or spec, verbatim as written (may be empty). */

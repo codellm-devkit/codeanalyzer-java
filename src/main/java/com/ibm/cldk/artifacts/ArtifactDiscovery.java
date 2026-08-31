@@ -30,10 +30,13 @@ import java.util.stream.Stream;
  * no rule names: the symbol table (L1) already owns those, and inventorying them here too would
  * produce two nodes for one file with no way for a consumer to tell which is authoritative.
  *
- * <p>Nothing here parses artifact content — later tasks read {@code source} back out of the
- * returned {@link JArtifact}s to extract dependencies and config keys. This class only decides
- * what a file IS and captures its bytes/text so that later reading never has to touch the
- * filesystem again.
+ * <p>Nothing here parses artifact content. This class only decides what a file IS, hashes it, and
+ * captures its text for the emitted JSON payload. Extraction (dependencies, config keys) re-reads
+ * each file <b>from disk</b> via {@link DependencyView#readFromDisk} and must never read {@code
+ * source} back out of the returned {@link JArtifact}s: {@code source} is a payload-size-controlled
+ * field, empty under {@code --no-artifact-text} and a truncated prefix past {@code
+ * --artifact-text-max-bytes}, so extraction driven off it would silently degrade under either flag.
+ * See {@code readFromDisk}'s javadoc before wiring any new extraction pass.
  */
 public final class ArtifactDiscovery {
 
@@ -201,8 +204,10 @@ public final class ArtifactDiscovery {
         return slash < 0 ? relPosix : relPosix.substring(slash + 1);
     }
 
-    // A pattern containing '/' matches the full repo-relative path (e.g. "k8s/*.yml" matches only
-    // directly under k8s/); a bare pattern matches just the basename (e.g. "*.xml" matches any-depth).
+    // A pattern containing '/' matches the full repo-relative path; a bare pattern matches just the
+    // basename (e.g. "*.xml" matches at any depth). Both are fnmatch-shaped, so '*' crosses '/' --
+    // "k8s/*.yml" matches a nested "k8s/base/svc.yml" too, not only files directly under k8s/ (see
+    // globMatches below, which is where that is deliberate rather than accidental).
     private static Rule classify(String relPosix) {
         String name = basename(relPosix);
         for (Rule rule : RULES) {
