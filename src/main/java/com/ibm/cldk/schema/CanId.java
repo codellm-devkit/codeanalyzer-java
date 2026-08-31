@@ -46,4 +46,26 @@ public final class CanId {
     public static String externalId(String appName, String binaryType, String signature) {
         return applicationId(appName) + "/@external/" + binaryType + "/" + signature;
     }
+
+    /**
+     * {@code can://artifact/<app>/<rel-path>} — a language-neutral artifact id. The {@code artifact}
+     * segment is deliberately chosen over {@code java} so a sibling-language analyzer scanning the same
+     * repository lands on the same node rather than a duplicate.
+     */
+    public static String artifactId(String appName, String relPath) {
+        return "can://artifact/" + appName + "/" + relPath;
+    }
+
+    /**
+     * {@code <artifactId>@key/<dotted.key>} — a configuration key nested under its defining artifact,
+     * making it discoverable and addressable as a sub-node.
+     */
+    public static String configKeyId(String artifactId, String dottedKey) {
+        return artifactId + "@key/" + dottedKey;
+    }
+
+    /** {@code pkg:maven/<group>/<name>} — a two-segment Package URL for Maven coordinates. */
+    public static String purlMaven(String group, String name) {
+        return "pkg:maven/" + group + "/" + name;
+    }
 }

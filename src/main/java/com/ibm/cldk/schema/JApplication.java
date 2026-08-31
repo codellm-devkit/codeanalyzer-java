@@ -29,4 +29,17 @@ public class JApplication {
 
     /** L4 {@code formal_out → actual_out} edges (global ordinals); null (absent) below level 4. */
     private List<JIdEdge> paramOut;
+
+    /**
+     * The repository-artifact layer: build manifests, configuration files, and other non-source
+     * artifacts indexed by repo-relative path. {@code null} (absent) when the layer produces no
+     * artifacts.
+     */
+    private Map<String, JArtifact> artifacts;
+
+    /**
+     * Dependencies declared in the repository's artifacts, indexed by their canonical purl or
+     * project-level id. {@code null} (absent) when the layer produces no dependencies.
+     */
+    private List<JDependency> dependencies;
 }
