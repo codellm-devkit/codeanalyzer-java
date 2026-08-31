@@ -199,3 +199,4 @@ etc/
 
 # Ad-hoc analysis output from manual v1/v2 comparison runs
 output/
+node_modules
