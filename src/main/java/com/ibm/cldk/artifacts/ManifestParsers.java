@@ -125,30 +125,37 @@ public final class ManifestParsers {
                 if (!classifier.isEmpty()) {
                     extras.add(classifier);
                 }
-                if ("true".equalsIgnoreCase(childText(dependency, "optional"))) {
-                    // Kind is derived solely from <scope> (see kindForMavenScope) -- there is no
-                    // separate boolean slot on RawDep for "optional" -- so the flag instead lands in
-                    // `extras`, the same free-vocabulary bucket a classifier uses.
-                    extras.add("optional");
-                }
+                boolean optional = "true".equalsIgnoreCase(childText(dependency, "optional"));
                 out.add(new RawDep(
                         childText(dependency, "groupId"),
                         childText(dependency, "artifactId"),
                         childText(dependency, "version"), // "" when inherited from a parent or a BOM
-                        kindForMavenScope(effectiveScope),
+                        kindForMavenDependency(effectiveScope, optional),
                         List.copyOf(extras)));
             }
         }
         return out;
     }
 
-    // The one judgement call in this file; everything else here is transcription. Maven has six
-    // scopes and RawDep.kind has four slots. compile/runtime keep their obvious "runtime" meaning;
-    // test maps to dev. provided and system both fall to build: neither ships at runtime, both are
-    // "present only so the build compiles," the same bucket a build-system requirement occupies.
-    // import never reaches here -- the caller skips it outright, since it is BOM inclusion rather
-    // than a dependency.
-    private static String kindForMavenScope(String scope) {
+    // The two judgement calls in this file; everything else here is transcription.
+    //
+    // 1. Maven has six scopes and RawDep.kind has four slots. compile/runtime keep their obvious
+    // "runtime" meaning; test maps to dev. provided and system both fall to build: neither ships at
+    // runtime, both are "present only so the build compiles," the same bucket a build-system
+    // requirement occupies. import never reaches here -- the caller skips it outright, since it is
+    // BOM inclusion rather than a dependency.
+    //
+    // 2. <optional>true</optional> takes precedence over all of the above: an optional dependency
+    // is always kind="optional" regardless of its scope, matching the reference, where an optional
+    // group's entries are "optional" whether or not they would otherwise have been "runtime".
+    // "optional" is a value in the kind vocabulary itself (runtime|dev|optional|build) and belongs
+    // nowhere else -- a Maven classifier (which artifact of a coordinate you get) is a different
+    // axis from optionality (how the dependency is consumed), so this must not be confused with
+    // `extras`.
+    private static String kindForMavenDependency(String scope, boolean optional) {
+        if (optional) {
+            return "optional";
+        }
         switch (scope) {
             case "test":
                 return "dev";

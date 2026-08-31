@@ -97,10 +97,11 @@ class ManifestParsersTest {
     }
 
     @Test
-    void parseManifest_pomXmlOptionalTrueAddsOptionalToExtrasWithoutChangingScopeDerivedKind() {
-        // Kind is derived solely from <scope> (there is no fifth RawDep field to carry this flag);
-        // <optional>true</optional> instead lands in `extras`, the same free-vocabulary bucket a
-        // classifier uses.
+    void parseManifest_pomXmlOptionalTrueSetsKindOptional() {
+        // "optional" is one of the four values in the kind vocabulary (runtime|dev|optional|build)
+        // and is not part of any other vocabulary here -- extras carries Maven classifiers (which
+        // artifact of a coordinate you get), a different axis from optionality (how the dependency
+        // is consumed), so it must not land there.
         String pom = "<project><dependencies>"
                 + "<dependency><groupId>g</groupId><artifactId>a</artifactId><version>1.0</version>"
                 + "<scope>runtime</scope><optional>true</optional></dependency>"
@@ -109,8 +110,23 @@ class ManifestParsersTest {
         ManifestParsers.ParseResult result = ManifestParsers.parseManifest("pom.xml", pom);
 
         ManifestParsers.RawDep dep = result.deps.get(0);
-        assertEquals("runtime", dep.kind);
-        assertEquals(List.of("optional"), dep.extras);
+        assertEquals("optional", dep.kind);
+        assertTrue(dep.extras.isEmpty());
+    }
+
+    @Test
+    void parseManifest_pomXmlOptionalTrueTakesPrecedenceOverScopeDerivedKind() {
+        // A <scope>test</scope> dependency that is also <optional>true</optional> must come out
+        // "optional", not "dev" -- optionality wins over scope, matching the reference, where an
+        // optional group's entries are "optional" regardless of what they would otherwise have been.
+        String pom = "<project><dependencies>"
+                + "<dependency><groupId>g</groupId><artifactId>a</artifactId><version>1.0</version>"
+                + "<scope>test</scope><optional>true</optional></dependency>"
+                + "</dependencies></project>";
+
+        ManifestParsers.ParseResult result = ManifestParsers.parseManifest("pom.xml", pom);
+
+        assertEquals("optional", result.deps.get(0).kind);
     }
 
     @Test
