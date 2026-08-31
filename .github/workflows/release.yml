@@ -79,7 +79,11 @@ jobs:
             echo "Or run the JAR directly (requires Java 11+):"
             echo
             echo '```sh'
-            echo "java -jar codeanalyzer.jar -i /path/to/project -a 2 --emit neo4j -o ./out   # writes out/graph.cypher"
+            echo "# JSON output, at the analysis level you ask for"
+            echo "java -jar codeanalyzer.jar -i /path/to/project -a 4 -o ./out          # writes out/analysis.json"
+            echo
+            echo "# Neo4j projection - always full depth, so it takes no --analysis-level"
+            echo "java -jar codeanalyzer.jar -i /path/to/project --emit neo4j -o ./out  # writes out/graph.cypher"
             echo '```'
             echo
             echo "## Downloads"

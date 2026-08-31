@@ -35,5 +35,7 @@
   ],
   "ignore_labels": [
     "ignore"
-  ]
+  ],
+  "template": "#{{CHANGELOG}}\n\n## \uD83D\uDCE6 Other Changes\n\n#{{UNCATEGORIZED}}",
+  "empty_template": "- _No changes recorded for this release._"
 }
