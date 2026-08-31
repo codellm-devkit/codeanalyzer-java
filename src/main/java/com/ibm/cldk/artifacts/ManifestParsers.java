@@ -77,17 +77,24 @@ public final class ManifestParsers {
     /** Dispatch on basename. An unknown basename returns an empty, non-partial result. */
     public static ParseResult parseManifest(String path, String text) {
         String base = basename(path);
-        try {
-            if ("pom.xml".equals(base)) {
+        if ("pom.xml".equals(base)) {
+            try {
                 return new ParseResult(parsePomDependencies(text), false);
+            } catch (ParserConfigurationException | SAXException | IOException e) {
+                // These three are exactly what parsePomDependencies declares -- the full checked
+                // contract of DocumentBuilderFactory/DocumentBuilder for a malformed or hostile XML
+                // document. Deliberately NOT a blanket `catch (Exception e)`: an unchecked exception
+                // here would mean a bug in the DOM helpers below, not bad input, and should surface
+                // rather than be silently misreported as "malformed pom".
+                return new ParseResult(List.of(), true);
             }
-            if ("build.gradle".equals(base) || "build.gradle.kts".equals(base)) {
-                return new ParseResult(parseGradleDependencies(text), false);
-            }
-        } catch (Exception e) {
-            // Whole-file failure (malformed XML, or any other unexpected exception type): keep the
-            // artifact but flag extraction, rather than letting one bad manifest fail the analysis.
-            return new ParseResult(List.of(), true);
+        }
+        if ("build.gradle".equals(base) || "build.gradle.kts".equals(base)) {
+            // No catch here by design: the brief requires this branch to never fail -- an
+            // unparseable line is skipped and the file still succeeds. parseGradleDependencies is
+            // pure regex/string scanning with no throwing path; wrapping it in a catch would
+            // silently paper over a future bug that broke that contract instead of surfacing it.
+            return new ParseResult(parseGradleDependencies(text), false);
         }
         return new ParseResult(List.of(), false);
     }
@@ -168,16 +175,30 @@ public final class ManifestParsers {
     }
 
     private static DocumentBuilder newSecureDocumentBuilder() throws ParserConfigurationException {
-        // pom.xml is untrusted repository content, not a file this process authored. Hardened per
-        // OWASP's XXE prevention cheat sheet: disallowing DOCTYPE outright is the categorical
-        // blocker (no DTD means no custom entities of any kind, external or internal); the two
-        // external-entity toggles are kept as explicit defense in depth alongside it.
+        return newSecureDocumentBuilderFactory().newDocumentBuilder();
+    }
+
+    /**
+     * Package-private (not {@code private}) solely so {@code ManifestParsersTest} can inspect the
+     * configured factory directly -- {@link DocumentBuilder} itself exposes no way to ask "what
+     * features was this built with" after the fact, and that inspection is what lets a test
+     * attribute each hardening switch individually rather than only as a bundle. No other caller
+     * exists or is expected; this is not a general-purpose factory.
+     *
+     * <p>pom.xml is untrusted repository content, not a file this process authored. Hardened per
+     * OWASP's XXE prevention cheat sheet: disallowing DOCTYPE outright is the categorical blocker
+     * (no DTD means no custom entities of any kind, external or internal); the two external-entity
+     * toggles are kept as explicit defense in depth alongside it, and {@code
+     * FEATURE_SECURE_PROCESSING} restricts external DTD/entity resource access (JAXP's {@code
+     * accessExternalDTD}) independently of both.
+     */
+    static DocumentBuilderFactory newSecureDocumentBuilderFactory() throws ParserConfigurationException {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
         factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
         factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
         factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
         factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-        return factory.newDocumentBuilder();
+        return factory;
     }
 
     private static List<Element> directChildren(Element parent, String tagName) {

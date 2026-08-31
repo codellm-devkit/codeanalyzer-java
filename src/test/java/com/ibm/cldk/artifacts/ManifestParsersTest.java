@@ -2,11 +2,16 @@ package com.ibm.cldk.artifacts;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.StringReader;
 import java.util.List;
 import java.util.Map;
+import javax.xml.parsers.DocumentBuilderFactory;
 import org.junit.jupiter.api.Test;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
 
 /**
  * Behavioural tests for {@link ManifestParsers}: one happy-path case per format, the Maven
@@ -175,6 +180,83 @@ class ManifestParsersTest {
         assertTrue(result.deps.isEmpty(), "no record may carry resolved external-entity content");
     }
 
+    @Test
+    void parseManifest_pomXmlBareExternalDtdReferenceAlsoFailsClosed() {
+        // A different attack shape from the probe above: no inline <!ENTITY ...> at all -- just the
+        // DOCTYPE's own external subset, SYSTEM-referencing a local file. Also dominated by
+        // disallow-doctype-decl in production (see the factory-level tests below for why that
+        // dominance means this alone cannot attribute the other three switches), but it is a
+        // materially different payload shape and worth its own regression coverage.
+        String bareExternalDtd = "<?xml version=\"1.0\"?>\n"
+                + "<!DOCTYPE project SYSTEM \"file:///etc/passwd\">\n"
+                + "<project><dependencies>"
+                + "<dependency><groupId>g</groupId><artifactId>probe</artifactId><version>1.0</version></dependency>"
+                + "</dependencies></project>";
+
+        ManifestParsers.ParseResult result = ManifestParsers.parseManifest("pom.xml", bareExternalDtd);
+
+        assertTrue(result.partial, "a bare external-DTD reference must also fail closed");
+        assertTrue(result.deps.isEmpty());
+    }
+
+    @Test
+    void newSecureDocumentBuilderFactory_setsDisallowDoctypeAndBothExternalEntityFeatures() throws Exception {
+        // Each of these three has a Xerces *default* that is the opposite of the secure value used
+        // here (disallow-doctype-decl defaults to false; both external-entity features default to
+        // true) -- verified directly against a fresh, untouched factory. That means removing any one
+        // of the corresponding setFeature calls in newSecureDocumentBuilderFactory flips exactly one
+        // assertion below, with no dependence on Xerces' feature-checking order. This is what a
+        // behavioural probe cannot give us: disallow-doctype-decl rejects any DOCTYPE-bearing
+        // document before the other two are ever consulted, so a payload-based test cannot tell
+        // "external-general-entities is set correctly" apart from "it doesn't matter here anyway".
+        //
+        // FEATURE_SECURE_PROCESSING is deliberately not asserted here -- see the dedicated test
+        // below for why getFeature() cannot attribute it.
+        DocumentBuilderFactory factory = ManifestParsers.newSecureDocumentBuilderFactory();
+
+        assertTrue(factory.getFeature("http://apache.org/xml/features/disallow-doctype-decl"));
+        assertFalse(factory.getFeature("http://xml.org/sax/features/external-general-entities"));
+        assertFalse(factory.getFeature("http://xml.org/sax/features/external-parameter-entities"));
+    }
+
+    @Test
+    void newSecureDocumentBuilderFactory_featureSecureProcessingBlocksABareExternalDtdFetchOnItsOwn()
+            throws Exception {
+        // FEATURE_SECURE_PROCESSING cannot be attributed by getFeature(): verified directly that it
+        // reads "true" on a completely untouched factory where setFeature was never called at all,
+        // so asserting the getter would pass whether or not the setFeature call in
+        // newSecureDocumentBuilderFactory exists. Only *calling* the setter activates the JAXP
+        // accessExternalDTD restriction this switch exists for -- confirmed by comparing "never
+        // called" (file gets read off disk, then fails to parse as a DTD) against "explicitly set
+        // true" (rejected before the file is ever opened, via accessExternalDTD).
+        //
+        // disallow-doctype-decl is deliberately peeled back to false on the real, production-built
+        // factory below (everything else from newSecureDocumentBuilderFactory is untouched):
+        // verified directly that with it left in place, removing FEATURE_SECURE_PROCESSING alone
+        // produces byte-identical behaviour (still rejected at the DOCTYPE token, before
+        // FEATURE_SECURE_PROCESSING is ever consulted) -- so peeling it back here is the only way to
+        // observe this switch's own, independent contribution.
+        DocumentBuilderFactory factory = ManifestParsers.newSecureDocumentBuilderFactory();
+        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", false);
+
+        // No inline <!ENTITY ...> at all, so external-general-entities/external-parameter-entities
+        // (both still secure here) do not apply to this payload; only accessExternalDTD stands
+        // between this and reading the file off disk.
+        String bareExternalDtd = "<?xml version=\"1.0\"?>\n"
+                + "<!DOCTYPE project SYSTEM \"file:///etc/passwd\">\n"
+                + "<project><dependencies>"
+                + "<dependency><groupId>g</groupId><artifactId>probe</artifactId><version>1.0</version></dependency>"
+                + "</dependencies></project>";
+
+        SAXException thrown = assertThrows(SAXException.class,
+                () -> factory.newDocumentBuilder().parse(new InputSource(new StringReader(bareExternalDtd))));
+        assertTrue(
+                thrown.getMessage().contains("accessExternalDTD"),
+                "must be rejected via the accessExternalDTD restriction specifically -- i.e. before the file is "
+                        + "ever read -- not merely rejected for some other reason; actual message: "
+                        + thrown.getMessage());
+    }
+
     // ---- build.gradle / build.gradle.kts ---------------------------------------------------
 
     @Test
@@ -249,6 +331,21 @@ class ManifestParsersTest {
 
         assertFalse(result.partial);
         assertEquals(1, result.deps.size());
+    }
+
+    @Test
+    void parseManifest_buildGradleNeverReturnsPartialRegardlessOfContent() {
+        // Structural, not incidental: the brief requires this branch to never fail, and
+        // parseManifest enforces it by giving pom.xml its own try/catch and none at all to the
+        // Gradle branch, rather than one catch shared across both with different contracts. This is
+        // the dedicated test for that contract, independent of any other Gradle test's specific
+        // input shape -- genuinely arbitrary, non-UTF-friendly-looking, brace-heavy garbage.
+        String garbage = "  not gradle at all {{{{ )))) ][ \\\\ '''\" \n\n\timplementation\n";
+
+        ManifestParsers.ParseResult result = ManifestParsers.parseManifest("build.gradle", garbage);
+
+        assertFalse(result.partial);
+        assertTrue(result.deps.isEmpty());
     }
 
     // ---- gradle.lockfile --------------------------------------------------------------------
