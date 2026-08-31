@@ -16,8 +16,10 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
+import org.xml.sax.ErrorHandler;
 import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
+import org.xml.sax.SAXParseException;
 
 /**
  * Pure dependency-manifest and lockfile readers: text in, records out. No file I/O, no execution,
@@ -174,7 +176,7 @@ public final class ManifestParsers {
     }
 
     private static DocumentBuilder newSecureDocumentBuilder() throws ParserConfigurationException {
-        return newSecureDocumentBuilderFactory().newDocumentBuilder();
+        return quiet(newSecureDocumentBuilderFactory().newDocumentBuilder());
     }
 
     /**
@@ -190,6 +192,11 @@ public final class ManifestParsers {
      * toggles are kept as explicit defense in depth alongside it, and {@code
      * FEATURE_SECURE_PROCESSING} restricts external DTD/entity resource access (JAXP's {@code
      * accessExternalDTD}) independently of both.
+     *
+     * <p>A dependency manifest has no legitimate reason to declare a DOCTYPE, so this stays
+     * categorical. Configuration files do -- {@code logback.xml} routinely carries one -- and they
+     * are parsed through {@link #newConfigDocumentBuilder} instead, which permits an internal subset
+     * while keeping every external switch here identical.
      */
     static DocumentBuilderFactory newSecureDocumentBuilderFactory() throws ParserConfigurationException {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
@@ -198,6 +205,66 @@ public final class ManifestParsers {
         factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
         factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
         return factory;
+    }
+
+    /**
+     * The parser for configuration files, which differs from {@link #newSecureDocumentBuilderFactory}
+     * in exactly one respect: an internal DOCTYPE subset is allowed.
+     *
+     * <p>Refusing every DOCTYPE rejects the whole document rather than the dangerous part. On
+     * ThingsBoard v4.0 that discarded 43 files, 35 of them {@code logback.xml} -- precisely the
+     * configuration this analyzer exists to report, silently reduced to {@code extraction=partial}
+     * with no keys. XXE needs an <em>external</em> reference to resolve, and all four external
+     * routes stay closed here (general entities, parameter entities, external DTD loading,
+     * XInclude), with {@code FEATURE_SECURE_PROCESSING} capping entity expansion so an internal
+     * "billion laughs" is refused rather than expanded. {@code setExpandEntityReferences(false)}
+     * additionally keeps entity bodies out of the walked tree.
+     *
+     * <p>Manifests deliberately do NOT use this: a pom.xml declaring a DOCTYPE has no legitimate
+     * shape, so it keeps the categorical refusal.
+     */
+    static DocumentBuilderFactory newConfigDocumentBuilderFactory() throws ParserConfigurationException {
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+        factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+        factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+        factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+        factory.setXIncludeAware(false);
+        factory.setExpandEntityReferences(false);
+        return factory;
+    }
+
+    /** A configuration-file builder that does not narrate to stderr. */
+    static DocumentBuilder newConfigDocumentBuilder() throws ParserConfigurationException {
+        return quiet(newConfigDocumentBuilderFactory().newDocumentBuilder());
+    }
+
+    /**
+     * Silence the JDK parser's own commentary. With no error handler installed it prints every
+     * problem to {@code System.err} itself -- raw {@code [Fatal Error] :19:10: ...} lines that
+     * bypass {@link com.ibm.cldk.utils.Log}, tell the user nothing actionable, and on a large
+     * repository arrive dozens at a time. Failures already travel in each caller's
+     * {@code (records, ok)} result, so the thrown exception carries the signal; this removes only
+     * the duplicate narration.
+     */
+    static DocumentBuilder quiet(DocumentBuilder builder) {
+        builder.setErrorHandler(new ErrorHandler() {
+            @Override
+            public void warning(SAXParseException e) {}
+
+            @Override
+            public void error(SAXParseException e) throws SAXException {
+                throw e;
+            }
+
+            @Override
+            public void fatalError(SAXParseException e) throws SAXException {
+                throw e;
+            }
+        });
+        return builder;
     }
 
     private static List<Element> directChildren(Element parent, String tagName) {

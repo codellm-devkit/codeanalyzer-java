@@ -198,17 +198,43 @@ public final class ConfigKeys {
      * behaviour arose in the first place.
      */
     private static final Set<String> CONFIG_XML_NAMES = new HashSet<>(Arrays.asList(
-            "pom.xml", "web.xml", "ejb-jar.xml", "application.xml", "persistence.xml",
-            "beans.xml", "faces-config.xml", "server.xml", "context.xml", "settings.xml",
-            "ivy.xml", "struts.xml", "hibernate.cfg.xml", "logback.xml", "logback-test.xml",
-            "log4j.xml", "log4j2.xml", "checkstyle.xml", "spotbugs.xml", "pmd.xml",
-            "jboss-web.xml", "weblogic.xml", "orm.xml", "validation.xml", "portlet.xml",
-            "tiles.xml", "sun-jaxb.episode", "liquibase.xml", "AndroidManifest.xml"));
+            // build / project
+            "pom.xml", "build.xml", "settings.xml", "toolchains.xml", "ivy.xml", "assembly.xml",
+            // servlet / Java EE descriptors
+            "web.xml", "ejb-jar.xml", "application.xml", "application-client.xml", "persistence.xml",
+            "beans.xml", "faces-config.xml", "orm.xml", "validation.xml", "portlet.xml", "ra.xml",
+            // containers and app servers
+            "server.xml", "context.xml", "tomcat-users.xml", "standalone.xml", "domain.xml",
+            "jboss-web.xml", "jboss-ejb3.xml", "jboss-deployment-structure.xml", "weblogic.xml",
+            "glassfish-web.xml", "glassfish-application.xml", "blueprint.xml",
+            // frameworks
+            "struts.xml", "tiles.xml", "hibernate.cfg.xml", "quartz.xml", "ehcache.xml",
+            "liquibase.xml", "bindings.xml", "sun-jaxb.episode",
+            // logging
+            "logback.xml", "logback-test.xml", "logback-spring.xml",
+            "log4j.xml", "log4j2.xml", "log4j2-spring.xml", "log4j2-test.xml",
+            // static analysis / tooling
+            "checkstyle.xml", "spotbugs.xml", "findbugs-exclude.xml", "pmd.xml", "suppressions.xml",
+            // misc
+            "config.xml", "androidmanifest.xml"));
 
-    /** Recognized suffixes, for families that are named by convention rather than by one filename. */
-    private static final List<String> CONFIG_XML_SUFFIXES =
-            Arrays.asList("-context.xml", "-config.xml", "-configuration.xml", "-beans.xml",
-                    "-servlet.xml", "-ds.xml", "-mapper.xml", "-changelog.xml");
+    /**
+     * Name stems that mark a configuration file whatever separator precedes them. Matching only
+     * hyphenated forms was the first attempt and it missed the canonical spellings of the very
+     * frameworks it was meant to cover: {@code applicationContext.xml} (Spring) and {@code
+     * UserMapper.xml} (MyBatis) both failed a {@code -context.xml}/{@code -mapper.xml} test, while
+     * {@code spring-servlet.xml} passed. Comparing against the lowercased stem catches camelCase,
+     * hyphenated and underscored spellings alike.
+     *
+     * <p>Deliberately excludes short stems that occur inside ordinary words -- {@code "ds"} would
+     * admit {@code records.xml} -- so those stay hyphen-only in {@link #CONFIG_XML_SUFFIXES}.
+     */
+    private static final List<String> CONFIG_XML_STEMS =
+            Arrays.asList("context", "config", "configuration", "settings", "beans", "servlet",
+                    "mapper", "changelog", "datasource");
+
+    /** Suffixes that must keep their separator, being too short or too common to match bare. */
+    private static final List<String> CONFIG_XML_SUFFIXES = Arrays.asList("-ds.xml", ".hbm.xml");
 
     /**
      * Whether an XML artifact is a configuration file worth flattening: a recognized basename, a
@@ -223,9 +249,19 @@ public final class ConfigKeys {
             return true;
         }
         for (String suffix : CONFIG_XML_SUFFIXES) {
-            // A suffix match needs something in front of it, so "-context.xml" itself is not a match.
+            // A suffix match needs something in front of it, so ".hbm.xml" itself is not a match.
             if (lower.length() > suffix.length() && lower.endsWith(suffix)) {
                 return true;
+            }
+        }
+        if (lower.endsWith(".xml")) {
+            String stem = lower.substring(0, lower.length() - ".xml".length());
+            for (String token : CONFIG_XML_STEMS) {
+                // The stem must be preceded by something, so a file named exactly "config.xml" is
+                // matched by name above rather than here, and "context.xml" likewise.
+                if (stem.length() > token.length() && stem.endsWith(token)) {
+                    return true;
+                }
             }
         }
         return inDescriptorDirectory(path);
@@ -329,8 +365,7 @@ public final class ConfigKeys {
 
     private static List<JConfigKey> extractXml(String artifactId, String text, boolean captureValue)
             throws ParserConfigurationException, SAXException, IOException {
-        Document doc = ManifestParsers.newSecureDocumentBuilderFactory()
-                .newDocumentBuilder()
+        Document doc = ManifestParsers.newConfigDocumentBuilder()
                 .parse(new InputSource(new StringReader(text)));
         Element root = doc.getDocumentElement();
         List<Entry> entries = new ArrayList<>();
