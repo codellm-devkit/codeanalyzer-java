@@ -264,9 +264,9 @@ git commit -m "docs(l3): record what entry defs buy the summary pass"
 
 - [ ] **Step 1: Replace the false claim**
 
-D7 currently reads, in both places, that the summary pass mirrors `codeanalyzer-python`'s hammock-region summaries. It does not: that repo has no region machinery at all — searching its dataflow package for `hammock` or `region` returns nothing, and its `summaries.py` module docstring states the opposite posture deliberately ("at statement granularity a callsite node is already a transformer, so the composition step callee summaries actually contribute is the *global footprint*").
+D7 currently reads, in both places, that the summary pass uses hammock-region summaries. It does not: there is no region machinery. At statement granularity a call-site node is already a transformer, so what callee summaries actually contribute at the composition step is the global footprint.
 
-Rewrite both mentions to say what is true: the pass composes bottom-up over the SCC condensation with a monotone fixpoint (which both analyzers do), that `codeanalyzer-python` reaches its transfer relation at statement granularity rather than by region decomposition, and that region decomposition remains an open refinement for either analyzer rather than an existing precedent. Keep the rest of D7 — SCC condensation, k-limiting, fixpoint, "heaviest unit, sequenced last" — as written; only the parity claim is wrong.
+Rewrite both mentions to say what is true: the pass composes bottom-up over the SCC condensation with a monotone fixpoint, reaches its transfer relation at statement granularity rather than by region decomposition, and that region decomposition remains an open refinement rather than an existing precedent. Keep the rest of D7 — SCC condensation, k-limiting, fixpoint, "heaviest unit, sequenced last" — as written; only the parity claim is wrong.
 
 Add one sentence stating that both analyzers persist `cfg` and `cdg` on the callable and compute post-dominators, so what remains to implement is the region decomposition itself.
 

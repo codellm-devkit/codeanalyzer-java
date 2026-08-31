@@ -12,7 +12,7 @@ Migrate `codeanalyzer-java` from the legacy v1 output (`{symbol_table, call_grap
 
 The python-sdk Java models migrate to v2 in lockstep behind a **frozen public API** (two-layer model), as a later rung.
 
-**CLDK context:** CLDK is actively migrating v1 → v2. `codeanalyzer-python` is the reference pilot (v2 + L3/L4 are on its `main`). The v2 keystone is a *proposal we refine as we implement*; this spec records the Java-specific refinements.
+**CLDK context:** CLDK is actively migrating v1 → v2. The v2 keystone is a *proposal we refine as we implement*; this spec records the Java-specific refinements.
 
 **Independence note:** This effort is designed **independent of** the `origin/minor/issue-171-full-SDG` branch. That branch is a useful proof that WALA can compute the CFG/PDG/SDG facts (RTA + `SDG`/`ModRef`, source lines via `IMethod.getSourcePosition`), but it emits the **old v1 shape** and collapses intra/inter-procedural into a single "level 3". We reuse the *approach*, not the code.
 
@@ -67,18 +67,18 @@ One structure — a CPG — in two projections that must agree.
 
 ## 6. Design decisions (schema-design-loop outcomes)
 
-Recorded in [`.claude/SCHEMA_DECISIONS.md`](../../../.claude/SCHEMA_DECISIONS.md); divergences from the canonical keystone and the Python pilot are noted per decision.
+Recorded in [`.claude/SCHEMA_DECISIONS.md`](../../../.claude/SCHEMA_DECISIONS.md); divergences from the canonical keystone are noted per decision.
 
 | # | Decision | Choice | Rationale / divergence |
 | --- | --- | --- | --- |
-| D1 | Transition posture | **Pure canonical v2** | Drop per-callable `code` (SDK slices `module.source[span.bytes]`); drop legacy flat `start_line/end_line` (use `span`); call sites are **only** `body` `call` nodes (no `call_sites[]`). Cleaner than the Python pilot (which kept legacy fields); SDK views reconstruct the old surface. |
-| D2 | Annotations | **Structured `decorators:[{name,args,span}]`** | Java annotations carry meaningful args (`@RequestMapping("/x")`, `@Column(name=…)`) needed by framework/CRUD/entrypoint analysis. Diverges from the Python pilot's flat list; matches keystone. |
+| D1 | Transition posture | **Pure canonical v2** | Drop per-callable `code` (SDK slices `module.source[span.bytes]`); drop legacy flat `start_line/end_line` (use `span`); call sites are **only** `body` `call` nodes (no `call_sites[]`). Legacy fields are dropped rather than kept additively; SDK views reconstruct the old surface. |
+| D2 | Annotations | **Structured `decorators:[{name,args,span}]`** | Java annotations carry meaningful args (`@RequestMapping("/x")`, `@Column(name=…)`) needed by framework/CRUD/entrypoint analysis, which a flat list would lose; matches keystone. |
 | D3 | Metrics & cross-refs | **Nested per keystone** — `metrics:{cyclomatic}`, `refs:{types:[id],fields:[id]}` | Forward-compatible/extensible; SDK views expose old flat names. |
 | D4 | Type kinds | **Single `kind`** ∈ `class\|interface\|enum\|record\|annotation` + `nesting:{parent?,is_local?}` | Replaces the `is_interface/is_enum/is_record/is_nested/...` boolean pile. |
-| D5 | L3 CFG engine & granularity | **WALA engine → project to source-statement `line:col` nodes** | WALA computes SSACFG/dominance/def-use (heap-ready for L4); project each SSA instruction to its enclosing source statement via `IMethod.getSourcePosition` + JavaParser statement spans. **Fallback:** if source-fidelity proves unresolvable, revisit hand-building the CFG from the JavaParser AST (how Python/TS/Go do it). |
+| D5 | L3 CFG engine & granularity | **WALA engine → project to source-statement `line:col` nodes** | WALA computes SSACFG/dominance/def-use (heap-ready for L4); project each SSA instruction to its enclosing source statement via `IMethod.getSourcePosition` + JavaParser statement spans. **Fallback:** if source-fidelity proves unresolvable, revisit hand-building the CFG from the JavaParser AST. |
 | D6 | L4 points-to precision | **RTA default + `--precision {rta,0-cfa,0-1-cfa}`** | RTA is proven to scale (0-1-CFA was found not to); coarse heap precision ⇒ conservative semantic `ddg`. Precision tunable per project. |
-| D7 | L4 summary edges | **Own summary pass** (bottom-up over the SCC condensation, k-limited, monotone fixpoint) | Bottom-up composition with monotone fixpoint over SCC-condensation DAG, mirroring the Python pilot's approach (which operates at statement granularity, not region decomposition); keystone-conformant. Heaviest L4 unit; lands last. |
-| D8 | `can://` scheme for Java | `can://java/<app>/<file>/<type>/<signature>` | Java analog of the pilot's `can://python/…`; built from the existing `signatureOf()`. |
+| D7 | L4 summary edges | **Own summary pass** (bottom-up over the SCC condensation, k-limited, monotone fixpoint) | Bottom-up composition with monotone fixpoint over SCC-condensation DAG, operating at statement granularity rather than region decomposition; keystone-conformant. Heaviest L4 unit; lands last. |
+| D8 | `can://` scheme for Java | `can://java/<app>/<file>/<type>/<signature>` | Built from the existing `signatureOf()`. |
 | D9 | Neo4j namespace | Keep the **`J_`** relationship prefix | Existing convention (`J_CALLS`, …); dual-label `JSymbol` merge pattern already present. |
 
 ---
@@ -148,7 +148,7 @@ Global/static state modeled as **extra** formal/actual vertices (rides the same 
 
 **Semantic DDG:** `DataDependenceOptions.FULL` + `ModRef` yields alias/heap-derived def-use, emitted as **additional** `ddg` edges tagged `prov:["points-to"]`. L3's `prov:["ssa"]` edges are untouched — this preserves `L3 ⊆ L4` (weak-update / over-approximate posture; no strong updates that would remove an edge).
 
-**Summary pass (D7):** a dedicated pass composing bottom-up over the SCC-condensation DAG (Tarjan), k-limited, iterated to a monotone fixpoint within each SCC. The Python pilot reaches its transfer relation at statement granularity rather than via region decomposition; region decomposition remains an open refinement for either analyzer. Both analyzers persist `cfg` and `cdg` on the callable and compute post-dominators; what remains to implement is the region decomposition itself. Produces the `summary` (actual_in→actual_out) edges that make later SDK slicing/taint context-sensitive without re-descending into callees. Heaviest unit; sequenced last.
+**Summary pass (D7):** a dedicated pass composing bottom-up over the SCC-condensation DAG (Tarjan), k-limited, iterated to a monotone fixpoint within each SCC. The transfer relation is reached at statement granularity rather than via region decomposition; region decomposition remains an open refinement. `cfg` and `cdg` are persisted on the callable and post-dominators computed; what remains to implement is the region decomposition itself. Produces the `summary` (actual_in→actual_out) edges that make later SDK slicing/taint context-sensitive without re-descending into callees. Heaviest unit; sequenced last.
 
 **Cost controls:** flag-gated (nothing at L4 runs unless `-a 4`); k-limiting mandatory for termination; summaries content-hashed/cached with recorded dependency metadata (incremental re-analysis aspirational); parallel-by-construction wavefront over the SCC DAG, `-j N` byte-identical to `-j 1`.
 
@@ -239,5 +239,4 @@ Shape (snapshot): L1 tree → L2 `call_graph` → L3 (`cfg`/`cdg`/`ddg`) → L4 
 - Projections/CLI/testing: `…/neo4j-projection.md`, `…/cli-contract.md`, `…/testing-and-validation.md`, `…/analyzer-architecture.md`
 - SDK: `…/cldk-sdk-frontend/references/schema-contract.md`
 - Migration: `…/designing-cldk-changes/references/schema-migration.md`
-- Reference pilot: `codeanalyzer-python` `main` (`codeanalyzer/schema/py_schema.py`, `codeanalyzer/dataflow/*`, `codeanalyzer/schema/ids.py`)
 - Prior WALA SDG work (approach only, not reused): `codeanalyzer-java` `origin/minor/issue-171-full-SDG`

@@ -2,26 +2,24 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Emit the repository-artifact layer — non-source file inventory, declared dependencies, and flattened config keys — in `analysis.json` and the Neo4j graph, emulating what `codeanalyzer-python` v1.3.0 actually ships.
+**Goal:** Emit the repository-artifact layer — non-source file inventory, declared dependencies, and flattened config keys — in `analysis.json` and the Neo4j graph.
 
-**Architecture:** A new `com.ibm.cldk.artifacts` package with four seams that mirror python's: a repo-wide discovery walk that classifies every non-source file and never drops one, pure text-in/records-out manifest parsers, a dependency-view assembler that reconciles manifests against lockfiles, and a config-key flattener. The v2 schema gains three application-anchored node types; the v2 Neo4j projector gains three un-prefixed labels that are already reserved in its catalog. Nothing existing is renamed.
+**Architecture:** A new `com.ibm.cldk.artifacts` package with four seams: a repo-wide discovery walk that classifies every non-source file and never drops one, pure text-in/records-out manifest parsers, a dependency-view assembler that reconciles manifests against lockfiles, and a config-key flattener. The v2 schema gains three application-anchored node types; the v2 Neo4j projector gains three un-prefixed labels that are already reserved in its catalog. Nothing existing is renamed.
 
 **Tech Stack:** Java 11+, Lombok `@Data`, Gson `LOWER_CASE_WITH_UNDERSCORES`, JDK DOM for XML, `java.util.Properties`, SnakeYAML (new dependency), JUnit 5, Gradle.
 
-**Spec:** `repository-artifact-layer.md` in `codellm-devkit/.github`, tracked by epic [.github#45](https://github.com/codellm-devkit/.github/issues/45), Java child [#197](https://github.com/codellm-devkit/codeanalyzer-java/issues/197). **Read [.github#48](https://github.com/codellm-devkit/.github/issues/48) first** — it records that the spec mandates an `artifact_kind` enum, a `scope` enum, and an ecosystem mapping table that the reference implementation never built. This plan follows the reference implementation, not the spec, on the user's explicit instruction; #48 is where that contradiction gets reconciled.
-
-**Reference:** `codeanalyzer-python` at tag `v1.3.0` (`2520bcb`), specifically `codeanalyzer/artifacts/{discovery,parsers,dependencies,config_keys}.py`, `codeanalyzer/schema/py_schema.py`, `codeanalyzer/schema/ids.py`, and `codeanalyzer/neo4j/{schema,project}.py`. Read the reference for each task before writing that task's code — this plan states the contract, but the reference carries decisions its comments explain better than a summary can.
+**Spec:** `repository-artifact-layer.md` in `codellm-devkit/.github`, tracked by epic [.github#45](https://github.com/codellm-devkit/.github/issues/45), Java child [#197](https://github.com/codellm-devkit/codeanalyzer-java/issues/197). **Read [.github#48](https://github.com/codellm-devkit/.github/issues/48) first** — it records that the spec mandates an `artifact_kind` enum, a `scope` enum, and an ecosystem mapping table that was never actually built anywhere. This plan follows what ships rather than what the spec mandates, on the user's explicit instruction; #48 is where that contradiction gets reconciled.
 
 ## Global Constraints
 
 - **Emulate v1.3.0, not the spec.** No `artifact_kind` enum, no `scope` enum, no ecosystem table. Bare strings throughout: `format` (one value), `roles` (many), `kind` (`runtime|dev|optional|build`), `ecosystem` (the literal `"maven"`).
 - **Never drop a file.** A file matching no rule is still inventoried — `format="text"`, `roles=["unknown"]`, or `format="binary"` when it will not decode. Coverage beats classification. The one exclusion is a `.java` file no rule names; the symbol table owns those.
-- **Artifacts hang off the application as sibling maps**, exactly as python does. `symbol_table` stays strictly code-keyed. Only `config_keys` nest, inside their owning artifact.
+- **Artifacts hang off the application as sibling maps.** `symbol_table` stays strictly code-keyed. Only `config_keys` nest, inside their owning artifact.
 - **`sha256` and `size_bytes` always describe the whole file**, never the captured prefix.
 - **Extraction reads from disk, never from `source`.** A truncated or suppressed capture must not silently degrade parsing.
 - **Absence means "no fact":** null and empty-optional fields are omitted from JSON, matching how `param_in`/`summary` already behave.
-- **Determinism:** collect then sort; two runs byte-identical. Sort dependencies by `(name, declaredIn)` and config keys by `key`, as python does.
-- **Levels do not gate this layer.** It is L1 data — identical at `-a 1` and `-a 4`. (`config_use`, which python does gate by level, is out of scope here.)
+- **Determinism:** collect then sort; two runs byte-identical. Sort dependencies by `(name, declaredIn)` and config keys by `key`.
+- **Levels do not gate this layer.** It is L1 data — identical at `-a 1` and `-a 4`. (`config_use`, which would be gated by level, is out of scope here.)
 - **Additive only.** No existing model field, CLI flag, or graph label changes meaning.
 - Conventional-commit subjects. **No AI/Claude attribution in any commit message, body, or trailer** — hard project rule.
 - Spotless is auto-applied; run `./gradlew spotlessApply` before each commit.
@@ -31,14 +29,14 @@
 
 Four places the reference's approach does not port. Each is a decision this plan makes explicitly rather than leaving to an implementer:
 
-1. **Maven scope has no slot in python's four-value `kind`.** Map `compile`/`runtime` → `runtime`, `test` → `dev`, and **`provided`/`system` → `build`** (both are compile-time-only, like python's build-system requires). `import` scope is not a dependency at all — it is BOM inclusion, and is skipped. Record this mapping in a comment; it is the one place the emulation is a judgement rather than a transcription.
-2. **`purl` is two-segment.** `pkg:pypi/<name>` becomes `pkg:maven/<groupId>/<artifactId>`, so the flat `name` field splits. `JDependency` carries `group` **and** `name`; `name` alone remains the map/sort key for parity, with `group` additive.
+1. **Maven scope has no slot in the four-value `kind` vocabulary.** Map `compile`/`runtime` → `runtime`, `test` → `dev`, and **`provided`/`system` → `build`** (both are compile-time-only). `import` scope is not a dependency at all — it is BOM inclusion, and is skipped. Record this mapping in a comment; it is the one place the emulation is a judgement rather than a transcription.
+2. **`purl` is two-segment.** A Maven coordinate is `pkg:maven/<groupId>/<artifactId>`, so a flat `name` field splits. `JDependency` carries `group` **and** `name`; `name` alone remains the map/sort key, with `group` additive.
 3. **No PEP 503 normalization.** Maven coordinates are case-sensitive and already canonical. Do not port `normalize_name`.
-4. **`provides_imports` is a lookup, not a heuristic.** Python needs an alias table because a PyPI distribution name is not its import name; Java packages are declared. **This plan does not implement `provides_imports` or `unresolved_imports` at all** — doing it properly means reading package indexes out of resolved jars, which is a separate unit of work. Emit neither field rather than emitting a guess.
+4. **`provides_imports` is a lookup, not a heuristic.** A language whose distribution name differs from its import name needs an alias table; Java packages are declared, so there is nothing to resolve. **This plan does not implement `provides_imports` or `unresolved_imports` at all** — doing it properly means reading package indexes out of resolved jars, which is a separate unit of work. Emit neither field rather than emitting a guess.
 
 ## Out of scope
 
-`config_use` / `J_USES_CONFIG` (python's detector-rule mechanism; Java's `@Value`-style annotation injection is not a call site, so it needs its own design); transitive Maven resolution beyond what a lockfile states; `provides_imports`/`unresolved_imports` per item 4 above; POM parent and BOM-import inheritance beyond the local file (python's `-r` chasing is one level by design, and Maven inheritance is recursive — out here, worth its own issue).
+`config_use` / `J_USES_CONFIG` (a detector-rule mechanism; Java's `@Value`-style annotation injection is not a call site, so it needs its own design); transitive Maven resolution beyond what a lockfile states; `provides_imports`/`unresolved_imports` per item 4 above; POM parent and BOM-import inheritance beyond the local file (Maven inheritance is recursive — out here, worth its own issue).
 
 ## File Structure
 
@@ -85,7 +83,7 @@ private String extraction = "none";      // none|partial|full
 private List<JConfigKey> configKeys = new ArrayList<>();
 
 // JDependency — mirrors PyDependency (py_schema.py:555-570), split name + additive group
-private String group;                    // Maven groupId (additive; python has no analogue)
+private String group;                    // Maven groupId (additive)
 private String name;                     // Maven artifactId
 private String ecosystem = "maven";
 private String spec = "";                // the declared version range/spec, verbatim
@@ -135,7 +133,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
-/** The artifact layer's wire shape and id grammar, matching codeanalyzer-python v1.3.0. */
+/** The artifact layer's wire shape and id grammar. */
 class ArtifactModelTest {
 
     @Test
@@ -277,7 +275,7 @@ The Java rules table, adapted (Maven/Gradle/Spring instead of pip/setuptools):
             new Rule("*.xml", "xml", List.of("unknown")));
 ```
 
-Ignore set, adapted from python's (which is pip-shaped) to Java's build output:
+Ignore set, scoped to Java build output:
 
 ```java
     private static final Set<String> IGNORED = Set.of(
@@ -286,7 +284,7 @@ Ignore set, adapted from python's (which is pip-shaped) to Java's build output:
             ".codeanalyzer", "_library_dependencies");
 ```
 
-Note `build` and `target` here are the same class of exclusion the L1 extractor learned in #199 — build output is not project code. Unlike python's, this set matches a path **segment**, so a *file* named `build` is not excluded; use a directory check rather than python's `any(part in IGNORED for part in rel.parts)`, which has that bug.
+Note `build` and `target` here are the same class of exclusion the L1 extractor learned in #199 — build output is not project code. This set matches a path **segment**, so a *file* named `build` is not excluded; use a directory check rather than a check over every segment including the leaf, which has that bug.
 
 Capture (`_capture_source`, `discovery.py:79-91`), including the exemption:
 
@@ -327,7 +325,7 @@ git commit -m "feat(artifacts): repo-wide discovery walk with never-drop invento
 **Interfaces produced:**
 
 ```java
-/** A parsed declaration, before reconciliation. Mirrors python's frozen `RawDep`. */
+/** A parsed declaration, before reconciliation. Immutable. */
 public static final class RawDep {
     public final String group;
     public final String name;
@@ -357,7 +355,7 @@ Parsers, each with its failure behaviour:
 | `build.gradle` / `.kts` | shallow regex | `implementation`/`api`/`compileOnly`/`runtimeOnly`/`testImplementation`/`annotationProcessor` with a `'g:a:v'` or `"g:a:v"` string literal | `testImplementation` → `dev`, `compileOnly`/`annotationProcessor` → `build`, else `runtime` | a line that does not match is skipped; the file never fails |
 | `gradle.lockfile` | line reader | `g:a:v=configurations` → `{"g:a": "v"}` | n/a | empty map |
 
-The Gradle reader is deliberately shallow, exactly as python's `setup.py` reader is deliberately static: a `build.gradle` is a program, and evaluating it is out of scope. Interpolated versions (`$springVersion`) yield the literal text as `spec` and no `lockedVersion` — record that as a known gap in a comment rather than attempting resolution.
+The Gradle reader is deliberately shallow and purely static: a `build.gradle` is a program, and evaluating it is out of scope. Interpolated versions (`$springVersion`) yield the literal text as `spec` and no `lockedVersion` — record that as a known gap in a comment rather than attempting resolution.
 
 - [ ] **Step 1: Write the failing test** — one case per format plus: a malformed `pom.xml` returns `partial=true` and no records; a `pom.xml` with `<scope>test</scope>` yields `kind=dev`; `provided` and `system` both yield `build`; an `import`-scoped entry is absent; a Gradle line with an interpolated version keeps the literal spec; a malformed lockfile returns an empty map rather than throwing. Include an XXE probe — a `pom.xml` with a `<!DOCTYPE ... SYSTEM "file:///etc/passwd">` must not resolve it.
 
@@ -388,9 +386,9 @@ public static List<JDependency> build(Path projectDir, Map<String, JArtifact> ar
 Emulating `dependencies.py`'s two steps that matter here:
 
 1. **Declared.** For each artifact with role `dependency-manifest`, re-read its text **from disk** (not from `source` — capture may be off or truncated) and `parseManifest`. Each record becomes a `JDependency` with `declaredIn` = that artifact's id and `prov=["declared"]`. `partial=true` sets that artifact's `extraction="partial"`, otherwise `"full"`.
-2. **Lock backfill.** For each lockfile artifact, `parseLockPins`. A pin whose `group:name` matches a declared dependency sets its `lockedVersion`. A pin with **no** declaration becomes its own `JDependency` with `direct=false`, `prov=["lockfile"]`, `kind="runtime"`, `declaredIn` = the lock artifact's id. This is python's reconciliation (`dependencies.py:181-186`) and it contradicts the spec's "transitive out of scope" — see [.github#48](https://github.com/codellm-devkit/.github/issues/48).
+2. **Lock backfill.** For each lockfile artifact, `parseLockPins`. A pin whose `group:name` matches a declared dependency sets its `lockedVersion`. A pin with **no** declaration becomes its own `JDependency` with `direct=false`, `prov=["lockfile"]`, `kind="runtime"`, `declaredIn` = the lock artifact's id. This contradicts the spec's "transitive out of scope" — see [.github#48](https://github.com/codellm-devkit/.github/issues/48).
 
-Lock extraction status, per python: `"full"` when pins were found **or** the lock text is blank; `"partial"` when it has content but yielded nothing.
+Lock extraction status: `"full"` when pins were found **or** the lock text is blank; `"partial"` when it has content but yielded nothing.
 
 Sort by `(name, declaredIn)`. Do **not** implement `provides_imports` or `unresolved_imports` — see the plan's "Where Java cannot be literal", item 4.
 
@@ -420,13 +418,13 @@ public static boolean isEligible(JArtifact artifact);
 Namespaces and flatteners, emulating `config_keys.py`:
 
 - **`properties`** — `java.util.Properties` handles `key=value`, `key:value`, `\` continuations, and `#`/`!` comments natively. Namespace `properties`. Last-wins.
-- **`yaml`** — SnakeYAML `load`, then flatten to dotted paths with **numeric segments for list indices** (`servers.0.host`). Namespace `yaml`. Dual-mint compose environment blocks into namespace `env` keyed on the bare variable name, exactly as python does, with the id disambiguated by an `env.` prefix so `X` as a yaml path and `X` as an env var do not collide.
-- **`xml`** — JDK DOM (same hardening as Task 3), flattened as element paths with numeric segments for repeated siblings; attributes as `path@attr`. Namespace `xml`. Python has **no** XML flattener at all, so this is net-new; keep it simple and say so.
-- **`dockerfile`** — `ENV K=v` → namespace `env`; `ARG K[=default]` → namespace `dockerfile` with an `arg.` id prefix. Python's known gaps carry over: no BuildKit heredoc awareness, no multi-stage `FROM ... AS` scoping. Record both in comments rather than rediscovering them.
+- **`yaml`** — SnakeYAML `load`, then flatten to dotted paths with **numeric segments for list indices** (`servers.0.host`). Namespace `yaml`. Dual-mint compose environment blocks into namespace `env` keyed on the bare variable name, with the id disambiguated by an `env.` prefix so `X` as a yaml path and `X` as an env var do not collide.
+- **`xml`** — JDK DOM (same hardening as Task 3), flattened as element paths with numeric segments for repeated siblings; attributes as `path@attr`. Namespace `xml`. Keep it simple and say so.
+- **`dockerfile`** — `ENV K=v` → namespace `env`; `ARG K[=default]` → namespace `dockerfile` with an `arg.` id prefix. Two accepted gaps: no BuildKit heredoc awareness, no multi-stage `FROM ... AS` scoping. Record both in comments rather than rediscovering them.
 
-`references[]` — raw recognized tokens, verbatim with sigils, in order, deduplicated. Java's dominant form is `${VAR}` (Spring placeholder and Maven property alike), plus `$VAR`. Match `${...}` first and mask it before the bare form, as python does, so `${A}` does not also yield `$A`.
+`references[]` — raw recognized tokens, verbatim with sigils, in order, deduplicated. Java's dominant form is `${VAR}` (Spring placeholder and Maven property alike), plus `$VAR`. Match `${...}` first and mask it before the bare form, so `${A}` does not also yield `$A`.
 
-`value` is populated only when `captureValue` is true; keys, namespaces, spans and references are extracted regardless. Spans are best-effort and `null` is acceptable — python's own are a regex approximation, documented as an accepted gap.
+`value` is populated only when `captureValue` is true; keys, namespaces, spans and references are extracted regardless. Spans are best-effort and `null` is acceptable — a documented, accepted gap.
 
 - [ ] **Step 1: Write the failing test** — per format: a `.properties` file yields dotted keys and last-wins; a Spring `application.yml` yields `server.port` and a list index; an XML descriptor yields an element path; a Dockerfile yields `ENV` in `env` and `ARG` in `dockerfile` without id collision; `${DB_HOST}` appears in `references` while `$DB_HOST` in the same value does not double-count; `captureValue=false` keeps keys and references but nulls `value`; a malformed YAML returns `ok=false` and does not throw; a binary artifact is not eligible.
 
@@ -440,7 +438,7 @@ Namespaces and flatteners, emulating `config_keys.py`:
 - Modify: `src/main/java/com/ibm/cldk/CodeAnalyzer.java`
 - Test: `src/test/java/com/ibm/cldk/CodeAnalyzerV2CliTest.java` (append)
 
-**Interfaces produced:** three flags mirroring python's, and the pipeline call.
+**Interfaces produced:** three flags, and the pipeline call.
 
 ```java
     @Option(names = { "--artifact-text" }, negatable = true,
@@ -453,7 +451,7 @@ Namespaces and flatteners, emulating `config_keys.py`:
     public static int artifactTextMaxBytes = 262144;
 ```
 
-Python's third flag, `--resolve-installed`, has no Java analogue (it exists for the PyPI name/import mismatch) and is not added.
+No `--resolve-installed` flag: it would exist only for a distribution-name/import-name mismatch, which Java does not have.
 
 The call site goes in `analyzeV2`, **after** `L2CallGraph.build` and beside `SdgVertices.apply`, because it is application-scope data assembled once. It runs at **every** level — this is L1 data, invariant across `-a`:
 
@@ -479,7 +477,7 @@ The call site goes in `analyzeV2`, **after** `L2CallGraph.build` and beside `Sdg
 
 Then attach both to the application through a `V2Emitter` overload, following the shape the `paramIn`/`paramOut` overload already established.
 
-- [ ] **Step 1: Write the failing test** — a `-a 1` run over a fixture with a `pom.xml` and an `application.properties` emits `artifacts` and `dependencies`; the same run at `-a 4` emits **byte-identical** artifact/dependency/config sections (level invariance is python's own gate and the one most likely to break); `--no-artifact-text` keeps the inventory identical while emptying every `source` and nulling every `value`; a project with no non-source files omits both keys entirely.
+- [ ] **Step 1: Write the failing test** — a `-a 1` run over a fixture with a `pom.xml` and an `application.properties` emits `artifacts` and `dependencies`; the same run at `-a 4` emits **byte-identical** artifact/dependency/config sections (level invariance is the property most likely to break); `--no-artifact-text` keeps the inventory identical while emptying every `source` and nulling every `value`; a project with no non-source files omits both keys entirely.
 
 - [ ] **Step 2–5:** fail, implement, pass, commit — `feat(artifacts): emit the repository-artifact layer at every analysis level`
 
@@ -494,7 +492,7 @@ Then attach both to the application through a `V2Emitter` overload, following th
 
 This is the part [#197](https://github.com/codellm-devkit/codeanalyzer-java/issues/197) originally deferred on a premise that PR #203 invalidated. `V2SchemaCatalog` already **reserves** un-prefixed `Artifact` and `Package` labels; this task emits them and adds `ConfigKey`.
 
-Vocabulary, matching python's prefixing rule exactly — **nodes and containment edges are neutral, this-analyzer's-claims are `J_`-prefixed**:
+Vocabulary — **nodes and containment edges are neutral, this-analyzer's-claims are `J_`-prefixed**:
 
 | Label | Merge | Key | Props |
 | --- | --- | --- | --- |
@@ -509,11 +507,11 @@ Vocabulary, matching python's prefixing rule exactly — **nodes and containment
 | `DECLARES_DEPENDENCY` | Artifact → Package | `spec`, `kind`, `extras[]`, `prov[]`, `direct`, `_k` |
 | `LOCKS` | Artifact → Package | `version` |
 
-`_k` on `DECLARES_DEPENDENCY` is `kind`, for python's stated reason: one manifest may declare the same package under two kinds, and without the discriminant the plain MERGE collapses them. Use the `keyedEdge` machinery the L4 overlay added.
+`_k` on `DECLARES_DEPENDENCY` is `kind`, because one manifest may declare the same package under two kinds, and without the discriminant the plain MERGE collapses them. Use the `keyedEdge` machinery the L4 overlay added.
 
-`Package` nodes exist **only in the graph** — JSON carries the bare dependency, as python does. Mint them from `CanId.purlMaven`. Constraints derive automatically from `uniquenessConstraints()`, so each new label brings its own.
+`Package` nodes exist **only in the graph** — JSON carries the bare dependency. Mint them from `CanId.purlMaven`. Constraints derive automatically from `uniquenessConstraints()`, so each new label brings its own.
 
-Bump `SCHEMA_VERSION` to `"2.2.0"` — additive. Note in the commit body that python deliberately did **not** bump for this layer ("no consumers yet"), so a consumer cannot detect the layer's presence from python's version; Java does bump, which is the better behaviour and a deliberate divergence.
+Bump `SCHEMA_VERSION` to `"2.2.0"` — additive. Bumping matters even with no consumers yet: without it a consumer cannot detect the layer's presence from the version.
 
 - [ ] **Step 1: Extend the conformance test first** — assert `Artifact`, `Package` and `ConfigKey` rows are emitted (not merely declared), that `HAS_ARTIFACT`/`DEFINES_CONFIG`/`DECLARES_DEPENDENCY`/`LOCKS` all appear, and that every projected property is declared in the catalog. Point the pipeline at a fixture with a `pom.xml`, a lockfile and an `application.properties` so all four edges are non-empty.
 

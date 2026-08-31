@@ -2,47 +2,44 @@
 
 Living ledger of schema-design decisions, recorded per cldk-devtools
 `schema-design-loop.md`. Each entry: the decision, its rationale, and any
-divergence from the canonical keystone or the Python reference pilot. This file
+divergence from the canonical keystone. This file
 is kept **current** as decisions evolve during implementation; the design spec
 (`docs/design/specs/schema-v2-l3-l4-design.md`) is point-in-time provenance.
 
 ## Effort: canonical schema v2 migration + L3/L4 dataflow (2026-08)
 
 Migrate `codeanalyzer-java` from legacy v1 (`{symbol_table, call_graph, version}`)
-to the canonical v2 CPG, and grow it to analysis level 4. Anchored on the keystone
-and on `codeanalyzer-python` (the v2 + L3/L4 reference pilot, on its `main`).
+to the canonical v2 CPG, and grow it to analysis level 4. Anchored on the keystone.
 
 ### D1 — Transition posture: pure canonical v2
 Drop per-callable `code` (SDK slices `module.source[span.bytes]`), drop legacy flat
 `start_line`/`end_line` (use `span`), and express call sites **only** as `body`
-`call` nodes (no `call_sites[]`). **Divergence:** the Python pilot kept those legacy
-fields additively for a smoother SDK transition; Java goes clean. SDK Java views
-reconstruct the old surface (`.code`, `.call_sites`).
+`call` nodes (no `call_sites[]`). Keeping those legacy fields additively would ease
+the SDK transition; Java goes clean instead, and SDK Java views reconstruct the old
+surface (`.code`, `.call_sites`).
 
 ### D2 — Annotations: structured decorators
 `decorators:[{name, args[], span}]`, not flat strings. Java annotations carry
 meaningful arguments (`@RequestMapping("/x")`, `@Column(name=…)`) needed by
-framework/CRUD/entrypoint analysis. **Divergence:** the Python pilot used flat
-`decorators:List[str]`.
+framework/CRUD/entrypoint analysis, so a flat list of strings would lose the arguments.
 
 ### D3 — Metrics & cross-refs: nested per keystone
 `metrics:{cyclomatic}` and `refs:{types:[id], fields:[id]}`. Forward-compatible/
-extensible. **Divergence:** the Python pilot and current Java keep these flat
-(`cyclomatic_complexity`, `referenced_types`, `accessed_fields`); SDK views expose
-the old flat names.
+extensible. **Divergence:** v1 Java keeps these flat (`cyclomatic_complexity`,
+`referenced_types`, `accessed_fields`); SDK views expose the old flat names.
 
 ### D4 — Type kinds: single `kind`; nesting via containment
 `type.kind ∈ {class, interface, enum, record, annotation}` replaces the v1
 `is_interface`/`is_enum`/`is_record`/`is_nested`/… boolean pile.
 
 **Nesting/locality is encoded by containment, not a `nesting` field** (refined
-2026-08 after checking the Python pilot): member/inner types live under the
+2026-08): member/inner types live under the
 enclosing type's `types{}`; local classes under the enclosing callable's
 `types{}`; and the `can://…/Outer/Inner` id path records the parent. Parent and
 is-local are therefore derivable from tree position — no `nesting` object is
 emitted. The keystone lists a `nesting:{parent?,is_local?}` field, but full
-containment subsumes it, matching how `codeanalyzer-python` models it
-(`PyClass.types` for inner classes, `PyCallable.types` for local classes).
+containment subsumes it: inner classes hang off the enclosing type, local classes
+off the enclosing callable.
 
 ### D5 — L3 CFG engine & granularity: WALA engine → source-statement nodes
 **Revised by D28** (AST engine is now the default; WALA is opt-in). The original decision:
@@ -51,7 +48,7 @@ L4), but emit **source-statement-level** body nodes keyed by `line:col`: project
 SSA instruction to its enclosing source statement via `IMethod.getSourcePosition` +
 JavaParser statement spans; fold/drop synthetic phi/pi nodes.
 **Fallback (recorded, not silent):** if SSA→source-statement fidelity proves
-unresolvable, revisit hand-building the CFG from the JavaParser AST (as Python/TS/Go do).
+unresolvable, revisit hand-building the CFG from the JavaParser AST.
 The fallback became the default: what began as Option B is now the reference AST engine (D28).
 
 ### D6 — L4 points-to precision: RTA default + `--precision`
@@ -62,14 +59,14 @@ conservative but sound-leaning semantic `ddg`.
 ### D7 — L4 summary edges: own summary pass
 Compute `summary` (actual_in→actual_out) edges via a dedicated pass — composed
 bottom-up over the SCC-condensation DAG (Tarjan), k-limited to a monotone fixpoint.
-The Python pilot operates at statement granularity, not via region decomposition;
-region decomposition remains an open refinement for either analyzer. Both persist
-`cfg` and `cdg` on the callable and compute post-dominators; what remains is the
-region decomposition itself. WALA's HRB summaries are lazily computed inside its
+The pass operates at statement granularity, not via region decomposition; region
+decomposition remains an open refinement. `cfg` and `cdg` are persisted on the
+callable and post-dominators computed; what remains is the region decomposition
+itself. WALA's HRB summaries are lazily computed inside its
 Slicer and not cleanly exposable. Heaviest L4 unit; lands last.
 
 ### D8 — Identity: `can://java/<app>/<file>/<type>/<signature>`
-Java analog of the pilot's `can://python/…`; built from the existing `signatureOf()`.
+Built from the existing `signatureOf()`.
 Ordinal ids `…@<line>:<col>` (real) / `…@<tag>` (synthetic) within a callable.
 
 **L1 refinements (2026-08, during CallableBuilder):**
@@ -102,12 +99,11 @@ Ordinal ids `…@<line>:<col>` (real) / `…@<tag>` (synthetic) within a callabl
 
 ### D10 — L1 emission: body keys, null policy, call sites, spans
 
-Refinements settled while building L1 (2026-08), each checked against the keystone **and**
-`codeanalyzer-python`:
+Refinements settled while building L1 (2026-08), each checked against the keystone:
 
 - **`body` is keyed by the bare local id** (`line:col`), not the full `<callable-id>@line:col`.
   The keystone keys `body` "by the node's local id" and its worked example shows `"15:2"` /
-  `"@entry"`; the pilot does `key = f"{cs.start_line}:{cs.start_column}"`. The full form is derived
+  `"@entry"`. The full form is derived
   only where cross-callable ids are needed (L4's application-scope `param_in`/`param_out`).
 - **L3 must not overwrite an L1 `call` node.** A bare call statement resolves to the same local id
   as its `call` node; per the keystone's example the call node *is* that statement, so L3 adds the

@@ -262,4 +262,3 @@ L3 can ship/tag (AST engine, steps 1–5) before the WALA engine (6–7). The Ne
 - L2 comparison (WALA scope-shadow fix, `rta` posture): [`../notes/l2-v1-v2-comparison.md`](../notes/l2-v1-v2-comparison.md)
 - Epic & sub-issue: [codellm-devkit/.github#42](https://github.com/codellm-devkit/.github/issues/42), codeanalyzer-java #183
 - Keystone L3 method: `cldk-devtools/…/level-3-intraprocedural-dataflow.md`
-- Reference pilot: `codeanalyzer-python` `main` (`codeanalyzer/dataflow/*`)
