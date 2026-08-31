@@ -1,0 +1,52 @@
+# Fat platform wheel for codeanalyzer-java.
+#
+# The wheel bundles a self-contained jpackage runtime image (a trimmed JVM + the
+# analyzer jar) under codeanalyzer/_runtime/, so `pip install` gives a ready-to-run
+# `codeanalyzer` command with full JVM fidelity and no system Java required.
+#
+# pyproject.toml can declare the package, the bundled data, and the console script,
+# but it CANNOT mark the wheel platform-specific (e.g. macosx_11_0_arm64) -- a
+# binary-bearing wheel must override bdist_wheel. That lives in setup.py; the CI
+# build matrix passes the target tag via `--plat-name`. See setup.py.
+
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codeanalyzer-java"
+dynamic = ["version"]                       # supplied by setup.py (CODEANALYZER_VERSION)
+description = "Static analysis for Java, shipped as a self-contained binary (bundled JVM)."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+authors = [{ name = "codellm-devkit" }]
+keywords = ["java", "static-analysis", "codeanalyzer", "cldk", "neo4j"]
+classifiers = [
+  "Programming Language :: Java",
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: Microsoft :: Windows",
+]
+
+# The CLI command. pip/uv generate a launcher on PATH (the "bin_path" you asked
+# about) that calls codeanalyzer._launcher:main, which exec's the bundled binary.
+[project.scripts]
+codeanalyzer = "codeanalyzer._launcher:main"
+
+[project.urls]
+Homepage = "https://github.com/codellm-devkit/codeanalyzer-java"
+Issues = "https://github.com/codellm-devkit/codeanalyzer-java/issues"
+
+[tool.setuptools]
+include-package-data = true
+zip-safe = false                            # a JVM image can't run from a zipimport
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Ship the bundled runtime image (and, if you wrap to a single file instead, bin/).
+[tool.setuptools.package-data]
+codeanalyzer = ["_runtime/**/*", "bin/*"]

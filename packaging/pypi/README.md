@@ -1,0 +1,63 @@
+# codeanalyzer-java (PyPI distribution)
+
+Fat **platform wheels** that bundle a self-contained jpackage runtime image (a
+trimmed JVM + the analyzer jar). Installing one gives you a ready-to-run
+`codeanalyzer` command with **full JVM fidelity** (unlike the GraalVM native
+image, see issue #153) and **no system Java required**.
+
+The wheels are hosted as **GitHub release assets** (not PyPI), so they are not
+bound by PyPI's 100 MB per-file limit and can use plain `linux_x86_64` tags. A
+small PEP 503 "simple" index on GitHub Pages lets `pip` auto-select the right
+wheel for the host.
+
+## Install
+
+```sh
+pip install codeanalyzer-java \
+  --extra-index-url https://codellm-devkit.github.io/codeanalyzer-java/simple/
+codeanalyzer --help
+```
+
+Pin + verify (recommended for CI / reproducible installs):
+
+```sh
+pip install codeanalyzer-java==2.4.0 \
+  --extra-index-url https://codellm-devkit.github.io/codeanalyzer-java/simple/ \
+  --require-hashes -r requirements.txt
+```
+
+To make it permanent, add the index to `pip.conf` / `uv.toml` / `requirements.txt`
+instead of passing `--extra-index-url` each time.
+
+> Note: `--extra-index-url` also consults PyPI. The distribution name
+> `codeanalyzer-java` is deliberately distinct to avoid dependency confusion; pin
+> versions and hashes in untrusted environments.
+
+## How it is built
+
+No compilation -- a single CI job per platform:
+
+1. `./gradlew fatJar` -> the analyzer jar.
+2. `jpackage --type app-image` -> a self-contained runtime (trimmed JVM + jar).
+3. `python build_wheel.py --runtime <app-image> --plat-name <tag>` -> stages the
+   image under `codeanalyzer/_runtime/` and emits a platform-tagged wheel
+   (`setup.py` forces the impure platform tag; pyproject can't).
+4. `gen_index.py` -> a PEP 503 index pointing at the release-asset wheels, with
+   `#sha256=` for hash pinning, published to GitHub Pages.
+
+The installed `codeanalyzer` entry point (`codeanalyzer._launcher:main`) just
+locates the bundled launcher and `exec`s it -- no network, no download at runtime.
+
+## Layout
+
+```
+packaging/pypi/
+  pyproject.toml            project metadata + console_scripts + package-data
+  setup.py                  bdist_wheel override: impure, py3-none-<plat>; version from env
+  build_wheel.py            stage a jpackage image + build a tagged wheel
+  gen_index.py              static PEP 503 index generator (GitHub Pages)
+  src/codeanalyzer/
+    __init__.py
+    _launcher.py            find the bundled runtime and exec it
+    _runtime/               <- jpackage image staged here at build time (gitignored)
+```

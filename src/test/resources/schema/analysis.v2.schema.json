@@ -33,8 +33,8 @@
 
     "localId": {
       "type": "string",
-      "pattern": "^(\\d+:\\d+|@[A-Za-z0-9_:.$/-]+)$",
-      "description": "Body-node id within a callable: a line:col position, or an @tag for a synthetic vertex."
+      "pattern": "^(\\d+:\\d+(/actual_in:\\d+|/actual_out)?|@[A-Za-z0-9_:.$/-]+)$",
+      "description": "Body-node id within a callable: a line:col position, an @tag for a synthetic vertex (@entry, @exit, @formal_in:<i>, @formal_out), or — at level 4 — a call site's own line:col suffixed with the actual it carries (<line:col>/actual_in:<i>, <line:col>/actual_out). The two compound forms are enumerated rather than admitted by a looser character class, so an id no builder emits is still rejected."
     },
 
     "span": {

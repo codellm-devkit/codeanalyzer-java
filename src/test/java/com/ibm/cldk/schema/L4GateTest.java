@@ -5,16 +5,23 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.networknt.schema.JsonSchema;
+import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.SpecVersion;
+import com.networknt.schema.ValidationMessage;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -103,6 +110,25 @@ class L4GateTest {
             summaries += summary == null ? 0 : summary.size();
         }
         assertEquals(6, summaries, "summary: one shortcut per pass-through call site");
+    }
+
+    /**
+     * The conformance oracle has to cover the level that introduces the compound vertices, not just
+     * the levels below it: {@code SdgVertices} keys its actuals {@code <call-local>/actual_in:<i>}
+     * and {@code <call-local>/actual_out}, and a {@code localId} pattern written before L4 rejects
+     * every one of them (#207). Validating the real {@code -a 4} document is what catches that.
+     */
+    @Test
+    void theLevel4DocumentValidatesAgainstTheV2Schema() throws Exception {
+        try (InputStream in = L4GateTest.class.getResourceAsStream("/schema/analysis.v2.schema.json")) {
+            assertNotNull(in, "the canonical v2 schema must be on the test classpath");
+            JsonSchema schema = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012).getSchema(in);
+            Set<ValidationMessage> problems =
+                    schema.validate(new ObjectMapper().readTree(root.toString()));
+            assertTrue(problems.isEmpty(), "the -a 4 document must validate, but got:\n  "
+                    + problems.stream().map(ValidationMessage::getMessage).limit(10)
+                            .collect(Collectors.joining("\n  ")));
+        }
     }
 
     @Test

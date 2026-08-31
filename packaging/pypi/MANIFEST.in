@@ -1,0 +1,5 @@
+# Ensure the bundled runtime image is packaged (belt-and-suspenders with the
+# pyproject package-data globs, which some setuptools versions apply unevenly to
+# deeply-nested trees).
+recursive-include src/codeanalyzer/_runtime *
+recursive-include src/codeanalyzer/bin *
