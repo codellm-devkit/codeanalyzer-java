@@ -19,7 +19,7 @@ import com.google.gson.GsonBuilder;
  *       {@code serializeNulls()}), a v2 payload omits a key entirely rather than writing {@code null}.
  *       This includes the {@code callee} refinement slot: at L1 the key is simply absent, and it
  *       appears once L2 resolves the site. (The keystone's worked example shows {@code callee: null}
- *       illustratively; the reference Python analyzer likewise drops it via {@code exclude_none}.)
+ *       illustratively; a null is omitted from the wire entirely rather than serialized.)
  * </ul>
  */
 public final class V2Json {

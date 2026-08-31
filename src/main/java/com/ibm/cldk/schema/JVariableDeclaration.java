@@ -9,7 +9,7 @@ import lombok.Data;
  * <em>resolved</em> qualified name (degrading to the AST spelling when unresolvable, D8), its
  * {@code initializer} expression text if any, and {@code span}.
  *
- * <p>Kept as a named list on the callable (as the Python reference analyzer does) even though L3 will
+ * <p>Kept as a named list on the callable even though L3 will
  * also emit the declaration <em>statements</em> into {@code body} — the two answer different
  * questions ("what locals exist here" vs "what is the control flow").
  */

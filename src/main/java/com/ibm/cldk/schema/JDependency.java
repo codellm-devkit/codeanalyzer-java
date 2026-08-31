@@ -6,21 +6,19 @@ import lombok.Data;
 
 /**
  * A declared dependency from a build manifest or lock file, representing one pinned package in an
- * ecosystem. {@code group} (Maven {@code groupId}) is additive over the reference analyzer
- * (codeanalyzer-python), which has no analogue since PyPI names are single-segment; in Maven each
- * coordinate is split into a {@code group} and {@code name} ({@code artifactId}).
+ * ecosystem. A Maven coordinate is two-segment, so it is carried as a {@code group}
+ * ({@code groupId}) plus a {@code name} ({@code artifactId}) rather than one flat name.
  *
  * <p>{@code ecosystem} exists for SDK symmetry with purl and is always {@code "maven"} — the only
- * ecosystem this analyzer emits, exactly as the reference is candid about {@code "pypi"} being the
- * only one it emits ({@code schema/py_schema.py:560}). {@code kind} is free-vocabulary; the values
- * actually produced are {@code runtime}, {@code dev}, {@code optional} and {@code build}.
+ * ecosystem this analyzer emits. {@code kind} is free-vocabulary; the values actually produced are
+ * {@code runtime}, {@code dev}, {@code optional} and {@code build}.
  *
  * <p>{@code lockedVersion} is {@code null} (omitted from JSON) when the dependency is unpinned —
  * recorded only when found in a lock file or package manager.
  */
 @Data
 public class JDependency {
-    /** Maven {@code groupId} (additive; PyPI names are single-segment and have no analogue). */
+    /** Maven {@code groupId}; with {@link #name} it forms the two-segment coordinate. */
     private String group;
 
     /** Maven {@code artifactId} (the package name). */

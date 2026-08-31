@@ -47,8 +47,8 @@ import java.util.Map;
 
 /**
  * The schema v2 → Neo4j projection: a pure {@code (Analysis, appName) → GraphRows} function, no
- * I/O, no driver. The vocabulary is {@link V2SchemaCatalog} (graph contract 2.2.0), mirroring
- * codeanalyzer-python's projection: call sites are {@code :JBodyNode} rows (no call-site nodes),
+ * I/O, no driver. The vocabulary is {@link V2SchemaCatalog} (graph contract 2.2.0): call sites
+ * are {@code :JBodyNode} rows (no call-site nodes),
  * parameters flatten to {@code parameters_json}, javadoc collapses to {@code docstring}, and the
  * L3 {@code cfg}/{@code cdg}/{@code ddg} and L4 {@code param_in}/{@code param_out}/{@code summary}
  * overlays become typed relationships between body nodes.
@@ -400,9 +400,8 @@ public final class V2GraphProjector {
     // Repository-artifact layer: build manifests, config files, declared dependencies.
     // ------------------------------------------------------------------------------------------
 
-    // Mirrors DependencyView.LOCK_BASENAMES (kept duplicated locally rather than exposing a new
-    // cross-package constant for one entry -- codeanalyzer-python accepts the identical tradeoff
-    // for its own two independent lock-basename constants).
+    // Mirrors DependencyView.LOCK_BASENAMES, kept duplicated locally rather than exposing a new
+    // cross-package constant for a single entry.
     private static final String LOCK_BASENAME = "gradle.lockfile";
 
     /**
@@ -478,14 +477,13 @@ public final class V2GraphProjector {
                 // file are already merged into one lockedVersion per dependency upstream
                 // (DependencyView.build), so there is no per-lock-file attribution left to split on --
                 // a dependency locked with N lock artifacts present gets N LOCKS edges (matches
-                // analysis.json; a known limitation carried over from codeanalyzer-python as-is).
+                // analysis.json; a known limitation).
                 //
-                // Deliberately WITHOUT the `seen` set the reference guards this mint with
-                // (codeanalyzer-python neo4j/project.py:350-359). LOCKS is a per-PACKAGE fact, so a
-                // package declared in two manifests walks this loop twice for one (lock, package)
-                // pair -- but python's RowBuilder.finish() only sorts its edge list, while ours
-                // dedupes by (type, from, to, _k) there, already collapsing the repeat mint. Same
-                // emitted row count either way, so a guard here would be dead code. Pinned by
+                // Deliberately WITHOUT a `seen` guard around this mint. LOCKS is a per-PACKAGE fact,
+                // so a package declared in two manifests walks this loop twice for one
+                // (lock, package) pair -- but RowBuilder.finish() dedupes by (type, from, to, _k),
+                // already collapsing the repeat mint. Same emitted row count either way, so a guard
+                // here would be dead code. Pinned by
                 // V2Neo4jSchemaConformanceTest#oneLocksRowSurvivesWhenTwoManifestsDeclareTheSameLockedCoordinate:
                 // dropping that dedupe fails a test instead of silently duplicating rows.
                 // DECLARES_DEPENDENCY above needs no such collapse and must not get one -- its
@@ -513,7 +511,7 @@ public final class V2GraphProjector {
 
     private static void projectImports(RowBuilder b, NodeRef mod, JModule module,
             Map<String, String> typeIdByFqn, Map<String, String> moduleIdByFqn) {
-        // Aggregate per target so one edge carries every spelling importing it (python parity).
+        // Aggregate per target so one edge carries every spelling importing it.
         Map<String, List<JImport>> byTarget = new LinkedHashMap<>();
         Map<String, NodeRef> refByTarget = new LinkedHashMap<>();
         for (JImport imp : module.getImports()) {

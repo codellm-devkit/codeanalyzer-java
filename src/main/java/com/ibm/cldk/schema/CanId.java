@@ -80,23 +80,20 @@ public final class CanId {
      * never collide for any {@code dottedKey}/{@code bareKey} whatsoever, not merely for whatever
      * shape a test happens to construct.
      *
-     * <p><b>Deliberate divergence from the reference implementation.</b> codeanalyzer-python mints
-     * this id as {@code <artifactId>@key/env.<NAME>} — a plain {@code "env."} prefix routed through
-     * its {@code config_key_id} ({@code artifacts/config_keys.py:577} into {@code schema/ids.py:39}).
-     * We mint {@code <artifactId>@key:env/<NAME>} instead, and this grammar is the correct one: the
-     * reference's provably self-collides, because a yaml dotted path can itself begin with the
-     * segment {@code env.}, so one document carrying both a top-level {@code env:} block and a
-     * compose {@code environment:} block yields two different records under one id. The reference
-     * guarded the bare-name collision and missed the dotted-path one; {@code
-     * ArtifactModelTest#configKeyEnvDualMintIdNeverCollidesWithConfigKeyId} pins exactly that case
-     * here. <b>Do not "converge" this back to the reference's spelling.</b>
+     * <p><b>Why the {@code :} separator, and not a plain {@code "env."} prefix.</b> Minting this as
+     * {@code <artifactId>@key/env.<NAME>} would provably self-collide: a yaml dotted path can itself
+     * begin with the segment {@code env.}, so one document carrying both a top-level {@code env:}
+     * block and a compose {@code environment:} block yields two different records under one id.
+     * Guarding only the bare-name case misses that dotted-path case. {@code
+     * ArtifactModelTest#configKeyEnvDualMintIdNeverCollidesWithConfigKeyId} pins it. <b>Do not
+     * "simplify" this to a dot-prefixed spelling.</b>
      *
      * <p>The consequence, stated plainly: {@code ConfigKey} is an un-prefixed cross-language merge
-     * target (see {@link #artifactId}), so for a {@code docker-compose.yml} in a polyglot repo the
-     * two analyzers currently mint <i>different</i> nodes for the same environment variable,
-     * splitting the very nodes that un-prefixed label exists to share. That split stands until the
-     * reference adopts this grammar; it is the price of not shipping a known id collision, and the
-     * convergence has to happen on the reference's side.
+     * target (see {@link #artifactId}), so for a {@code docker-compose.yml} in a polyglot repo an
+     * analyzer using the colliding spelling would mint a <i>different</i> node for the same
+     * environment variable, splitting the very nodes that un-prefixed label exists to share. That
+     * split is the price of not shipping a known id collision; convergence has to happen on the
+     * side that still collides.
      */
     public static String configKeyEnvDualMintId(String artifactId, String bareKey) {
         return artifactId + "@key:env/" + bareKey;

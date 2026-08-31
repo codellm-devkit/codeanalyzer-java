@@ -18,7 +18,7 @@ import org.junit.jupiter.api.Test;
  * Behavioural tests for {@link ConfigKeys}: one flattening case per eligible format, the
  * dockerfile ARG/ENV id-collision guard, the {@code ${...}}-before-{@code $VAR} reference
  * masking, the {@code captureValue} gate, and the {@code isEligible} admit list (including the
- * two precedence rules python documents: binary wins over an env-family name, and env-family
+ * two documented precedence rules: binary wins over an env-family name, and env-family
  * basenames are admitted regardless of declared format).
  */
 class ConfigKeysTest {

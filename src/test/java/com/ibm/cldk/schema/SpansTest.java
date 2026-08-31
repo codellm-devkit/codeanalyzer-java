@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Tests for UTF-8 byte-offset computation used by schema v2 {@code span.bytes}. Contract mirrors
- * the Python pilot's {@code byte_offsets}: input is a 1-based line and a 0-based character column
+ * {@code byte_offsets}: input is a 1-based line and a 0-based character column
  * (the offset of the char <em>before</em> which the position sits); output is a UTF-8 byte offset
  * into the module source, so {@code module.source[bytes]} slices the node's text.
  */

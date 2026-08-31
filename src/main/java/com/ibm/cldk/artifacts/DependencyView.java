@@ -18,20 +18,20 @@ import java.util.TreeSet;
 
 /**
  * Assembles the emitted {@link JDependency} list from every {@code dependency-manifest} artifact
- * {@code ArtifactDiscovery} found, then reconciles it against any lockfile. Mirrors
- * codeanalyzer-python's {@code artifacts/dependencies.py} two-step shape -- declare, then backfill
- * from the lock -- but drops its import-binding layer entirely: python needs an alias table because
- * a PyPI distribution name is not its import name, so a same-name guess is a genuine heuristic
- * worth making. A Java package is declared at the call site with no such naming mismatch, so the
- * analogous guess here would be strictly worse than emitting nothing -- {@code provides_imports}/
- * {@code unresolved_imports} are deliberately not ported.
+ * {@code ArtifactDiscovery} found, then reconciles it against any lockfile: declare first, then
+ * backfill the resolved versions from the lock.
+ *
+ * <p>No import-binding layer: a Java package is declared at the call site, so a distribution-name
+ * to import-name mapping has nothing to resolve. Emitting a same-name guess would be strictly
+ * worse than emitting nothing, so {@code provides_imports}/{@code unresolved_imports} are
+ * deliberately absent rather than guessed.
  */
 public final class DependencyView {
 
     private DependencyView() {}
 
-    // The one basename ManifestParsers.parseLockPins recognizes today. Mirrors python's
-    // _LOCK_BASENAMES tuple (three entries, one per format pip's ecosystem has); Gradle has one.
+    // The one basename ManifestParsers.parseLockPins recognizes today: Gradle has a single
+    // lockfile format, so this set has a single entry.
     private static final Set<String> LOCK_BASENAMES = Set.of("gradle.lockfile");
 
     /**
@@ -47,7 +47,7 @@ public final class DependencyView {
         List<JDependency> deps = new ArrayList<>();
 
         // 1. Declared: every dependency-manifest artifact that is not itself a lockfile (locks are
-        // handled by step 2 below, matching python's explicit _LOCK_BASENAMES skip here).
+        // handled by step 2 below, so they are explicitly skipped here).
         for (String path : paths) {
             if (isLockfile(path)) {
                 continue;
@@ -75,8 +75,7 @@ public final class DependencyView {
 
         // 2. Lock backfill: a pin matching a declared dependency (by group:name) sets its
         // lockedVersion; a pin with no declaration is itself emitted as a transitive dependency.
-        // This is python's reconciliation (dependencies.py:181-186) and knowingly contradicts the
-        // spec's "transitive out of scope" -- see .github#48.
+        // This knowingly contradicts the spec's "transitive out of scope" -- see .github#48.
         Map<String, String> pins = new HashMap<>();
         Map<String, String> pinLockArtifact = new HashMap<>();
         for (String path : paths) {
@@ -168,8 +167,8 @@ public final class DependencyView {
      *
      * <p>Deliberately {@code public}, a narrow named exception to this class's "public surface is
      * just {@code build}" rule: the design plan requires this from-disk logic to exist exactly
-     * once, in contrast to the reference implementation, which duplicates it verbatim across two
-     * modules with a "keep the two in sync" comment. The config-key extraction pass ({@code
+     * once, rather than being duplicated across modules with a "keep the two in sync" comment.
+     * The config-key extraction pass ({@code
      * ConfigKeys}/{@code CodeAnalyzer}, package {@code com.ibm.cldk}) needs the identical read and
      * must call this rather than re-write it -- do not shrink this back to {@code private}.
      */

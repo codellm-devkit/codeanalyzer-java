@@ -586,7 +586,7 @@ class CodeAnalyzerV2CliTest {
     @Test
     void v2ArtifactLayerIsByteIdenticalAcrossAnalysisLevels(@TempDir Path tmp) throws IOException {
         // This layer is L1 data assembled once from the filesystem, independent of --analysis-level --
-        // python's own gate, and the property most likely to break under careless wiring.
+        // the property most likely to break under careless wiring.
         Path in = artifactProject(tmp.resolve("app"));
         Path outLevel1 = tmp.resolve("out1");
         Path outLevel4 = tmp.resolve("out4");

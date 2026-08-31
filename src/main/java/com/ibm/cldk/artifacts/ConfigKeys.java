@@ -31,12 +31,10 @@ import org.yaml.snakeyaml.Yaml;
 /**
  * Flattens config-bearing artifacts into {@link JConfigKey} records: pure text-in/records-out,
  * same idiom as {@link ManifestParsers} -- one dispatcher over per-format internals, never
- * throwing. Mirrors codeanalyzer-python's {@code artifacts/config_keys.py}, but narrower: only
- * {@code properties}/{@code yaml}/{@code xml}/{@code dockerfile} plus env-family basenames are
- * handled here (python's {@code json}/{@code toml}/{@code ini} vocabulary has no Java-side
- * artifact format to hang off, per the plan). The {@code xml} flattener is net-new -- python has
- * none to emulate -- and is deliberately the simplest scheme that could work (see {@link
- * #walkXml}).
+ * throwing. Deliberately narrow: only {@code properties}/{@code yaml}/{@code xml}/{@code
+ * dockerfile} plus env-family basenames are handled, because no other config format has a Java-side
+ * artifact format to hang off. The {@code xml} flattener is deliberately the simplest scheme that
+ * could work (see {@link #walkXml}).
  *
  * <p>Namespace dispatch: an env-family basename ({@code .env}, {@code .env.*}) always wins,
  * regardless of the artifact's declared {@code format} (matching {@code ArtifactDiscovery}, which
@@ -63,7 +61,7 @@ import org.yaml.snakeyaml.Yaml;
  * files are line-oriented so the parse itself knows the exact line, but {@code properties} (parsed
  * via {@link Properties}, which exposes no position info) and {@code yaml}/{@code xml} (tree-shaped)
  * carry no span at all here -- an accepted gap, matching the brief ("best-effort... null is
- * acceptable"; python's own yaml/json/toml spans are already only a regex approximation).
+ * acceptable").
  */
 public final class ConfigKeys {
 
@@ -208,8 +206,8 @@ public final class ConfigKeys {
     }
 
     // Compose's `services.<name>.environment` block only (a map of KEY: value, or a list of
-    // "KEY=value"/bare "KEY" strings) -- python's k8s `env[].name`/`.value` list-shape recognition
-    // is deliberately not ported, the brief names compose only.
+    // "KEY=value"/bare "KEY" strings). Kubernetes' `env[].name`/`.value` list shape is deliberately
+    // not recognized -- the brief names compose only.
     private static final Pattern COMPOSE_ENV = Pattern.compile("^services\\.[^.]+\\.environment\\.(.+)$");
 
     private static List<Entry> recognizeComposeEnv(List<Entry> flat) {
@@ -246,7 +244,7 @@ public final class ConfigKeys {
         return true;
     }
 
-    // ---- xml: net-new, python has no XML flattener to emulate. Deliberately the simplest scheme
+    // ---- xml: deliberately the simplest scheme
     // that could work -- see walkXml -- not a richer one (no XPath predicates, no namespace-aware
     // qualified-name handling). Reuses ManifestParsers' hardened DocumentBuilderFactory rather than
     // building a second one: untrusted repository content gets the same XXE hardening either way. -
@@ -310,7 +308,7 @@ public final class ConfigKeys {
     // ---- dockerfile: `ENV`/`ARG` directives. Line-based, case-insensitive instruction keywords
     // (Dockerfile convention is uppercase; the spec itself is not case-sensitive).
     //
-    // Two known gaps, carried over from python rather than rediscovered: no BuildKit heredoc
+    // Two known and accepted gaps: no BuildKit heredoc
     // awareness (a heredoc body line is just another line that doesn't match ENV/ARG and is
     // silently skipped, same as any other unparseable line); no multi-stage `FROM ... AS` scoping
     // (every ENV/ARG in the file is scanned regardless of which stage it is in). --------------
@@ -319,7 +317,7 @@ public final class ConfigKeys {
     private static final Pattern DOCKER_ARG = Pattern.compile("^ARG\\s+(.*)$", Pattern.CASE_INSENSITIVE);
 
     // Joins a possibly backslash-continued logical instruction line, starting at lines[startIdx].
-    // No separator is inserted between joined parts (matching python) -- a space survives only if
+    // No separator is inserted between joined parts -- a space survives only if
     // it was already present before the continuation backslash on the physical line.
     private static final class Joined {
         final String text;
@@ -346,8 +344,8 @@ public final class ConfigKeys {
      * Whitespace-split {@code s}, except inside a matching quote span (a quoted value may contain
      * spaces) or right after an unquoted {@code \} (a backslash escapes the next character). Quote
      * characters stay IN the returned tokens, stripped afterward by {@link #envValue} so there is
-     * one quote-stripping implementation, not two. Direct port of python's {@code
-     * _split_ws_respecting_quotes}, for Docker's shell-style {@code ENV} splitting.
+     * one quote-stripping implementation, not two. This is Docker's shell-style {@code ENV}
+     * splitting.
      */
     private static List<String> splitWsRespectingQuotes(String s) {
         List<String> tokens = new ArrayList<>();
@@ -514,8 +512,8 @@ public final class ConfigKeys {
     // placeholder / Maven property, e.g. `${spring.datasource.url}`), unlike a shell env var --
     // hence the braced identifier class allows `.` where the bare one deliberately does not (a
     // shell variable name never contains a dot). No `${{ ... }}` template or `%(name)s`
-    // percent-interpolation form: those are python-reference-only vocabulary the brief does not
-    // name for Java. --------------------------------------------------------------------------
+    // percent-interpolation form: neither is Java vocabulary, and the brief does not name them.
+    // ------------------------------------------------------------------------------------------
 
     private static final Pattern REF_BRACED = Pattern.compile("\\$\\{[A-Za-z_][A-Za-z0-9_.]*\\}");
     private static final Pattern REF_BARE = Pattern.compile("\\$[A-Za-z_][A-Za-z0-9_]*");

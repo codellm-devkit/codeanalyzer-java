@@ -24,18 +24,17 @@ import org.xml.sax.SAXException;
  * no mutation of anything — {@code DependencyView} (a later task in this layer) is what touches
  * disk and assembles these records into the emitted {@code JDependency} model.
  *
- * <p>This mirrors codeanalyzer-python's {@code artifacts/parsers.py} {@code (records, partial)}
- * convention: a whole-file parse failure (a malformed {@code pom.xml}) differs from a per-line one
- * (an unrecognized Gradle declaration). The former keeps the artifact but flags extraction; the
- * latter is silently skipped and the file still succeeds. The vocabulary is deliberately free-form
- * strings rather than enums, matching v1.3.0: {@code kind} is one of {@code
+ * <p>Parsers return {@code (records, partial)}: a whole-file parse failure (a malformed {@code
+ * pom.xml}) differs from a per-line one (an unrecognized Gradle declaration). The former keeps the
+ * artifact but flags extraction; the latter is silently skipped and the file still succeeds. The
+ * vocabulary is deliberately free-form strings rather than enums: {@code kind} is one of {@code
  * runtime|dev|optional|build} — four values, even though Maven has six scopes.
  */
 public final class ManifestParsers {
 
     private ManifestParsers() {}
 
-    /** A parsed declaration, before reconciliation. Mirrors python's frozen {@code RawDep}. */
+    /** A parsed declaration, before reconciliation. Immutable. */
     public static final class RawDep {
         public final String group;
         public final String name;
@@ -64,11 +63,11 @@ public final class ManifestParsers {
     }
 
     // Configuration keyword, then a 'g:a:v' or "g:a:v" string literal on the same line. Deliberately
-    // shallow, exactly as python's setup.py reader is deliberately static: a build.gradle is a
+    // shallow and purely static: a build.gradle is a
     // program (variables, `ext {}` properties, version catalogs, multi-line calls), and evaluating
     // it is out of scope. An interpolated version like "$springVersion" is captured verbatim as
-    // `spec` with no resolved value -- a known gap, not a bug, matching the reference's identical
-    // setup.py gap. A line spanning a call across multiple lines, or a project(...) reference with
+    // `spec` with no resolved value -- a known gap, not a bug.
+    // A line spanning a call across multiple lines, or a project(...) reference with
     // no coordinate literal at all, simply does not match and is skipped like any other line.
     private static final Pattern GRADLE_DEP_LINE = Pattern.compile(
             "\\b(implementation|api|compileOnly|runtimeOnly|testImplementation|annotationProcessor)\\b"

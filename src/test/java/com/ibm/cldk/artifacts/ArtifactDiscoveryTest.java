@@ -98,8 +98,8 @@ class ArtifactDiscoveryTest {
 
     @Test
     void discover_aFileNamedBuildIsNotExcluded(@TempDir Path tmp) throws IOException {
-        // The deliberate divergence from python's reference: IGNORED matches a directory segment,
-        // not python's `any(part in IGNORED for part in rel.parts)`, which also excludes a *file*
+        // Deliberate: IGNORED matches a directory segment, not every segment including the leaf,
+        // because a check over all segments would also exclude a *file*
         // literally named "build" or "target". A directory check must not have that bug.
         Files.writeString(tmp.resolve("build"), "not a directory", StandardCharsets.UTF_8);
         Files.writeString(tmp.resolve("target"), "not a directory either", StandardCharsets.UTF_8);

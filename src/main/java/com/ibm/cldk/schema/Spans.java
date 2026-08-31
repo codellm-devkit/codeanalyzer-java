@@ -40,7 +40,7 @@ public final class Spans {
 
     /**
      * Split into lines <em>keeping</em> their terminators (universal newlines: {@code \n},
-     * {@code \r\n}, {@code \r}), mirroring Python's {@code splitlines(keepends=True)}. A final line
+     * {@code \r\n}, {@code \r}), keeping the terminators on each line. A final line
      * without a terminator is included.
      */
     public static List<String> splitLinesKeepingTerminators(String s) {

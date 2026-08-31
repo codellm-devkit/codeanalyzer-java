@@ -89,9 +89,9 @@ public final class ArtifactDiscovery {
             new Rule("*.json", "json", List.of("unknown")),
             new Rule("*.xml", "xml", List.of("unknown")));
 
-    // Adapted from python's (which is pip-shaped) to Java's build output. `build` and `target` are
-    // the same class of exclusion the L1 extractor learned in #199: Gradle's build/resources copies
-    // of test fixtures are build output, not project code, and the lesson generalises to artifacts.
+    // Scoped to Java build output. `build` and `target` are the same class of exclusion the L1
+    // extractor learned in #199: Gradle's build/resources copies of test fixtures are build output,
+    // not project code, and the lesson generalises to artifacts.
     private static final Set<String> IGNORED = Set.of(
             ".git", ".hg", ".svn", "target", "build", "out", "bin",
             ".gradle", ".mvn", ".idea", ".settings", "node_modules",
@@ -185,10 +185,9 @@ public final class ArtifactDiscovery {
         return artifacts;
     }
 
-    // Directory-segment check only -- deliberately NOT python's
-    // `any(part in IGNORED for part in rel.parts)`, which also matches a *file* literally named
-    // "build" or "target" because it tests every segment including the leaf. Checking only the
-    // segments strictly above the file name is the fix; do not "correct" this back to match python.
+    // Directory segments only, deliberately: testing every segment including the leaf would also
+    // match a *file* literally named "build" or "target". Only the segments strictly above the file
+    // name are checked -- do not "simplify" this into a check over all segments.
     private static boolean isIgnored(Path relative) {
         int dirSegments = relative.getNameCount() - 1;
         for (int i = 0; i < dirSegments; i++) {
@@ -219,9 +218,9 @@ public final class ArtifactDiscovery {
         return null;
     }
 
-    // Only '*' appears anywhere in RULES, so that is all this translates. This mirrors python's
-    // fnmatch semantics (a plain regex wildcard, so '*' can cross '/') rather than java.nio's glob
-    // PathMatcher, whose '*' stops at a path separator and would silently narrow "k8s/*.yml".
+    // Only '*' appears anywhere in RULES, so that is all this translates. '*' is a plain regex
+    // wildcard here and so can cross '/', unlike java.nio's glob PathMatcher, whose '*' stops at a
+    // path separator and would silently narrow "k8s/*.yml".
     private static boolean globMatches(String pattern, String target) {
         StringBuilder regex = new StringBuilder();
         for (String literal : pattern.split("\\*", -1)) {
@@ -244,9 +243,9 @@ public final class ArtifactDiscovery {
 
     /**
      * Decode a byte prefix for a truncated capture. The cap can land mid-character; IGNORE drops
-     * the dangling partial character at the cut instead of throwing, matching python's {@code
-     * errors="ignore"}. Only called on bytes already proven fully UTF-8 decodable by {@link
-     * #decodeStrict}, so the sole possible error is that one boundary character.
+     * the dangling partial character at the cut instead of throwing. Only called on bytes already
+     * proven fully UTF-8 decodable by {@link #decodeStrict}, so the sole possible error is that one
+     * boundary character.
      */
     private static String decodeLenientPrefix(byte[] raw, int len) {
         try {

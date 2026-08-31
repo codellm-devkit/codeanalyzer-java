@@ -23,12 +23,12 @@ import java.util.Map;
 /**
  * The schema v2 Neo4j graph catalog (graph contract {@code 2.2.0}) — the in-repo source of truth
  * for what {@link V2GraphProjector} may emit, serialized by {@code --emit schema} and enforced by
- * the v2 conformance test. Mirrors codeanalyzer-python's {@code neo4j/schema.py} vocabulary with
- * {@code J}/{@code J_} namespacing; java-only constructs (enum constants, record components,
+ * the v2 conformance test. Uses {@code J}/{@code J_} namespacing so this graph can share a database
+ * with a sibling language's analyzer; java-only constructs (enum constants, record components,
  * {@code J_IMPLEMENTS}) are additive leaves per the cross-language parity clause
  * (design spec: docs/design/specs/2026-08-27-v2-neo4j-projection.md).
  *
- * <p>Per the python convergence spec there are no call-site / parameter / comment nodes: call sites
+ * <p>There are no call-site / parameter / comment nodes: call sites
  * are {@code :JBodyNode} rows with {@code kind == "call"}, parameters flatten to
  * {@code JCallable.parameters_json}, and javadoc collapses to a {@code docstring} property.
  *
@@ -131,7 +131,7 @@ public final class V2SchemaCatalog {
                         .put("is_constructor_call", "boolean").put("is_static_call", "boolean")
                         .put("argument_types", "string[]").put("argument_expr", "string[]")
                         .put("_module", "string")
-                        // L4 SDG synthetic-vertex payload (python-parity names).
+                        // L4 SDG synthetic-vertex payload.
                         .put("var", "string").put("call_node", "string"))));
 
         n.add(node("JPackage", "JPackage", "name", new P().put("name", "string").done()));
@@ -142,15 +142,14 @@ public final class V2SchemaCatalog {
         // prefix on these three nodes or the containment edges below -- deliberate: `Artifact`,
         // `Package` and `ConfigKey` are cross-language merge targets, so a sibling-language analyzer
         // over the same repository lands on the same nodes instead of a per-language duplicate.
-        // Mirrors codeanalyzer-python's identical un-prefixed vocabulary and its rationale.
         n.add(node("Artifact", "Artifact", "id",
                 new P().put("id", "string").put("path", "string").put("format", "string")
                         .put("roles", "string[]").put("size_bytes", "integer").put("sha256", "string")
                         .put("source", "string").put("text_truncated", "boolean")
                         .put("extraction", "string").done()));
 
-        // `group` is additive over codeanalyzer-python's `Package` (PyPI names are single-segment);
-        // Maven splits a coordinate into groupId + artifactId, so both are carried.
+        // A Maven coordinate is two-segment, so `Package` carries groupId and artifactId as
+        // separate `group` and `name` properties rather than one flat name.
         n.add(node("Package", "Package", "id",
                 new P().put("id", "string").put("ecosystem", "string").put("group", "string")
                         .put("name", "string").done()));

@@ -19,9 +19,8 @@ public class JBodyNode {
     private List<String> arguments = new ArrayList<>();
 
     // --- Rich call-site facts (only on `call` nodes) --------------------------------------------
-    // The canonical `call` node carries just {callee, arguments}, which is thinner than every
-    // analyzer's real call-site data (the Python reference analyzer keeps a parallel rich
-    // `call_sites[]` for the same reason). These are therefore additive Java fields, retained because
+    // The canonical `call` node carries just {callee, arguments}, which is thinner than the real
+    // call-site data any analyzer has. These are therefore additive Java fields, retained because
     // the framework/CRUD finders key on `receiver_type` and dropping them would regress against v1.
 
     /** The receiver expression as written ({@code "abc"}, {@code helper}, {@code this}). */

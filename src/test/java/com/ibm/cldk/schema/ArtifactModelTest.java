@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
-/** The artifact layer's wire shape and id grammar, matching codeanalyzer-python v1.3.0. */
+/** The artifact layer's wire shape and id grammar. */
 class ArtifactModelTest {
 
     @Test

@@ -48,9 +48,9 @@ import java.util.stream.Collectors;
  * ({@link CypherWriter} snapshot / {@link BoltWriter} incremental) consume the returned
  * {@link GraphRows}.
  *
- * <p>Modelling decisions (mirrors the codeanalyzer-typescript Neo4j projection; all node labels are
- * {@code J}-prefixed and relationship types {@code J_}-prefixed so a Java graph can share a Neo4j
- * database with the Python/TypeScript backends without colliding):
+ * <p>Modelling decisions (all node labels are {@code J}-prefixed and relationship types
+ * {@code J_}-prefixed so a Java graph can share a Neo4j database with a sibling language's
+ * analyzer without colliding):
  * <ul>
  *   <li>{@code JType} and {@code JCallable} carry a shared {@code :JSymbol} label (the global-identity
  *       / MERGE key); their {@code id} is the FQN (types) or {@code <fqn>#<signature>} (callables).</li>
