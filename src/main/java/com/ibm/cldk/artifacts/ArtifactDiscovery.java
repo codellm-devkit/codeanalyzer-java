@@ -119,8 +119,8 @@ public final class ArtifactDiscovery {
      *     either way, only the captured text differs
      * @param textMaxBytes byte cap on captured text for a decodable file; a {@code
      *     dependency-manifest} is exempt (always captured whole when {@code captureText} is on)
-     *     because its {@code source} is what dependency extraction parses, not bulk content the
-     *     cap exists to bound
+     *     so the complete manifest text appears in the emitted JSON payload for consumers, not
+     *     truncated by the cap
      */
     public static Map<String, JArtifact> discover(
             Path projectDir, String appName, boolean captureText, int textMaxBytes) throws IOException {
