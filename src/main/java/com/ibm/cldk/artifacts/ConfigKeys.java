@@ -8,10 +8,12 @@ import com.ibm.cldk.schema.Spans;
 import java.io.IOException;
 import java.io.StringReader;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
@@ -155,6 +157,9 @@ public final class ConfigKeys {
                         artifact.getId(), "env", recognizeComposeEnv(flat), captureValue, false,
                         k -> CanId.configKeyEnvDualMintId(artifact.getId(), k)));
             } else if ("xml".equals(artifact.getFormat())) {
+                if (!isConfigXml(artifact.getPath())) {
+                    return new Result(List.of(), true);
+                }
                 keys = extractXml(artifact.getId(), text, captureValue);
             } else {
                 return new Result(List.of(), true);
@@ -164,6 +169,115 @@ public final class ConfigKeys {
         } catch (Exception e) {
             return new Result(List.of(), false);
         }
+    }
+
+    /**
+     * XML basenames worth flattening. Discovery classifies every {@code *.xml} in a repository as an
+     * artifact, and the flattener mints a key per element path -- which is what configuration looks
+     * like, and also what a data file looks like. On ThingsBoard v4.0 that produced 39,551 keys from
+     * 453 XML files, 30,408 of them from LwM2M object registries under {@code src/main/data/}: static
+     * data resources, not settings (#210).
+     *
+     * <p>No size threshold separates the two -- that repository's {@code pom.xml} legitimately carries
+     * 1332 keys while a data registry carries 615 -- so recognition is by name, not by volume. A file
+     * that is not recognized stays in the artifact inventory with its {@code source}, {@code sha256}
+     * and roles intact; only flattening is skipped, so nothing disappears from the file listing and
+     * the result is {@code ok=true}, not a parse failure.
+     *
+     * <p>A name list alone is not enough, because vendor deployment descriptors are open-ended
+     * ({@code ibm-web-bnd.xml}, {@code jboss-web.xml}, {@code weblogic.xml}, ...) -- daytrader8's two
+     * {@code ibm-web-*.xml} descriptors are real configuration and no plausible list contains them.
+     * So location counts too: {@code WEB-INF/} and {@code META-INF/} are directories the servlet and
+     * Java EE specifications define to hold descriptors, so an XML sitting directly in one is
+     * configuration by construction rather than by guess. Data resources do not live there.
+     *
+     * <p>The accepted cost is a project whose configuration lives in an unlisted XML name outside
+     * those directories. That file is still inventoried and still discoverable; it just contributes
+     * no {@code config_keys}. Adding a name here is the fix when one turns up -- prefer that to
+     * widening the rule to "any XML under a config-ish directory", which is how the unbounded
+     * behaviour arose in the first place.
+     */
+    private static final Set<String> CONFIG_XML_NAMES = new HashSet<>(Arrays.asList(
+            // build / project
+            "pom.xml", "build.xml", "settings.xml", "toolchains.xml", "ivy.xml", "assembly.xml",
+            // servlet / Java EE descriptors
+            "web.xml", "ejb-jar.xml", "application.xml", "application-client.xml", "persistence.xml",
+            "beans.xml", "faces-config.xml", "orm.xml", "validation.xml", "portlet.xml", "ra.xml",
+            // containers and app servers
+            "server.xml", "context.xml", "tomcat-users.xml", "standalone.xml", "domain.xml",
+            "jboss-web.xml", "jboss-ejb3.xml", "jboss-deployment-structure.xml", "weblogic.xml",
+            "glassfish-web.xml", "glassfish-application.xml", "blueprint.xml",
+            // frameworks
+            "struts.xml", "tiles.xml", "hibernate.cfg.xml", "quartz.xml", "ehcache.xml",
+            "liquibase.xml", "bindings.xml", "sun-jaxb.episode",
+            // logging
+            "logback.xml", "logback-test.xml", "logback-spring.xml",
+            "log4j.xml", "log4j2.xml", "log4j2-spring.xml", "log4j2-test.xml",
+            // static analysis / tooling
+            "checkstyle.xml", "spotbugs.xml", "findbugs-exclude.xml", "pmd.xml", "suppressions.xml",
+            // misc
+            "config.xml", "androidmanifest.xml"));
+
+    /**
+     * Name stems that mark a configuration file whatever separator precedes them. Matching only
+     * hyphenated forms was the first attempt and it missed the canonical spellings of the very
+     * frameworks it was meant to cover: {@code applicationContext.xml} (Spring) and {@code
+     * UserMapper.xml} (MyBatis) both failed a {@code -context.xml}/{@code -mapper.xml} test, while
+     * {@code spring-servlet.xml} passed. Comparing against the lowercased stem catches camelCase,
+     * hyphenated and underscored spellings alike.
+     *
+     * <p>Deliberately excludes short stems that occur inside ordinary words -- {@code "ds"} would
+     * admit {@code records.xml} -- so those stay hyphen-only in {@link #CONFIG_XML_SUFFIXES}.
+     */
+    private static final List<String> CONFIG_XML_STEMS =
+            Arrays.asList("context", "config", "configuration", "settings", "beans", "servlet",
+                    "mapper", "changelog", "datasource");
+
+    /** Suffixes that must keep their separator, being too short or too common to match bare. */
+    private static final List<String> CONFIG_XML_SUFFIXES = Arrays.asList("-ds.xml", ".hbm.xml");
+
+    /**
+     * Whether an XML artifact is a configuration file worth flattening: a recognized basename, a
+     * conventional suffix, or any XML in a descriptor directory. A suffix never matches bare --
+     * {@code notweb.xml} must not pass as {@code web.xml}.
+     *
+     * @param path the artifact's project-relative path (the directory part carries the location signal)
+     */
+    static boolean isConfigXml(String path) {
+        String lower = basename(path).toLowerCase(Locale.ROOT);
+        if (CONFIG_XML_NAMES.contains(lower)) {
+            return true;
+        }
+        for (String suffix : CONFIG_XML_SUFFIXES) {
+            // A suffix match needs something in front of it, so ".hbm.xml" itself is not a match.
+            if (lower.length() > suffix.length() && lower.endsWith(suffix)) {
+                return true;
+            }
+        }
+        if (lower.endsWith(".xml")) {
+            String stem = lower.substring(0, lower.length() - ".xml".length());
+            for (String token : CONFIG_XML_STEMS) {
+                // The stem must be preceded by something, so a file named exactly "config.xml" is
+                // matched by name above rather than here, and "context.xml" likewise.
+                if (stem.length() > token.length() && stem.endsWith(token)) {
+                    return true;
+                }
+            }
+        }
+        return inDescriptorDirectory(path);
+    }
+
+    /** True when the file sits directly inside a {@code WEB-INF} or {@code META-INF} directory. */
+    private static boolean inDescriptorDirectory(String path) {
+        String normalized = path.replace('\\', '/');
+        int slash = normalized.lastIndexOf('/');
+        if (slash < 0) {
+            return false;
+        }
+        String parent = normalized.substring(0, slash);
+        int parentSlash = parent.lastIndexOf('/');
+        String dir = parentSlash < 0 ? parent : parent.substring(parentSlash + 1);
+        return "WEB-INF".equalsIgnoreCase(dir) || "META-INF".equalsIgnoreCase(dir);
     }
 
     // ---- properties: java.util.Properties handles key=value/key:value, `\` continuations, and
@@ -251,8 +365,7 @@ public final class ConfigKeys {
 
     private static List<JConfigKey> extractXml(String artifactId, String text, boolean captureValue)
             throws ParserConfigurationException, SAXException, IOException {
-        Document doc = ManifestParsers.newSecureDocumentBuilderFactory()
-                .newDocumentBuilder()
+        Document doc = ManifestParsers.newConfigDocumentBuilder()
                 .parse(new InputSource(new StringReader(text)));
         Element root = doc.getDocumentElement();
         List<Entry> entries = new ArrayList<>();

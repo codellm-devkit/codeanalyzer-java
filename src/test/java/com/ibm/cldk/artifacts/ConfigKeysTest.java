@@ -35,6 +35,87 @@ class ConfigKeysTest {
         return keys.stream().filter(k -> k.getKey().equals(key)).findFirst();
     }
 
+    // ---- xml: only recognized configuration shapes are flattened (#210) ----------------------
+
+    /** A data file shaped like the LwM2M object registries that produced 30k keys on ThingsBoard. */
+    private static String dataXml() {
+        StringBuilder b = new StringBuilder("<LWM2M><Object ObjectID=\"10326\">");
+        for (int i = 0; i < 40; i++) {
+            b.append("<Item ID=\"").append(i).append("\"><Name>n").append(i)
+                    .append("</Name><Type>Integer</Type></Item>");
+        }
+        return b.append("</Object></LWM2M>").toString();
+    }
+
+    @Test
+    void aRecognizedConfigXmlIsStillFlattened() {
+        ConfigKeys.Result r = ConfigKeys.extract(artifact("src/main/webapp/WEB-INF/web.xml", "xml"),
+                "<web-app><context-param><param-name>mode</param-name></context-param></web-app>", true);
+        assertTrue(r.ok);
+        assertFalse(r.keys.isEmpty(), "web.xml is configuration and must still be flattened");
+    }
+
+    @Test
+    void pomXmlIsStillFlattened() {
+        ConfigKeys.Result r = ConfigKeys.extract(artifact("pom.xml", "xml"),
+                "<project><properties><java.version>11</java.version></properties></project>", true);
+        assertTrue(r.ok);
+        assertFalse(r.keys.isEmpty(), "pom.xml carries real configuration");
+    }
+
+    @Test
+    void anUnrecognizedXmlYieldsNoKeysButIsNotAFailure() {
+        // The artifact stays in the inventory; only flattening is skipped. ok=true, exactly as for a
+        // format with no flattener -- marking it a parse failure would misreport a healthy file.
+        ConfigKeys.Result r = ConfigKeys.extract(
+                artifact("application/src/main/data/lwm2m-registry/10326.xml", "xml"), dataXml(), true);
+        assertTrue(r.ok, "skipping extraction is not a parse failure");
+        assertTrue(r.keys.isEmpty(), "a data registry is not configuration and must not be flattened");
+    }
+
+    @Test
+    void aSuffixMatchDoesNotAdmitAnArbitraryFile() {
+        // "notweb.xml" ends with "web.xml" but is not it; recognition is on the whole basename.
+        ConfigKeys.Result r = ConfigKeys.extract(artifact("src/notweb.xml", "xml"), dataXml(), true);
+        assertTrue(r.ok);
+        assertTrue(r.keys.isEmpty(), "recognition must match the basename, not a suffix of it");
+    }
+
+    @Test
+    void aVendorDescriptorInWebInfIsRecognizedByItsLocation() {
+        // daytrader8 ships ibm-web-bnd.xml / ibm-web-ext.xml. Vendor descriptors are open-ended, so
+        // no name list catches them; WEB-INF is a spec-defined descriptor directory, so location does.
+        ConfigKeys.Result r = ConfigKeys.extract(artifact("src/main/webapp/WEB-INF/ibm-web-bnd.xml", "xml"),
+                "<web-bnd><virtual-host name=\"default_host\"/></web-bnd>", true);
+        assertTrue(r.ok);
+        assertFalse(r.keys.isEmpty(), "an XML in WEB-INF is a deployment descriptor");
+    }
+
+    @Test
+    void anXmlInMetaInfIsRecognizedByItsLocation() {
+        ConfigKeys.Result r = ConfigKeys.extract(artifact("src/main/resources/META-INF/anything.xml", "xml"),
+                "<a><b>1</b></a>", true);
+        assertTrue(r.ok);
+        assertFalse(r.keys.isEmpty(), "META-INF is a descriptor directory");
+    }
+
+    @Test
+    void aDescriptorDirectoryDeeperInThePathDoesNotCount() {
+        // Only the immediate parent counts: data nested far below a WEB-INF is not a descriptor.
+        ConfigKeys.Result r = ConfigKeys.extract(artifact("WEB-INF/data/registry/10326.xml", "xml"),
+                dataXml(), true);
+        assertTrue(r.ok);
+        assertTrue(r.keys.isEmpty(), "the file must sit directly in the descriptor directory");
+    }
+
+    @Test
+    void aSuffixPatternStillMatchesItsFamily() {
+        ConfigKeys.Result r = ConfigKeys.extract(artifact("src/main/resources/app-context.xml", "xml"),
+                "<beans><bean id=\"a\"/></beans>", true);
+        assertTrue(r.ok);
+        assertFalse(r.keys.isEmpty(), "*-context.xml is a recognized Spring configuration shape");
+    }
+
     // ---- properties -------------------------------------------------------------------------
 
     @Test
