@@ -19,6 +19,8 @@ import com.ibm.cldk.utils.Log;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -100,10 +102,15 @@ public final class Neo4jEmitter {
 
         String dir = output != null ? output : System.getProperty("user.dir");
         Files.createDirectories(Paths.get(dir));
-        try (FileWriter w = new FileWriter(new File(dir, "graph.cypher"))) {
-            w.write(CypherWriter.renderCypher(rows, name));
-            Log.done("Neo4j graph.cypher saved at " + dir + File.separator + "graph.cypher");
+        // Streamed, not rendered: a large repository's script exceeds the JVM's maximum String
+        // length, and building it whole threw OutOfMemoryError before a byte was written (#209).
+        // UTF-8 explicitly rather than FileWriter's platform default, so non-ASCII in identifiers
+        // or captured source survives on a machine whose default encoding is not UTF-8.
+        Path cypher = Paths.get(dir).resolve("graph.cypher");
+        try (Writer w = Files.newBufferedWriter(cypher, StandardCharsets.UTF_8)) {
+            CypherWriter.writeCypher(w, rows, name);
         }
+        Log.done("Neo4j graph.cypher saved at " + cypher);
     }
 
     /**
