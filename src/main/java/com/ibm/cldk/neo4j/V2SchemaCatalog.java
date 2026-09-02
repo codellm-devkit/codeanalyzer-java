@@ -45,10 +45,20 @@ public final class V2SchemaCatalog {
     // 2.2.0: additive MINOR — the repository-artifact layer (#197): Artifact/Package/ConfigKey
     // reserved at 2.0.0, now actually emitted, plus HAS_ARTIFACT/DEFINES_CONFIG/
     // DECLARES_DEPENDENCY/LOCKS.
-    public static final String SCHEMA_VERSION = "2.2.0";
+    public static final String SCHEMA_VERSION = "3.0.0";
 
     /** Labels layered onto a node in addition to its merge + specific labels. */
-    public static final List<String> MARKER_LABELS = Arrays.asList("JEntrypoint");
+    /**
+     * Additional labels a node may carry beyond its declared and merge labels.
+     *
+     * <p>{@code JCanNode} is on every node keyed by a {@code can://} id and exists purely so a
+     * prefix predicate can seek — Neo4j property indexes are label-scoped, so
+     * {@code WHERE n.id STARTS WITH $p} scans the whole store without one. It makes no semantic
+     * claim, unlike {@code JSymbol}, and is java-namespaced so an anchoring mistake still cannot
+     * reach another language's nodes.
+     */
+    public static final List<String> MARKER_LABELS =
+            Arrays.asList("JEntrypoint", RowBuilder.CAN_NODE);
 
     /** Tiny ordered-map builder for property declarations. */
     private static final class P {
@@ -84,13 +94,13 @@ public final class V2SchemaCatalog {
 
         n.add(node("JModule", "JModule", "id",
                 new P().put("id", "string").put("file_key", "string").put("package", "string")
-                        .put("content_hash", "string").put("_module", "string").done()));
+                        .put("content_hash", "string").done()));
 
         n.add(node("JType", "JSymbol", "id",
                 lines(new P().put("id", "string").put("name", "string").put("kind", "string")
                         .put("modifiers", "string[]").put("base_types", "string[]")
                         .put("interfaces", "string[]").put("docstring", "string")
-                        .put("is_entrypoint", "boolean").put("_module", "string"))));
+                        .put("is_entrypoint", "boolean"))));
 
         n.add(node("JCallable", "JSymbol", "id",
                 lines(new P().put("id", "string").put("name", "string").put("signature", "string")
@@ -100,7 +110,7 @@ public final class V2SchemaCatalog {
                         .put("cyclomatic_complexity", "integer")
                         .put("referenced_types", "string[]").put("accessed_fields", "string[]")
                         .put("is_implicit", "boolean").put("is_entrypoint", "boolean")
-                        .put("_module", "string"))));
+                        )));
 
         n.add(node("JExternal", "JSymbol", "id",
                 new P().put("id", "string").put("kind", "string").put("signature", "string")
@@ -109,20 +119,20 @@ public final class V2SchemaCatalog {
         n.add(node("JField", "JField", "id",
                 lines(new P().put("id", "string").put("name", "string").put("type", "string")
                         .put("initializer", "string").put("modifiers", "string[]")
-                        .put("docstring", "string").put("_module", "string"))));
+                        .put("docstring", "string"))));
 
         n.add(node("JVariable", "JVariable", "id",
                 lines(new P().put("id", "string").put("name", "string").put("type", "string")
-                        .put("initializer", "string").put("_module", "string"))));
+                        .put("initializer", "string"))));
 
         n.add(node("JEnumConstant", "JEnumConstant", "id",
                 new P().put("id", "string").put("name", "string").put("arguments", "string[]")
-                        .put("docstring", "string").put("_module", "string").done()));
+                        .put("docstring", "string").done()));
 
         n.add(node("JRecordComponent", "JRecordComponent", "id",
                 new P().put("id", "string").put("name", "string").put("type", "string")
                         .put("modifiers", "string[]").put("is_variadic", "boolean")
-                        .put("docstring", "string").put("_module", "string").done()));
+                        .put("docstring", "string").done()));
 
         n.add(node("JBodyNode", "JBodyNode", "id",
                 lines(new P().put("id", "string").put("kind", "string").put("method_name", "string")
@@ -130,7 +140,6 @@ public final class V2SchemaCatalog {
                         .put("return_type", "string").put("accessibility", "string")
                         .put("is_constructor_call", "boolean").put("is_static_call", "boolean")
                         .put("argument_types", "string[]").put("argument_expr", "string[]")
-                        .put("_module", "string")
                         // L4 SDG synthetic-vertex payload.
                         .put("var", "string").put("call_node", "string"))));
 
