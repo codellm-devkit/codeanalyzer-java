@@ -32,20 +32,29 @@ import java.util.Map;
  * are {@code :JBodyNode} rows with {@code kind == "call"}, parameters flatten to
  * {@code JCallable.parameters_json}, and javadoc collapses to a {@code docstring} property.
  *
- * <p>{@code SCHEMA_VERSION} bump policy: MAJOR on a breaking change (renamed/removed label,
- * relationship or key), MINOR on an additive one. Stamped onto {@code :JApplication} so consumers
- * detect producer/consumer mismatch at runtime.
+ * <p>{@code SCHEMA_VERSION} is the SHARED graph contract version, not this analyzer's own. It moves
+ * only when every analyzer re-baselines together — codeanalyzer-typescript states the same rule on
+ * its own catalog — so a change here is a cross-repo decision, not a local one. Stamped onto
+ * {@code :JApplication} so consumers detect producer/consumer mismatch at runtime.
+ *
+ * <p>Bump policy once such a re-baseline happens: MAJOR on a breaking change (renamed/removed
+ * label, relationship or key), MINOR on an additive one.
  */
 public final class V2SchemaCatalog {
 
     private V2SchemaCatalog() {}
 
-    // 2.1.0: additive MINOR — L4 SDG overlay (JBodyNode.var/call_node; J_PARAM_IN/J_PARAM_OUT/
-    // J_SUMMARY, reserved at 2.0.0, now actually emitted).
-    // 2.2.0: additive MINOR — the repository-artifact layer (#197): Artifact/Package/ConfigKey
-    // reserved at 2.0.0, now actually emitted, plus HAS_ARTIFACT/DEFINES_CONFIG/
-    // DECLARES_DEPENDENCY/LOCKS.
-    public static final String SCHEMA_VERSION = "3.0.0";
+    // Held at the shared 2.0.0 baseline. This analyzer previously moved it alone — 2.1.0 for the L4
+    // SDG overlay, 2.2.0 for the repository-artifact layer, then 3.0.0 when `_module` was removed —
+    // while codeanalyzer-python stayed at 2.0.0. Both of those layers were additive over labels
+    // 2.0.0 already reserved, and none of them was a re-baseline anyone else agreed to, so the
+    // drift was this analyzer's alone to undo.
+    //
+    // Consequence, recorded rather than papered over: removing `_module` IS breaking, and while this
+    // number stays put a consumer cannot detect that removal from the version alone. The fix is a
+    // coordinated re-baseline across all three analyzers, not a unilateral bump here — see
+    // codellm-devkit/.github#50.
+    public static final String SCHEMA_VERSION = "2.0.0";
 
     /** Labels layered onto a node in addition to its merge + specific labels. */
     /**
