@@ -49,24 +49,6 @@ import org.neo4j.driver.Values;
  */
 public final class BoltWriter implements BoltSink {
     /**
-     * Purge the edges a changed module owns, and the declarations that vanished from it.
-     *
-     * <p>Both are anchored on {@link CypherWriter#MODULE_OWNED}, and that anchor is the whole point:
-     * {@code _module} is a shared convention rather than a java-private property, so the sibling
-     * analyzers set it on their own nodes with the same value (the module's file key). The
-     * unlabelled {@code MATCH (x {_module: $m})} these replaced therefore matched a sibling's nodes
-     * wherever a file key collided across languages in a shared database, and deleted a graph this
-     * tool did not write and cannot see -- silently, unless the delete happened to be large enough
-     * to exhaust the transaction limit and roll back (#213).
-     *
-     * <p>Constants rather than inline strings so the anchoring is assertable without a live
-     * database; {@code BoltWriterPurgeTest} pins it.
-     */
-    static final String PURGE_MODULE_EDGES =
-            "MATCH (x:" + CypherWriter.MODULE_OWNED + ") WHERE x._module = $m "
-                    + "MATCH (x)-[r]->() DELETE r";
-
-    /**
      * The v2 purge: scoped by the module's own {@code can://} id rather than by a bare file key.
      *
      * <p>The id is a path — {@code can://java/<app>/<file>} — so matching the module itself by
@@ -115,11 +97,6 @@ public final class BoltWriter implements BoltSink {
         }
         return null;
     }
-
-    /** @see #PURGE_MODULE_EDGES */
-    static final String PURGE_VANISHED_NODES =
-            "MATCH (x:" + CypherWriter.MODULE_OWNED + ") WHERE x._module = $m "
-                    + "AND NOT coalesce(x.id, x.file_key) IN $keys DETACH DELETE x";
 
 
     private static final int BATCH = 1000;
@@ -205,24 +182,26 @@ public final class BoltWriter implements BoltSink {
                 try (Session s = session()) {
                     s.writeTransaction(tx -> {
                         String moduleId = canModuleIdOf(nodes);
-                        if (moduleId != null) {
-                            // v2: the module's own can:// id scopes this to one module of one
-                            // application of one language, because the id is a path and a prefix
-                            // match on it is containment. `_module` cannot do that -- it is a bare
-                            // project-relative file key, so two applications sharing a source path
-                            // purged each other (.github#50).
-                            Map<String, Object> args = new LinkedHashMap<>();
-                            args.put("mid", moduleId);
-                            args.put("pre", descendantPrefix(moduleId));
-                            args.put("keys", keys);
-                            tx.run(PURGE_MODULE_EDGES_V2, args);
-                            tx.run(PURGE_VANISHED_NODES_V2, args);
-                        } else {
-                            // v1 ids are FQN-shaped and carry no application segment, so there is no
-                            // prefix to scope by. That path keeps the label anchor from #213.
-                            tx.run(PURGE_MODULE_EDGES, Values.parameters("m", unit));
-                            tx.run(PURGE_VANISHED_NODES, Values.parameters("m", unit, "keys", keys));
+                        if (moduleId == null) {
+                            // Legacy v1 rows: FQN-shaped ids carry no application segment, so there
+                            // is no prefix to scope by. v2 is the schema as of 3.0.0, so rather than
+                            // carry a second scoping mechanism for a legacy path, the purge is
+                            // skipped and said so. Nodes are still upserted -- a v1 push updates, it
+                            // just never deletes.
+                            Log.info("neo4j(bolt): legacy v1 rows for " + unit
+                                    + " - purge skipped (v1 ids carry no application scope)");
+                            return null;
                         }
+                        // The module's own can:// id scopes this to one module of one application of
+                        // one language at once, because the id is a path and a prefix match on it is
+                        // containment. `_module` could not: it is a bare project-relative file key,
+                        // so two applications sharing a source path purged each other (.github#50).
+                        Map<String, Object> args = new LinkedHashMap<>();
+                        args.put("mid", moduleId);
+                        args.put("pre", descendantPrefix(moduleId));
+                        args.put("keys", keys);
+                        tx.run(PURGE_MODULE_EDGES_V2, args);
+                        tx.run(PURGE_VANISHED_NODES_V2, args);
                         return null;
                     });
                 }
