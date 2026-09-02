@@ -56,12 +56,37 @@ class BoltWriterPurgeTest {
     }
 
     @Test
-    void theAnchorSpansBothSchemaGenerations() {
-        // BoltWriter is schema-agnostic and may be pushing either generation, so a v2-only anchor
-        // would silently stop purging a v1 graph.
+    void theLabelAnchorNowCoversTheLegacyPathOnly() {
+        // v2 nodes no longer carry `_module` at all -- they are scoped by can:// id prefix instead,
+        // which is language-, application- AND module-scoped where a label anchor is none of those.
+        // So MODULE_OWNED is now exactly the v1 vocabulary, and stays only because v1 ids are
+        // FQN-shaped and have no prefix to scope by.
         List<String> anchor = Arrays.asList(CypherWriter.MODULE_OWNED.split("\\|"));
         assertTrue(anchor.contains("JCompilationUnit"), "v1's module-owned label must be covered");
-        assertTrue(anchor.contains("JModule"), "v2's module-owned label must be covered");
+        assertFalse(anchor.contains("JModule"),
+                "v2 is prefix-scoped now; a v2 label here would mean _module is still being emitted");
+    }
+
+    @Test
+    void theVersionTwoPurgeIsScopedByCanIdPrefixNotByLabelOrModule() {
+        for (String stmt : new String[] {BoltWriter.PURGE_MODULE_EDGES_V2, BoltWriter.PURGE_VANISHED_NODES_V2}) {
+            assertFalse(stmt.contains("_module"),
+                    "the v2 purge must not reference the retired property: " + stmt);
+            assertTrue(stmt.contains("x.id = $mid"), "the module itself is matched by equality: " + stmt);
+            assertTrue(stmt.contains("STARTS WITH $pre"),
+                    "descendants are matched on the id prefix: " + stmt);
+            assertTrue(stmt.contains("(x:" + RowBuilder.CAN_NODE + ")"),
+                    "a label is still needed so the prefix predicate can seek: " + stmt);
+        }
+    }
+
+    @Test
+    void theDescendantPrefixCarriesASeparatorSoASiblingPathCannotMatch() {
+        // Without the trailing slash, `can://java/app/src/Foo.java` also prefixes
+        // `can://java/app/src/Foo.javaX` and would purge a different module's nodes.
+        assertTrue(BoltWriter.PURGE_VANISHED_NODES_V2.contains("$pre"));
+        assertTrue(BoltWriter.descendantPrefix("can://java/app/src/Foo.java").endsWith("/"),
+                "the descendant prefix must end with the path separator");
     }
 
     @Test

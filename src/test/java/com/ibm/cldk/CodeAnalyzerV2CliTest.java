@@ -184,10 +184,10 @@ class CodeAnalyzerV2CliTest {
         assertEquals(0, run("--emit", "schema", "-o", out.toString()));
         JsonObject doc = JsonParser.parseString(Files.readString(out.resolve("schema.neo4j.json")))
                 .getAsJsonObject();
-        assertEquals("2.2.0", doc.get("schema_version").getAsString());
+        assertEquals("3.0.0", doc.get("schema_version").getAsString());
         assertEquals(0, run("--emit", "schema", "-o", out.toString(), "--schema", "v1"),
                 "--emit schema ignores --schema");
-        assertEquals("2.2.0", JsonParser.parseString(Files.readString(out.resolve("schema.neo4j.json")))
+        assertEquals("3.0.0", JsonParser.parseString(Files.readString(out.resolve("schema.neo4j.json")))
                 .getAsJsonObject().get("schema_version").getAsString());
     }
 

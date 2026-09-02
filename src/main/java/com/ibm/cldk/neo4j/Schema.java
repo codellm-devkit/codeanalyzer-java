@@ -57,5 +57,10 @@ public final class Schema {
             "CREATE INDEX j_callable_name IF NOT EXISTS FOR (c:JCallable) ON (c.name)",
             "CREATE INDEX j_type_name IF NOT EXISTS FOR (t:JType) ON (t.name)",
             "CREATE INDEX j_annotation_name_idx IF NOT EXISTS FOR (an:JAnnotation) ON (an.name)",
-            "CREATE FULLTEXT INDEX j_code_fts IF NOT EXISTS FOR (c:JCallable) ON EACH [c.code, c.docstring]");
+            "CREATE FULLTEXT INDEX j_code_fts IF NOT EXISTS FOR (c:JCallable) ON EACH [c.code, c.docstring]",
+            // The incremental purge matches `id STARTS WITH <module-id>`. Neo4j property indexes are
+            // label-scoped, so without this the prefix seek degrades to a scan of every node in the
+            // store, once per changed module. STARTS WITH is index-backed on a range index; CONTAINS
+            // and ENDS WITH are not, which is why the predicate is written this way.
+            "CREATE INDEX j_can_node_id IF NOT EXISTS FOR (n:" + RowBuilder.CAN_NODE + ") ON (n.id)");
 }

@@ -1,8 +1,9 @@
 {
-  "schema_version": "2.2.0",
+  "schema_version": "3.0.0",
   "generator": "codeanalyzer-java",
   "marker_labels": [
-    "JEntrypoint"
+    "JEntrypoint",
+    "JCanNode"
   ],
   "node_labels": [
     {
@@ -24,8 +25,7 @@
         "id": "string",
         "file_key": "string",
         "package": "string",
-        "content_hash": "string",
-        "_module": "string"
+        "content_hash": "string"
       }
     },
     {
@@ -41,7 +41,6 @@
         "interfaces": "string[]",
         "docstring": "string",
         "is_entrypoint": "boolean",
-        "_module": "string",
         "start_line": "integer",
         "end_line": "integer"
       }
@@ -67,7 +66,6 @@
         "accessed_fields": "string[]",
         "is_implicit": "boolean",
         "is_entrypoint": "boolean",
-        "_module": "string",
         "start_line": "integer",
         "end_line": "integer"
       }
@@ -94,7 +92,6 @@
         "initializer": "string",
         "modifiers": "string[]",
         "docstring": "string",
-        "_module": "string",
         "start_line": "integer",
         "end_line": "integer"
       }
@@ -108,7 +105,6 @@
         "name": "string",
         "type": "string",
         "initializer": "string",
-        "_module": "string",
         "start_line": "integer",
         "end_line": "integer"
       }
@@ -121,8 +117,7 @@
         "id": "string",
         "name": "string",
         "arguments": "string[]",
-        "docstring": "string",
-        "_module": "string"
+        "docstring": "string"
       }
     },
     {
@@ -135,8 +130,7 @@
         "type": "string",
         "modifiers": "string[]",
         "is_variadic": "boolean",
-        "docstring": "string",
-        "_module": "string"
+        "docstring": "string"
       }
     },
     {
@@ -155,7 +149,6 @@
         "is_static_call": "boolean",
         "argument_types": "string[]",
         "argument_expr": "string[]",
-        "_module": "string",
         "var": "string",
         "call_node": "string",
         "start_line": "integer",
@@ -518,6 +511,7 @@
     "CREATE INDEX j_callable_name IF NOT EXISTS FOR (c:JCallable) ON (c.name)",
     "CREATE INDEX j_type_name IF NOT EXISTS FOR (t:JType) ON (t.name)",
     "CREATE INDEX j_annotation_name_idx IF NOT EXISTS FOR (an:JAnnotation) ON (an.name)",
-    "CREATE FULLTEXT INDEX j_code_fts IF NOT EXISTS FOR (c:JCallable) ON EACH [c.code, c.docstring]"
+    "CREATE FULLTEXT INDEX j_code_fts IF NOT EXISTS FOR (c:JCallable) ON EACH [c.code, c.docstring]",
+    "CREATE INDEX j_can_node_id IF NOT EXISTS FOR (n:JCanNode) ON (n.id)"
   ]
 }

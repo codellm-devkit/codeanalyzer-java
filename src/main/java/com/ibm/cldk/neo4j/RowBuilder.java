@@ -78,11 +78,45 @@ public final class RowBuilder {
                     existing.labels.add(l);
                 }
             }
+            // putAll may have re-introduced the lifted property; strip it again on the v2 path only,
+            // so a re-merged v1 node keeps the property its contract still includes.
+            if (isCanId(value)) {
+                existing.props.remove(MODULE_PROP);
+            }
         } else {
-            nodes.put(id, new NodeRow(new ArrayList<>(labels), keyProp, value, new LinkedHashMap<>(props)));
+            Map<String, Object> p = new LinkedHashMap<>(props);
+            // Lift the owning module off the emitted properties and onto the row. The writer needs
+            // it to group nodes; the graph does not, because a v2 node's owning module is already
+            // the prefix of its can:// id. See NodeRow.moduleKey.
+            Object m = p.remove(MODULE_PROP);
+            String moduleKey = m instanceof String ? (String) m : null;
+            List<String> allLabels = new ArrayList<>(labels);
+            if (isCanId(value)) {
+                // The index anchor for prefix-scoped statements: Neo4j property indexes are
+                // label-scoped, so `WHERE n.id STARTS WITH $p` needs a label to seek on. Carries no
+                // safety claim of its own -- the prefix does that -- and is java-namespaced so an
+                // anchoring mistake still cannot reach another language's nodes.
+                allLabels.add(CAN_NODE);
+            } else if (moduleKey != null) {
+                // v1 ids are FQN-shaped and carry no application segment, so they cannot be
+                // prefix-scoped. That path keeps the property it has always had; only the v2
+                // contract drops it.
+                p.put(MODULE_PROP, moduleKey);
+            }
+            nodes.put(id, new NodeRow(allLabels, keyProp, value, p, moduleKey));
         }
         keys.add(value);
         return new NodeRef(labels.get(0), keyProp, value);
+    }
+
+    /** The marker label carried by every node keyed on a {@code can://} id. */
+    public static final String CAN_NODE = "JCanNode";
+
+    private static final String MODULE_PROP = "_module";
+
+    /** Whether a node key is a v2 {@code can://} id, as opposed to a v1 FQN-shaped one. */
+    static boolean isCanId(String value) {
+        return value != null && value.startsWith("can://");
     }
 
     /** An edge whose endpoints are known to exist (both ends emitted as nodes this run). */

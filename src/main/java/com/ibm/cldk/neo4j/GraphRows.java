@@ -56,8 +56,25 @@ public final class GraphRows {
         public final String keyProp;
         public final String value;
         public final Map<String, Object> props;
+        /**
+         * The file key of the module owning this node, or {@code null} for a shared node.
+         *
+         * <p>In memory only — deliberately NOT a property, so it is never written to the graph. The
+         * incremental writer needs to group nodes by module; the graph does not need to be told,
+         * because a node's owning module is already the prefix of its {@code can://} id. Emitting it
+         * was how a delete came to be scoped by a bare file key that carries no language and no
+         * application, which is what made two applications sharing a path delete each other's nodes
+         * (codellm-devkit/.github#50).
+         */
+        public final String moduleKey;
 
         public NodeRow(List<String> labels, String keyProp, String value, Map<String, Object> props) {
+            this(labels, keyProp, value, props, null);
+        }
+
+        public NodeRow(List<String> labels, String keyProp, String value, Map<String, Object> props,
+                String moduleKey) {
+            this.moduleKey = moduleKey;
             this.labels = labels;
             this.keyProp = keyProp;
             this.value = value;

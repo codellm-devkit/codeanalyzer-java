@@ -66,6 +66,56 @@ public final class BoltWriter implements BoltSink {
             "MATCH (x:" + CypherWriter.MODULE_OWNED + ") WHERE x._module = $m "
                     + "MATCH (x)-[r]->() DELETE r";
 
+    /**
+     * The v2 purge: scoped by the module's own {@code can://} id rather than by a bare file key.
+     *
+     * <p>The id is a path — {@code can://java/<app>/<file>} — so matching the module itself by
+     * equality and its declarations by {@code id STARTS WITH <id> + '/'} is containment, and it is
+     * simultaneously scoped to one language, one application and one module. That last one is what
+     * neither a label anchor nor {@code _module} could give: two java applications sharing
+     * {@code src/main/java/Foo.java} have identical labels and an identical file key, and only the
+     * id distinguishes them (.github#50).
+     *
+     * <p>The trailing slash is not cosmetic. A bare {@code STARTS WITH <id>} would also match
+     * {@code <id>Xtra}, so descendants are matched on the separator and the module on equality.
+     *
+     * <p>{@code :JCanNode} is present only so the prefix predicate can seek: Neo4j property indexes
+     * are label-scoped, and without a label this scans the whole node store.
+     */
+    static final String PURGE_MODULE_EDGES_V2 =
+            "MATCH (x:" + RowBuilder.CAN_NODE + ") WHERE x.id = $mid OR x.id STARTS WITH $pre "
+                    + "MATCH (x)-[r]->() DELETE r";
+
+    /** @see #PURGE_MODULE_EDGES_V2 */
+    static final String PURGE_VANISHED_NODES_V2 =
+            "MATCH (x:" + RowBuilder.CAN_NODE + ") WHERE (x.id = $mid OR x.id STARTS WITH $pre) "
+                    + "AND NOT x.id IN $keys DETACH DELETE x";
+
+    /**
+     * The prefix that matches a module's declarations but not a sibling module whose path merely
+     * starts the same way. The separator is the whole point: {@code can://java/app/src/Foo.java}
+     * is also a prefix of {@code can://java/app/src/Foo.javaX}, so a bare {@code STARTS WITH} on
+     * the module id would purge a different module's nodes. The module itself is matched by
+     * equality instead, since its own id does not end in a separator.
+     */
+    static String descendantPrefix(String moduleId) {
+        return moduleId + "/";
+    }
+
+    /**
+     * The {@code can://} id of the module these rows belong to, or {@code null} on the v1 path.
+     * Taken from the module's own row rather than parsed out of a declaration's id, because a file
+     * key may itself contain {@code /} and so cannot be recovered by splitting.
+     */
+    private static String canModuleIdOf(List<NodeRow> nodes) {
+        for (NodeRow n : nodes) {
+            if (n.labels.contains("JModule") && RowBuilder.isCanId(n.value)) {
+                return n.value;
+            }
+        }
+        return null;
+    }
+
     /** @see #PURGE_MODULE_EDGES */
     static final String PURGE_VANISHED_NODES =
             "MATCH (x:" + CypherWriter.MODULE_OWNED + ") WHERE x._module = $m "
@@ -115,10 +165,9 @@ public final class BoltWriter implements BoltSink {
             List<NodeRow> shared = new ArrayList<>();
             Map<String, String> unitOf = new HashMap<>(); // node value → owning unit
             for (NodeRow n : rows.nodes) {
-                Object m = n.props.get("_module");
-                if (m instanceof String) {
-                    byUnit.computeIfAbsent((String) m, x -> new ArrayList<>()).add(n);
-                    unitOf.put(n.value, (String) m);
+                if (n.moduleKey != null) {
+                    byUnit.computeIfAbsent(n.moduleKey, x -> new ArrayList<>()).add(n);
+                    unitOf.put(n.value, n.moduleKey);
                 } else {
                     shared.add(n);
                 }
@@ -155,8 +204,25 @@ public final class BoltWriter implements BoltSink {
                 }
                 try (Session s = session()) {
                     s.writeTransaction(tx -> {
-                        tx.run(PURGE_MODULE_EDGES, Values.parameters("m", unit));
-                        tx.run(PURGE_VANISHED_NODES, Values.parameters("m", unit, "keys", keys));
+                        String moduleId = canModuleIdOf(nodes);
+                        if (moduleId != null) {
+                            // v2: the module's own can:// id scopes this to one module of one
+                            // application of one language, because the id is a path and a prefix
+                            // match on it is containment. `_module` cannot do that -- it is a bare
+                            // project-relative file key, so two applications sharing a source path
+                            // purged each other (.github#50).
+                            Map<String, Object> args = new LinkedHashMap<>();
+                            args.put("mid", moduleId);
+                            args.put("pre", descendantPrefix(moduleId));
+                            args.put("keys", keys);
+                            tx.run(PURGE_MODULE_EDGES_V2, args);
+                            tx.run(PURGE_VANISHED_NODES_V2, args);
+                        } else {
+                            // v1 ids are FQN-shaped and carry no application segment, so there is no
+                            // prefix to scope by. That path keeps the label anchor from #213.
+                            tx.run(PURGE_MODULE_EDGES, Values.parameters("m", unit));
+                            tx.run(PURGE_VANISHED_NODES, Values.parameters("m", unit, "keys", keys));
+                        }
                         return null;
                     });
                 }
