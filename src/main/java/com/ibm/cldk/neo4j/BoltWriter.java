@@ -48,6 +48,29 @@ import org.neo4j.driver.Values;
  * are shared (no {@code _module}) and are MERGE-only.
  */
 public final class BoltWriter implements BoltSink {
+    /**
+     * Purge the edges a changed module owns, and the declarations that vanished from it.
+     *
+     * <p>Both are anchored on {@link CypherWriter#MODULE_OWNED}, and that anchor is the whole point:
+     * {@code _module} is a shared convention rather than a java-private property, so the sibling
+     * analyzers set it on their own nodes with the same value (the module's file key). The
+     * unlabelled {@code MATCH (x {_module: $m})} these replaced therefore matched a sibling's nodes
+     * wherever a file key collided across languages in a shared database, and deleted a graph this
+     * tool did not write and cannot see -- silently, unless the delete happened to be large enough
+     * to exhaust the transaction limit and roll back (#213).
+     *
+     * <p>Constants rather than inline strings so the anchoring is assertable without a live
+     * database; {@code BoltWriterPurgeTest} pins it.
+     */
+    static final String PURGE_MODULE_EDGES =
+            "MATCH (x:" + CypherWriter.MODULE_OWNED + ") WHERE x._module = $m "
+                    + "MATCH (x)-[r]->() DELETE r";
+
+    /** @see #PURGE_MODULE_EDGES */
+    static final String PURGE_VANISHED_NODES =
+            "MATCH (x:" + CypherWriter.MODULE_OWNED + ") WHERE x._module = $m "
+                    + "AND NOT coalesce(x.id, x.file_key) IN $keys DETACH DELETE x";
+
 
     private static final int BATCH = 1000;
 
@@ -132,9 +155,8 @@ public final class BoltWriter implements BoltSink {
                 }
                 try (Session s = session()) {
                     s.writeTransaction(tx -> {
-                        tx.run("MATCH (x {_module: $m})-[r]->() DELETE r", Values.parameters("m", unit));
-                        tx.run("MATCH (x {_module: $m}) WHERE NOT coalesce(x.id, x.file_key) IN $keys DETACH DELETE x",
-                                Values.parameters("m", unit, "keys", keys));
+                        tx.run(PURGE_MODULE_EDGES, Values.parameters("m", unit));
+                        tx.run(PURGE_VANISHED_NODES, Values.parameters("m", unit, "keys", keys));
                         return null;
                     });
                 }
@@ -157,6 +179,15 @@ public final class BoltWriter implements BoltSink {
             if (fullRun) {
                 List<String> present = new ArrayList<>(byUnit.keySet());
                 String app = appNameOf(rows);
+                // Checked against the same hazard as the _module purges above (#213) and found
+                // sound, so deliberately left alone: this traversal never leaves java's own graph.
+                // It enters at :JApplication (java-owned, and scoped to this app by name), hops a
+                // java-owned relationship type, and expands only through DESCENDANTS -- every
+                // member of which is J_-prefixed containment. `c` and `x` are unlabelled but
+                // unreachable except along those edges, and DESCENDANTS deliberately excludes
+                // HAS_ARTIFACT, so no cross-language :Artifact/:ConfigKey and no shared
+                // :JPackage/:JAnnotation can be reached. Do not add a non-containment type to
+                // DESCENDANTS without re-checking that.
                 try (Session s = session()) {
                     long pruned = s.run("MATCH (:JApplication {name: $app})-[:J_HAS_UNIT|J_HAS_MODULE]->(c) "
                                     + "WHERE NOT c.file_key IN $present "

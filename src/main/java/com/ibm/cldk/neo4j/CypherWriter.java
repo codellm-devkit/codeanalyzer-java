@@ -17,6 +17,7 @@ import com.ibm.cldk.neo4j.GraphRows.NodeRow;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -54,6 +55,38 @@ public final class CypherWriter {
             + "|J_HAS_CALLSITE|J_DECLARES_VAR|J_HAS_ENUM_CONSTANT|J_HAS_RECORD_COMPONENT|J_HAS_INIT_BLOCK"
             + "|J_HAS_CRUD_OPERATION|J_HAS_CRUD_QUERY|J_HAS_COMMENT"
             + "|J_DECLARES|J_HAS_METHOD|J_HAS_BODY_NODE*1..]";
+
+    /**
+     * The labels this analyzer owns per module -- every label in either generation's catalog that
+     * carries the internal {@code _module} provenance property, as a Cypher label disjunction
+     * ({@code JModule|JType|JCallable|...}).
+     *
+     * <p>{@code _module} is NOT java-private. The sibling analyzers set the same property on their
+     * own nodes, using the same value (the module's file key), so an unlabelled
+     * {@code MATCH (x {_module: $m})} matches THEIR nodes wherever a file key collides across
+     * languages in a shared database -- and a delete built on it destroys a graph this tool did not
+     * write and cannot see. Every statement that matches on {@code _module} must be anchored here.
+     * The hazard is the same one {@link #DESCENDANTS} is written to avoid, one property over.
+     *
+     * <p>Derived from the catalogs rather than hand-listed, so a label that gains {@code _module}
+     * later is covered without a second list to maintain, and spans BOTH generations for the same
+     * reason {@code DESCENDANTS} does: {@link BoltWriter} is schema-agnostic and may be pushing
+     * either one.
+     */
+    static final String MODULE_OWNED = moduleOwnedPattern();
+
+    private static String moduleOwnedPattern() {
+        List<String> labels = new ArrayList<>();
+        for (List<SchemaCatalog.NodeLabel> catalog :
+                Arrays.asList(SchemaCatalog.NODE_LABELS, V2SchemaCatalog.NODE_LABELS)) {
+            for (SchemaCatalog.NodeLabel nl : catalog) {
+                if (nl.properties.containsKey("_module") && !labels.contains(nl.label)) {
+                    labels.add(nl.label);
+                }
+            }
+        }
+        return String.join("|", labels);
+    }
 
     private CypherWriter() {}
 
