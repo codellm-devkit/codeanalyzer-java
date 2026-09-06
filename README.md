@@ -16,6 +16,18 @@ pip install codeanalyzer-java
 canjv -i /path/to/project -a 2 -o ./out
 ```
 
+Or with Homebrew:
+
+```sh
+brew install codellm-devkit/homebrew-tap/codeanalyzer-java
+canjv -i /path/to/project -a 2 -o ./out
+```
+
+The Homebrew launcher uses `uv` to download the pinned PyPI package and its bundled
+JVM on first use, which requires internet access. No system Java is needed.
+The release workflow updates the tap after PyPI publication using the repository's
+`HOMEBREW_TAP_TOKEN` secret (write access to `codellm-devkit/homebrew-tap`).
+
 Or grab the latest release jar and a `codeanalyzer` launcher (requires a Java 11+ runtime):
 
 ```sh

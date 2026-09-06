@@ -24,6 +24,8 @@ jobs:
   pypi:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     environment:
       name: pypi
       url: https://pypi.org/p/codeanalyzer-java
@@ -73,3 +75,52 @@ jobs:
           packages-dir: packaging/python/dist
           # Re-runs stay idempotent: a version already on PyPI is skipped, not a 400.
           skip-existing: true
+
+  # Publish only after PyPI succeeds, so the pinned canjv package is available.
+  # A tap failure can be retried without rebuilding or republishing the wheel.
+  homebrew:
+    needs: pypi
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.pypi.outputs.version }}
+    steps:
+      - name: Check out release automation
+        uses: actions/checkout@v5
+        # Use the default branch so workflow_dispatch can backfill older releases.
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Generate Homebrew formula from the published wheel
+        run: |
+          curl --fail --silent --show-error --location --retry 12 --retry-all-errors --retry-delay 5 \
+            "https://pypi.org/pypi/codeanalyzer-java/${VERSION}/json" -o pypi.json
+          wheel="$(jq -er --arg version "$VERSION" \
+            '[.urls[] | select(.filename == ("codeanalyzer_java-" + $version + "-py3-none-any.whl") and .yanked == false)] | if length == 1 then .[0] else error("Expected one non-yanked universal wheel") end' pypi.json)"
+          WHEEL_URL="$(jq -er '.url' <<< "$wheel")"
+          SHA256="$(jq -er '.digests.sha256' <<< "$wheel")"
+          export WHEEL_URL SHA256
+          bash packaging/homebrew/generate_formula.sh > codeanalyzer-java.rb
+          ruby -c codeanalyzer-java.rb
+
+      - name: Check out the shared tap
+        uses: actions/checkout@v5
+        with:
+          repository: codellm-devkit/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Update the formula
+        run: |
+          mkdir -p tap/Formula
+          cp codeanalyzer-java.rb tap/Formula/codeanalyzer-java.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/codeanalyzer-java.rb
+          if git diff --cached --quiet; then
+            echo "Formula already up to date"
+            exit 0
+          fi
+          git commit -m "codeanalyzer-java ${VERSION}"
+          git pull --rebase
+          git push
