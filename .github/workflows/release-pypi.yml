@@ -1,0 +1,75 @@
+name: Publish to PyPI
+
+# Runs after "Java Release" succeeds: builds the codeanalyzer-java wheel from the released
+# codeanalyzer.jar asset (byte-identical to what the installer fetches) and publishes it with PyPI
+# Trusted Publishing. The publisher on PyPI is bound to this file name and the `pypi` environment.
+# workflow_run (not `release: published`) because a release created with GITHUB_TOKEN never
+# triggers other workflows. workflow_dispatch re-publishes a tag if a run failed.
+
+on:
+  workflow_run:
+    workflows: ["Java Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v3.0.2)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  pypi:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/codeanalyzer-java
+    permissions:
+      contents: read
+      id-token: write          # PyPI Trusted Publishing (OIDC) -- no API token needed
+
+    steps:
+      - name: Resolve tag and version
+        id: ver
+        run: |
+          # For a tag push, workflow_run.head_branch is the tag name.
+          tag="${{ inputs.tag || github.event.workflow_run.head_branch }}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo ">>> Publishing $tag"
+
+      - name: Check out the tagged source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.ver.outputs.tag }}
+
+      - name: Download the released jar
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p build/libs
+          gh release download "${{ steps.ver.outputs.tag }}" -R "$GITHUB_REPOSITORY" -p codeanalyzer.jar -D build/libs
+          mv build/libs/codeanalyzer.jar "build/libs/codeanalyzer-${{ steps.ver.outputs.version }}.jar"
+          ls -lh build/libs
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build the wheel
+        env:
+          PKG_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          python -m pip install --upgrade build hatchling
+          ./packaging/python/build_wheel.sh
+
+      - name: Publish to PyPI (Trusted Publishing / OIDC)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packaging/python/dist
+          # Re-runs stay idempotent: a version already on PyPI is skipped, not a 400.
+          skip-existing: true
