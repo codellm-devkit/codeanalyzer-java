@@ -27,6 +27,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.List;
@@ -68,22 +69,19 @@ public class ScopeUtils {
     AnalysisScope scope = new JavaSourceAnalysisScope();
     addDefaultExclusions(scope);
 
-    Log.info("Loading Java SE standard libs.");
-
-    if (System.getenv("JAVA_HOME") == null) {
-      Log.error("JAVA_HOME is not set.");
-      throw new RuntimeException("JAVA_HOME is not set.");
+    // The primordial scope comes from the JVM we are running on, read through the jrt:/ filesystem
+    // (lib/modules). That works on any runtime, including jlink'd ones that ship no jmods/, and it
+    // never disagrees with the JVM actually executing the analysis, unlike a $JAVA_HOME lookup.
+    Log.info("Loading Java SE standard libs from the running JVM (jrt:/).");
+    List<String> stdlibs = new ArrayList<>();
+    for (Module module : ModuleLayer.boot().modules()) {
+      String name = module.getName();
+      if (name.startsWith("java.") || name.startsWith("jdk.")) {
+        scope.addToScope(ClassLoaderReference.Primordial, new JrtModule(name));
+        stdlibs.add(name);
+      }
     }
-
-    String[] stdlibs = Files.walk(Paths.get(System.getenv("JAVA_HOME"), "jmods"))
-        .filter(path -> path.toString().endsWith(".jmod"))
-        .map(path -> path.toAbsolutePath().toString())
-        .toArray(String[]::new);
-
-    for (String stdlib : stdlibs) {
-      scope.addToScope(ClassLoaderReference.Primordial, new JarFile(stdlib));
-    }
-    setStdLibs(stdlibs);
+    setStdLibs(stdlibs.toArray(String[]::new));
 
     // Build the application classes first: their names are needed to keep a dependency jar from
     // shadowing them (see below), so this must precede adding the dependency jars.
