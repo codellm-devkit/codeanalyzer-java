@@ -1,0 +1,5 @@
+# The fat JAR is copied here at wheel-build time (see ../../build_wheel.sh) and
+# bundled via `artifacts` in pyproject.toml. Never commit it. Keep the directory
+# present so the package is importable in dev.
+*
+!.gitignore

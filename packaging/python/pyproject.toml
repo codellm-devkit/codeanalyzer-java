@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codeanalyzer-java"
+dynamic = ["version"]
+description = "codeanalyzer-java backend for CLDK (codellm-devkit): the analyzer JAR plus a bundled JVM."
+# The PyPI long description is the repo root README, copied in by build_wheel.sh at build time
+# (single source of truth; the copy is gitignored).
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Rahul Krishna", email = "i.m.ralk@gmail.com" },
+]
+keywords = ["cldk", "codellm-devkit", "java", "code analysis", "wala"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Java",
+]
+# jdk4py ships a jlink'd Temurin runtime per platform, so this wheel is pure (py3-none-any) and
+# pip picks the right JVM. Pinned below 22: WALA 1.6.x's Shrike reads class files up to version 67
+# (Java 23), and jdk4py 25 ships version-69 class files that it rejects. Bump this with WALA.
+dependencies = ["jdk4py>=21,<22"]
+
+[project.urls]
+Homepage = "https://codellm-devkit.info"
+Repository = "https://github.com/codellm-devkit/codeanalyzer-java"
+Issues = "https://github.com/codellm-devkit/codeanalyzer-java/issues"
+
+# `canjv` follows the sibling analyzers (canpy, cants, caniac). There is deliberately no
+# `codeanalyzer` script: codeanalyzer-python already installs one as a deprecated alias, and two
+# packages claiming the same console script silently overwrite each other in one environment.
+[project.scripts]
+canjv = "codeanalyzer_java.__main__:main"
+
+# Single source of truth for the package version: __init__.py's __version__.
+# build_wheel.sh overwrites it from $PKG_VERSION (set from gradle.properties in CI), so a
+# release of vX.Y.Z always produces a codeanalyzer-java==X.Y.Z wheel.
+[tool.hatch.version]
+path = "src/codeanalyzer_java/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codeanalyzer_java"]
+artifacts = ["src/codeanalyzer_java/_bin/*"]
+
+[tool.hatch.build.targets.sdist]
+# No meaningful sdist: the JAR needs Gradle + a JDK to build. Ship the wheel only.
+include = [
+    "src/codeanalyzer_java/__init__.py",
+    "README.md",
+    "build_wheel.sh",
+]

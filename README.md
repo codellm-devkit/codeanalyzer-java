@@ -9,7 +9,14 @@ and emits them either as the canonical `analysis.json`, or as a **Neo4j property
 
 ## Quick install
 
-Grab the latest release jar and a `codeanalyzer` launcher (requires a Java 11+ runtime):
+From PyPI, with a bundled JVM (no system Java needed). Installs a `canjv` launcher:
+
+```sh
+pip install codeanalyzer-java
+canjv -i /path/to/project -a 2 -o ./out
+```
+
+Or grab the latest release jar and a `codeanalyzer` launcher (requires a Java 11+ runtime):
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/codellm-devkit/codeanalyzer-java/releases/latest/download/codeanalyzer-installer.sh | sh
