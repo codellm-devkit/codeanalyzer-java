@@ -597,7 +597,8 @@ public class CodeAnalyzer implements Runnable {
         // Config reads join the L1 tree to the artifact layer's declared keys, so it runs after both
         // exist and at every analysis level -- the literal tier needs no call graph. Absence means
         // "no fact", so an empty result leaves both keys off the envelope.
-        ConfigUses.Result configReads = ConfigUses.detect(application, modules, artifacts);
+        ConfigUses.Result configReads = ConfigUses.detect(application, modules, artifacts,
+                analysisLevel, analysis.getApplication().getCallGraph());
         if (!configReads.uses.isEmpty()) {
             analysis.getApplication().setConfigUses(configReads.uses);
         }
