@@ -207,10 +207,28 @@ comments are `:JComment` nodes in addition to the convenience `docstring` proper
 
 The full contract (node labels, their keys and typed properties, relationship types and endpoints,
 plus the constraint/index DDL) lives in [`schema.neo4j.json`](./schema.neo4j.json) and is visualized
-in [`neo4j-schema.drawio`](./neo4j-schema.drawio). All node labels are `J`-prefixed and relationship
-types `J_`-prefixed (e.g. `:JType`, `:JCallable`, `J_CALLS`) so a Java graph can share a Neo4j
-database with another language's backend without colliding.
+in [`neo4j-schema.drawio`](./neo4j-schema.drawio). Java-specific node labels are `J`-prefixed and
+relationship types `J_`-prefixed (e.g. `:JType`, `:JCallable`, `J_CALLS`) so a Java graph can share a
+Neo4j database with another language's backend without colliding. The exceptions are deliberate:
+`:Artifact`, `:Package` and `:ConfigKey` and their containment edges carry **no** prefix, because a
+build manifest or a configuration key is not a Java concept — a sibling-language analyzer scanning
+the same repository lands on the same nodes instead of a per-language duplicate.
 `SCHEMA_VERSION` is stamped onto the `:JApplication` node of every emitted graph.
+
+**Configuration reads.** `DEFINES_CONFIG` says which artifact declares a key; `J_USES_CONFIG` says
+which code reads one. Its source is whichever node the read was attributed to — a `:JBodyNode` for
+a call site (`System.getenv("X")`, `env.getProperty("X")`), or the `:JField` / `:JCallable` /
+`:JType` carrying a `@Value("${x}")` or `@ConfigurationProperties` annotation — so a consumer must
+not assume it is always a body node. A read that matched no declared key is kept as
+`J_READS_CONFIG_UNRESOLVED` rather than dropped, so a read nobody can trace stays as visible as one
+that resolves. The literal tier runs at every level; `-a 3` and `-a 4` widen it over the dataflow
+graph (`prov: ["dataflow"]`).
+
+**Entrypoint coverage.** `:JApplication` carries `entrypoint_frameworks` and
+`entrypoint_report_json`, and every entrypoint node carries `entrypoint_frameworks` naming the
+framework finders that recognised it. The report is present **even when empty**: the detection pass
+under-approximates by design, so an empty `frameworks_detected` next to a populated `rulesets` is
+what distinguishes "this application has no entrypoints" from "the pass found nothing".
 
 ### 4.1. Cypher snapshot (no database required)
 
