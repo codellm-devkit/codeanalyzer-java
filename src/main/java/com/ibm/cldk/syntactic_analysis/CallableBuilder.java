@@ -22,7 +22,7 @@ import com.github.javaparser.ast.stmt.IfStmt;
 import com.github.javaparser.ast.stmt.SwitchStmt;
 import com.github.javaparser.ast.stmt.ThrowStmt;
 import com.github.javaparser.ast.stmt.WhileStmt;
-import com.ibm.cldk.javaee.EntrypointsFinderFactory;
+import com.ibm.cldk.javaee.EntrypointScan;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JCallable;
 import com.ibm.cldk.schema.JMetrics;
@@ -88,8 +88,9 @@ public final class CallableBuilder {
                 cd.getThrownExceptions().stream().map(ctx::resolveType).collect(Collectors.toList()));
         callable.setModifiers(
                 cd.getModifiers().stream().map(m -> m.getKeyword().asString()).collect(Collectors.toList()));
-        callable.setEntrypoint(
-                EntrypointsFinderFactory.getEntrypointFinders().anyMatch(f -> f.isEntrypointMethod(cd)));
+        List<String> entrypointFrameworks = EntrypointScan.methodFrameworks(cd, ctx.getEntrypointReport());
+        callable.setEntrypointFrameworks(entrypointFrameworks);
+        callable.setEntrypoint(!entrypointFrameworks.isEmpty());
         callable.setComments(ctx.commentsOf(cd));
         callable.setDecorators(
                 cd.getAnnotations().stream().map(decoratorBuilder::build).collect(Collectors.toList()));

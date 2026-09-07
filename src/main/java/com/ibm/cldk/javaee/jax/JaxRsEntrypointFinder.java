@@ -7,6 +7,11 @@ import java.util.List;
 
 @SuppressWarnings({"unchecked", "rawtypes"})
 public class JaxRsEntrypointFinder extends AbstractEntrypointFinder {
+    @Override
+    public String framework() {
+        return "jaxrs";
+    }
+
     /**
      * Detect if the method is an entrypoint.
      *

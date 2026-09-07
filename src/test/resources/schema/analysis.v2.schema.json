@@ -128,7 +128,21 @@
           },
           "additionalProperties": { "$ref": "#/$defs/artifact" }
         },
-        "dependencies": { "type": "array", "items": { "$ref": "#/$defs/dependency" } }
+        "dependencies": { "type": "array", "items": { "$ref": "#/$defs/dependency" } },
+        "entrypoint_report": { "$ref": "#/$defs/entrypointReport" }
+      }
+    },
+
+    "entrypointReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frameworks_detected", "rulesets", "unresolved", "errors"],
+      "description": "Coverage and failure record for the entrypoint pass. Emitted ALWAYS, even when every field is empty: the pass under-approximates by design, so an absent report and an empty one must not read the same.",
+      "properties": {
+        "frameworks_detected": { "$ref": "#/$defs/stringList" },
+        "rulesets": { "$ref": "#/$defs/stringList" },
+        "unresolved": { "type": "object", "additionalProperties": { "type": "integer" } },
+        "errors": { "$ref": "#/$defs/stringList" }
       }
     },
 
@@ -308,6 +322,7 @@
         "decorators": { "type": "array", "items": { "$ref": "#/$defs/decorator" } },
         "type_parameters": { "type": "array", "items": { "$ref": "#/$defs/typeParameter" } },
         "is_entrypoint_class": { "type": "boolean" },
+        "entrypoint_frameworks": { "$ref": "#/$defs/stringList" },
         "enum_constants": { "type": "array", "items": { "$ref": "#/$defs/enumConstant" } },
         "record_components": { "type": "array", "items": { "$ref": "#/$defs/recordComponent" } },
         "fields": { "type": "object", "additionalProperties": { "$ref": "#/$defs/field" } },
@@ -407,6 +422,7 @@
         "declaration": { "type": "string" },
         "is_implicit": { "type": "boolean" },
         "is_entrypoint": { "type": "boolean" },
+        "entrypoint_frameworks": { "$ref": "#/$defs/stringList" },
         "metrics": {
           "type": "object",
           "additionalProperties": false,

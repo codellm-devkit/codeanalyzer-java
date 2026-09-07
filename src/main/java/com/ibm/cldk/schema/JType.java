@@ -31,6 +31,14 @@ public class JType {
     /** True when a framework finder recognises this type as an entrypoint (e.g. a Spring controller). */
     private boolean isEntrypointClass;
 
+    /**
+     * Which finders recognised it, in finder order — {@code ["spring"]} for a {@code @RestController}.
+     * Mirrors codeanalyzer-python's {@code PySymbol.entrypoint_frameworks}, and is what lets the
+     * application-level report name the frameworks it detected: the boolean alone collapses that away.
+     * Empty exactly when {@code isEntrypointClass} is false.
+     */
+    private List<String> entrypointFrameworks = new ArrayList<>();
+
     /** Enum constants, in declaration order — present only on {@code enum} types. */
     private List<JEnumConstant> enumConstants = new ArrayList<>();
 

@@ -44,4 +44,11 @@ public class JApplication {
      * produces no dependencies.
      */
     private List<JDependency> dependencies;
+
+    /**
+     * Coverage and failure record for the entrypoint pass. Unlike every other overlay on this node,
+     * it is emitted <b>always, even when empty</b>: the pass under-approximates by design, so an
+     * absent report and an empty one must not read the same.
+     */
+    private JEntrypointReport entrypointReport = new JEntrypointReport();
 }

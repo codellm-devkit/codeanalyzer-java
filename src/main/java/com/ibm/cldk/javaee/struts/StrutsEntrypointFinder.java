@@ -13,6 +13,11 @@ import java.util.Optional;
 
 public class StrutsEntrypointFinder extends AbstractEntrypointFinder {
     @Override
+    public String framework() {
+        return "struts";
+    }
+
+    @Override
     public boolean isEntrypointClass(TypeDeclaration typeDeclaration){
         if (!(typeDeclaration instanceof ClassOrInterfaceDeclaration)) {
             return false;

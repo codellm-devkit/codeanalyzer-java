@@ -27,6 +27,7 @@ import com.ibm.cldk.schema.JConfigKey;
 import com.ibm.cldk.schema.JDdgEdge;
 import com.ibm.cldk.schema.JDecorator;
 import com.ibm.cldk.schema.JDependency;
+import com.ibm.cldk.schema.JEntrypointReport;
 import com.ibm.cldk.schema.JEnumConstant;
 import com.ibm.cldk.schema.JExternalSymbol;
 import com.ibm.cldk.schema.JField;
@@ -77,7 +78,19 @@ public final class V2GraphProjector {
             appProps.put("analyzer_name", analysis.getAnalyzer().getName());
             appProps.put("analyzer_version", analysis.getAnalyzer().getVersion());
         }
-        NodeRef app = b.node(Arrays.asList("JApplication"), "name", appName, RowBuilder.prune(appProps));
+        // Set unconditionally, and deliberately BEFORE prune: the entrypoint pass under-approximates,
+        // so a consumer must be able to tell "no entrypoints" from "the pass found nothing". An empty
+        // frameworks list next to a populated `rulesets` in the report is exactly that signal, and
+        // pruning the empty list away would erase it. Mirrors :PyApplication (codeanalyzer-python #177).
+        JEntrypointReport entrypointReport = analysis.getApplication().getEntrypointReport() != null
+                ? analysis.getApplication().getEntrypointReport()
+                : new JEntrypointReport();
+        appProps.put("entrypoint_report_json", V2Json.compact().toJson(entrypointReport));
+        Map<String, Object> prunedAppProps = RowBuilder.prune(appProps);
+        // After prune, so an application with zero entrypoints still carries the key rather than
+        // having it dropped as an empty list.
+        prunedAppProps.put("entrypoint_frameworks", entrypointReport.getFrameworksDetected());
+        NodeRef app = b.node(Arrays.asList("JApplication"), "name", appName, prunedAppProps);
 
         // First pass: an in-project index from a type's qualified (dotted) name to its node id and
         // owning module id, for resolving extends/implements/import spellings to emitted nodes.
@@ -190,6 +203,7 @@ public final class V2GraphProjector {
         putLines(p, type.getSpan());
         if (type.isEntrypointClass()) {
             p.put("is_entrypoint", true);
+            p.put("entrypoint_frameworks", type.getEntrypointFrameworks());
         }
         p.put("_module", fileKey);
         NodeRef ref = b.node(labels, "id", type.getId(), RowBuilder.prune(p));
@@ -298,6 +312,7 @@ public final class V2GraphProjector {
         }
         if (c.isEntrypoint()) {
             p.put("is_entrypoint", true);
+            p.put("entrypoint_frameworks", c.getEntrypointFrameworks());
         }
         putLines(p, c.getSpan());
         p.put("_module", fileKey);

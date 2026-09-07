@@ -97,9 +97,16 @@ public final class V2SchemaCatalog {
     private static List<NodeLabel> buildNodeLabels() {
         List<NodeLabel> n = new ArrayList<>();
 
+        // `entrypoint_frameworks` / `entrypoint_report_json` (#234) are ALWAYS set, even when empty:
+        // the entrypoint pass under-approximates by design, so a consumer must be able to tell "this
+        // application has no entrypoints" from "the pass found nothing". An absent report and an empty
+        // one reading the same is the failure this record exists to prevent. Mirrors what
+        // codeanalyzer-python projects onto :PyApplication.
         n.add(node("JApplication", "JApplication", "name",
                 new P().put("name", "string").put("schema_version", "string")
-                        .put("analyzer_name", "string").put("analyzer_version", "string").done()));
+                        .put("analyzer_name", "string").put("analyzer_version", "string")
+                        .put("entrypoint_frameworks", "string[]")
+                        .put("entrypoint_report_json", "string").done()));
 
         n.add(node("JModule", "JModule", "id",
                 new P().put("id", "string").put("file_key", "string").put("package", "string")
@@ -109,7 +116,7 @@ public final class V2SchemaCatalog {
                 lines(new P().put("id", "string").put("name", "string").put("kind", "string")
                         .put("modifiers", "string[]").put("base_types", "string[]")
                         .put("interfaces", "string[]").put("docstring", "string")
-                        .put("is_entrypoint", "boolean"))));
+                        .put("is_entrypoint", "boolean").put("entrypoint_frameworks", "string[]"))));
 
         n.add(node("JCallable", "JSymbol", "id",
                 lines(new P().put("id", "string").put("name", "string").put("signature", "string")
@@ -119,6 +126,7 @@ public final class V2SchemaCatalog {
                         .put("cyclomatic_complexity", "integer")
                         .put("referenced_types", "string[]").put("accessed_fields", "string[]")
                         .put("is_implicit", "boolean").put("is_entrypoint", "boolean")
+                        .put("entrypoint_frameworks", "string[]")
                         )));
 
         n.add(node("JExternal", "JSymbol", "id",

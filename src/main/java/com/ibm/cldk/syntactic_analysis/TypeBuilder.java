@@ -15,7 +15,7 @@ import com.github.javaparser.ast.body.Parameter;
 import com.github.javaparser.ast.body.RecordDeclaration;
 import com.github.javaparser.ast.body.TypeDeclaration;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
-import com.ibm.cldk.javaee.EntrypointsFinderFactory;
+import com.ibm.cldk.javaee.EntrypointScan;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JCallable;
 import com.ibm.cldk.schema.JEnumConstant;
@@ -62,8 +62,9 @@ public final class TypeBuilder {
         type.setId(CanId.childId(parentId, td.getNameAsString()));
         type.setKind(kindOf(td));
         type.setSpan(ctx.spanOf(td));
-        type.setEntrypointClass(
-                EntrypointsFinderFactory.getEntrypointFinders().anyMatch(f -> f.isEntrypointClass(td)));
+        List<String> entrypointFrameworks = EntrypointScan.classFrameworks(td, ctx.getEntrypointReport());
+        type.setEntrypointFrameworks(entrypointFrameworks);
+        type.setEntrypointClass(!entrypointFrameworks.isEmpty());
         type.setComments(ctx.commentsOf(td));
         type.setModifiers(
                 td.getModifiers().stream().map(m -> m.getKeyword().asString()).collect(Collectors.toList()));

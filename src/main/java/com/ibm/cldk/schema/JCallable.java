@@ -62,6 +62,13 @@ public class JCallable {
     /** True when a framework finder recognises this callable as an entrypoint (e.g. a Spring route). */
     private boolean isEntrypoint;
 
+    /**
+     * Which finders recognised it, in finder order — {@code ["spring"]} for a {@code @GetMapping}
+     * method. Mirrors codeanalyzer-python's {@code PyCallable.entrypoint_frameworks}. Empty exactly
+     * when {@code isEntrypoint} is false.
+     */
+    private List<String> entrypointFrameworks = new ArrayList<>();
+
     private JMetrics metrics;
     private JRefs refs;
 

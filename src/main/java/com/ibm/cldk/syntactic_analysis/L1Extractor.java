@@ -13,6 +13,7 @@ import com.github.javaparser.utils.ParserCollectionStrategy;
 import com.github.javaparser.utils.ProjectRoot;
 import com.github.javaparser.utils.SourceRoot;
 import com.ibm.cldk.schema.CanId;
+import com.ibm.cldk.schema.JEntrypointReport;
 import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.utils.Log;
 import java.io.IOException;
@@ -104,6 +105,22 @@ public final class L1Extractor {
             Path projectRoot, String appName, Path dependencyDir, Map<String, JModule> cached,
             int analysisLevel, int graphFieldDepth, String l3Engine)
             throws IOException {
+        return extractAll(projectRoot, appName, dependencyDir, cached, analysisLevel, graphFieldDepth,
+                l3Engine, new JEntrypointReport());
+    }
+
+    /**
+     * As above, accumulating the entrypoint pass's failures into the caller's {@code entrypointReport}
+     * — an IN parameter rather than a second return value, so the map-returning signature above stays
+     * the one every caller already uses. It records only what happened in THIS run: a module served
+     * from the cache runs no finders, so it contributes nothing here (its per-node
+     * {@code entrypoint_frameworks} still carries the attribution, which is why the application-level
+     * {@code frameworks_detected} is a union over the tree rather than a tally kept here).
+     */
+    public static Map<String, JModule> extractAll(
+            Path projectRoot, String appName, Path dependencyDir, Map<String, JModule> cached,
+            int analysisLevel, int graphFieldDepth, String l3Engine, JEntrypointReport entrypointReport)
+            throws IOException {
         // JavaParser's collection strategy silently finds zero source roots for a path with a `.`
         // element (`-i .` arrives here as exactly that), so normalize before discovery.
         projectRoot = projectRoot.toAbsolutePath().normalize();
@@ -133,7 +150,8 @@ public final class L1Extractor {
                 // real file, byte for byte.
                 String source = Files.readString(path, StandardCharsets.UTF_8);
                 L1BuildContext ctx = new L1BuildContext(
-                        applicationId, fileKey, source, analysisLevel, graphFieldDepth, l3Engine);
+                        applicationId, fileKey, source, analysisLevel, graphFieldDepth, l3Engine,
+                        entrypointReport);
 
                 // Reuse the cached module when the file is byte-for-byte what it was last time. This
                 // skips the parse as well as the build, which is where the cost is.
