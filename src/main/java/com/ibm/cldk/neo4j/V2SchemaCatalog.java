@@ -21,7 +21,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The schema v2 Neo4j graph catalog (graph contract {@code 2.2.0}) — the in-repo source of truth
+ * The schema v2 Neo4j graph catalog (graph contract {@link #SCHEMA_VERSION}) — the in-repo source of truth
  * for what {@link V2GraphProjector} may emit, serialized by {@code --emit schema} and enforced by
  * the v2 conformance test. Uses {@code J}/{@code J_} namespacing so this graph can share a database
  * with a sibling language's analyzer; java-only constructs (enum constants, record components,
@@ -54,6 +54,11 @@ public final class V2SchemaCatalog {
     // number stays put a consumer cannot detect that removal from the version alone. The fix is a
     // coordinated re-baseline across all three analyzers, not a unilateral bump here — see
     // codellm-devkit/.github#50.
+    //
+    // The config-read relationships (#232) and the entrypoint properties (#234) ride this held
+    // baseline for the same reason and carry the same cost: they are additive over labels 2.0.0
+    // already reserves, and a consumer cannot detect them from the version alone. Detection is by
+    // presence until #50 lands. Do not bump this to advertise them.
     public static final String SCHEMA_VERSION = "2.0.0";
 
     /** Labels layered onto a node in addition to its merge + specific labels. */

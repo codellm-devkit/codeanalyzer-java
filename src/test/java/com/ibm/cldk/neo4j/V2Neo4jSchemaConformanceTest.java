@@ -55,7 +55,7 @@ import org.junit.jupiter.api.io.TempDir;
  * Schema v2 graph conformance (no container needed): run the real L1–L3 pipeline plus the L4 SDG
  * passes ({@link SdgVertices}, {@link SummaryPass}) over a fixture, project with
  * {@link V2GraphProjector}, and assert the projector only ever produces what
- * {@link V2SchemaCatalog} declares — the anti-drift guard for the 2.2.0 graph contract. Also pins
+ * {@link V2SchemaCatalog} declares — the anti-drift guard for the graph contract. Also pins
  * the convergence decisions: body nodes instead of call-site nodes, and the {@code _k}-keyed
  * CFG/DDG relationships.
  */
@@ -243,7 +243,7 @@ public class V2Neo4jSchemaConformanceTest {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Repository-artifact layer (Task 7): Artifact/Package/ConfigKey, graph contract 2.2.0.
+    // Repository-artifact layer (Task 7): Artifact/Package/ConfigKey.
     // ------------------------------------------------------------------------------------------
 
     @Test
