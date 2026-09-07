@@ -36,6 +36,7 @@ import com.ibm.cldk.schema.V2Json;
 import com.ibm.cldk.syntactic_analysis.L1Cache;
 import com.ibm.cldk.syntactic_analysis.L1Extractor;
 import com.ibm.cldk.syntactic_analysis.L2CallGraph;
+import com.ibm.cldk.syntactic_analysis.dataflow.SdgPortEdges;
 import com.ibm.cldk.syntactic_analysis.dataflow.SdgVertices;
 import com.ibm.cldk.syntactic_analysis.dataflow.SummaryPass;
 import com.ibm.cldk.utils.BuildProject;
@@ -569,6 +570,9 @@ public class CodeAnalyzer implements Runnable {
                 sdg = SdgVertices.apply(modules);
                 // Summaries read the vertices SdgVertices just added, so this must follow it.
                 SummaryPass.apply(modules, l2.callGraph(), graphFieldDepth);
+                // Joins those vertices to the statement ddg (#227). Strictly last: summaries are
+                // computed from the statement-level ddg alone, as they always were.
+                SdgPortEdges.apply(modules);
             }
             analysis = V2Emitter.emit(application, analysisLevel, modules, version,
                     l2.callGraph(), l2.externalSymbols(),
