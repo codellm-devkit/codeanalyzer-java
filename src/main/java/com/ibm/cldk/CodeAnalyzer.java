@@ -23,6 +23,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.ibm.cldk.artifacts.ArtifactDiscovery;
 import com.ibm.cldk.artifacts.ConfigKeys;
+import com.ibm.cldk.artifacts.ConfigUses;
 import com.ibm.cldk.artifacts.DependencyView;
 import com.ibm.cldk.entities.JavaCompilationUnit;
 import com.ibm.cldk.neo4j.BoltConfig;
@@ -581,6 +582,17 @@ public class CodeAnalyzer implements Runnable {
         } else {
             analysis = V2Emitter.emit(application, analysisLevel, modules, version,
                     null, null, null, null, artifacts, dependencies);
+        }
+
+        // Config reads join the L1 tree to the artifact layer's declared keys, so it runs after both
+        // exist and at every analysis level -- the literal tier needs no call graph. Absence means
+        // "no fact", so an empty result leaves both keys off the envelope.
+        ConfigUses.Result configReads = ConfigUses.detect(application, modules, artifacts);
+        if (!configReads.uses.isEmpty()) {
+            analysis.getApplication().setConfigUses(configReads.uses);
+        }
+        if (!configReads.unresolved.isEmpty()) {
+            analysis.getApplication().setConfigReadsUnresolved(configReads.unresolved);
         }
 
         if ("neo4j".equalsIgnoreCase(emit)) {
