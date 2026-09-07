@@ -24,6 +24,8 @@ import com.ibm.cldk.schema.JCdgEdge;
 import com.ibm.cldk.schema.JCfgEdge;
 import com.ibm.cldk.schema.JComment;
 import com.ibm.cldk.schema.JConfigKey;
+import com.ibm.cldk.schema.JConfigRead;
+import com.ibm.cldk.schema.JConfigUseEdge;
 import com.ibm.cldk.schema.JDdgEdge;
 import com.ibm.cldk.schema.JDecorator;
 import com.ibm.cldk.schema.JDependency;
@@ -162,6 +164,8 @@ public final class V2GraphProjector {
         }
 
         projectArtifacts(b, analysis.getApplication(), app);
+        // Strictly after projectArtifacts: J_USES_CONFIG addresses ConfigKey nodes that pass mints.
+        projectConfigUses(b, analysis.getApplication(), app);
 
         return b.finish();
     }
@@ -604,6 +608,78 @@ public final class V2GraphProjector {
             return typeIdByFqn.get(pkg + "." + spelling);
         }
         return null;
+    }
+
+    /**
+     * Config reads (#232): {@code J_USES_CONFIG} to the declared key, and
+     * {@code J_READS_CONFIG_UNRESOLVED} for a read that closed on none.
+     *
+     * <p>The source of a use edge is whichever of {@code JBodyNode} / {@code JCallable} /
+     * {@code JField} / {@code JType} the read was attributed to, so it is addressed through
+     * {@link RowBuilder#refTo} rather than a hard-coded label. A source or key this run did not emit
+     * is skipped rather than projected as a dangling endpoint.
+     *
+     * <p>The unresolved edge's {@code JExternal} ghost is MINTED here, not looked up: external
+     * symbols come from the L2 call graph, so a lookup would make every unresolved read invisible at
+     * L1 and absent whenever {@code --external-calls} is off — precisely the runs where the literal
+     * tier is the only tier there is.
+     */
+    private static void projectConfigUses(RowBuilder b, JApplication application, NodeRef app) {
+        if (application.getConfigUses() != null) {
+            for (JConfigUseEdge e : application.getConfigUses()) {
+                NodeRef src = b.refTo(e.getSrc());
+                NodeRef dst = b.refTo(e.getDst());
+                if (src == null || dst == null) {
+                    continue;
+                }
+                Map<String, Object> p = RowBuilder.props();
+                p.put("prov", e.getProv());
+                b.edge("J_USES_CONFIG", src, dst, RowBuilder.prune(p));
+            }
+        }
+
+        if (application.getConfigReadsUnresolved() != null) {
+            for (JConfigRead r : application.getConfigReadsUnresolved()) {
+                NodeRef ghost = externalGhost(b, r.getCallee());
+                if (ghost == null) {
+                    continue;
+                }
+                Map<String, Object> p = RowBuilder.props();
+                p.put("key", r.getKey());
+                p.put("reason", r.getReason());
+                p.put("prov", r.getProv());
+                // `_k` = (key, reason): one callee reads many undeclared keys across a codebase, and
+                // a plain endpoint-pair MERGE would keep only the last key SET.
+                b.keyedEdge("J_READS_CONFIG_UNRESOLVED", app, ghost, RowBuilder.prune(p),
+                        (r.getKey() == null ? "" : r.getKey()) + "|" + r.getReason());
+            }
+        }
+    }
+
+    /**
+     * Upsert the {@code :JExternal} row for an {@code @external} can-id, recovering its binary
+     * declaring type and signature from the id's own path segments. Merging is by id, so a callee
+     * already emitted from the L2 external-symbol set keeps the properties that pass gave it.
+     */
+    private static NodeRef externalGhost(RowBuilder b, String canId) {
+        if (canId == null) {
+            return null;
+        }
+        int at = canId.indexOf("/@external/");
+        if (at < 0) {
+            return null;
+        }
+        String rest = canId.substring(at + "/@external/".length());
+        int slash = rest.indexOf('/');
+        if (slash < 0) {
+            return null;
+        }
+        Map<String, Object> p = RowBuilder.props();
+        p.put("id", canId);
+        p.put("kind", "method");
+        p.put("declaring_type", rest.substring(0, slash).replace('$', '.'));
+        p.put("signature", rest.substring(slash + 1));
+        return b.node(SYMBOL_EXTERNAL, "id", canId, RowBuilder.prune(p));
     }
 
     /** Join the javadoc comments into one {@code docstring}; non-doc comments are not projected. */

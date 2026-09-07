@@ -246,6 +246,27 @@ public final class V2SchemaCatalog {
         r.add(rel("LOCKS", Arrays.asList("Artifact"), Arrays.asList("Package"),
                 new P().put("version", "string").done()));
 
+        // Config reads (#232). `J_`-prefixed even though the destination `ConfigKey` is an
+        // un-prefixed cross-language merge target, matching codeanalyzer-python's `PY_USES_CONFIG`:
+        // the SOURCE is language-specific, and one concept spelled two ways across analyzers is the
+        // parity failure. Consequence accepted: "which code reads this key, in any language" needs
+        // one MATCH per language rather than one over the shared node.
+        //
+        // The `from` list is a union, unlike python's body-node-only source: Java's dominant config
+        // idiom is `@Value` / `@ConfigurationProperties`, an annotation with no call site to anchor
+        // on (spec 2026-09-07 D1). A consumer must not assume the source is a body node.
+        r.add(rel("J_USES_CONFIG",
+                Arrays.asList("JBodyNode", "JCallable", "JField", "JType"),
+                Arrays.asList("ConfigKey"),
+                new P().put("prov", "string[]").done()));
+        // `_k` = (key, reason): one callee legitimately reads many undeclared keys across a codebase
+        // -- `System.getenv` most of all -- so without the discriminant a plain endpoint-pair MERGE
+        // collapses them onto one relationship and keeps only the last key SET.
+        r.add(rel("J_READS_CONFIG_UNRESOLVED",
+                Arrays.asList("JApplication"), Arrays.asList("JExternal"),
+                new P().put("key", "string").put("reason", "string").put("prov", "string[]")
+                        .put("_k", "string").done()));
+
         return r;
     }
 

@@ -46,6 +46,21 @@ public class JApplication {
     private List<JDependency> dependencies;
 
     /**
+     * Resolved config reads — code that reads a declared {@link JConfigKey}. L1 data like the
+     * artifact layer it joins to: the literal tier needs no call graph, because a {@code call} body
+     * node already carries {@code argument_expr} at L1 and an annotation is pure L1 data. Sorted by
+     * {@code (src, dst)}. {@code null} (absent) when nothing was detected.
+     */
+    private List<JConfigUseEdge> configUses;
+
+    /**
+     * Detected config reads that closed on no declared key. Kept first-class so a read nobody can
+     * trace stays as visible as one that resolves. Sorted by {@code (site, reason, key)}.
+     * {@code null} (absent) when there are none.
+     */
+    private List<JConfigRead> configReadsUnresolved;
+
+    /**
      * Coverage and failure record for the entrypoint pass. Unlike every other overlay on this node,
      * it is emitted <b>always, even when empty</b>: the pass under-approximates by design, so an
      * absent report and an empty one must not read the same.

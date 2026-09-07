@@ -494,6 +494,36 @@
       "properties": {
         "version": "string"
       }
+    },
+    {
+      "type": "J_USES_CONFIG",
+      "from": [
+        "JBodyNode",
+        "JCallable",
+        "JField",
+        "JType"
+      ],
+      "to": [
+        "ConfigKey"
+      ],
+      "properties": {
+        "prov": "string[]"
+      }
+    },
+    {
+      "type": "J_READS_CONFIG_UNRESOLVED",
+      "from": [
+        "JApplication"
+      ],
+      "to": [
+        "JExternal"
+      ],
+      "properties": {
+        "key": "string",
+        "reason": "string",
+        "prov": "string[]",
+        "_k": "string"
+      }
     }
   ],
   "constraints": [

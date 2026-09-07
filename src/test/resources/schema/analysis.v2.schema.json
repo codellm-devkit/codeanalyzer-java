@@ -129,7 +129,38 @@
           "additionalProperties": { "$ref": "#/$defs/artifact" }
         },
         "dependencies": { "type": "array", "items": { "$ref": "#/$defs/dependency" } },
+        "config_uses": { "type": "array", "items": { "$ref": "#/$defs/configUseEdge" } },
+        "config_reads_unresolved": {
+          "type": "array", "items": { "$ref": "#/$defs/configRead" }
+        },
         "entrypoint_report": { "$ref": "#/$defs/entrypointReport" }
+      }
+    },
+
+    "configUseEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["src", "dst", "prov"],
+      "properties": {
+        "src": {
+          "type": "string",
+          "description": "A body-node ordinal id, field id, callable id, or type id. Wider than codeanalyzer-python's body-node-only source: Java's dominant config idiom is an annotation, which has no call site to anchor on."
+        },
+        "dst": { "$ref": "#/$defs/artifactCanId" },
+        "prov": { "$ref": "#/$defs/stringList" }
+      }
+    },
+
+    "configRead": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["site", "callee", "reason", "prov"],
+      "properties": {
+        "site": { "type": "string" },
+        "callee": { "$ref": "#/$defs/externalCanId" },
+        "key": { "type": "string" },
+        "reason": { "enum": ["non-literal", "undefined-key"] },
+        "prov": { "$ref": "#/$defs/stringList" }
       }
     },
 
