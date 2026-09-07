@@ -423,6 +423,46 @@ materialize lazily (only via the unlabeled `getSuccNodes`/`getPredNodes`), so th
 node before reading labeled edges. Per-method PDG cost is negligible atop the reused RTA call graph + PA.
 Aligns with Horwitz–Reps–Binkley PDG/SDG and WALA's own `PDG`/`SDG`.
 
+### D30 — Config reads: `J_USES_CONFIG` with a widened `src`, literal at L1 + dataflow at L3/L4
+`application.config_uses[]` and `application.config_reads_unresolved[]` join `analysis.json`;
+`J_USES_CONFIG` and `J_READS_CONFIG_UNRESOLVED` join the Neo4j catalog. Names carry the `J_` prefix,
+matching codeanalyzer-python's `PY_USES_CONFIG` pair — the unprefixed spelling (which would make one
+`MATCH` answer across languages, since `:ConfigKey` is a shared merge target) was rejected because
+python has already shipped the prefixed name, and one concept spelled twice is the parity failure.
+Java diverges from python on two points, both deliberate. **(a)** `src` is a union, not just a call
+body node: Java's dominant config-read idiom is `@Value("${x}")` / `@ConfigurationProperties`, an
+annotation with no call site to anchor on, so `J_USES_CONFIG` runs from `JBodyNode` (call-site reads)
+*or* `JCallable`/`JField`/`JType` (annotation reads). Minting a synthetic body node per annotation was
+rejected — it invents a body-node `kind` with no AST region, a larger addition to the shared
+vocabulary than widening one endpoint list. **(b)** The literal tier runs at **L1**, not python's L2:
+`JBodyNode` already carries `argument_expr`/`receiver_type`/`method_name` at L1 and annotations are L1
+data, so nothing in the tier needs a call graph. The L3/L4 dataflow tier widens it over the DDG
+(`prov: ["dataflow"]`), additively — `config_uses(-a 1) ⊆ config_uses(-a 4)`, same contract as the
+DDG's `ssa` → `points-to` widening. Unresolved reads follow python exactly: `JApplication → JExternal`
+with `{key, reason, prov, _k}`, the ghost minted at detection time so a read stays visible at L1 and
+with `--external-calls` off, and `_k = "<key>|<reason>"` because one callee (`System.getenv`) reads
+many undeclared keys and a plain endpoint-pair MERGE would keep only the last.
+Spec: codellm-devkit/.github `docs/design/specs/2026-09-07-java-config-reads-and-entrypoint-report.md`.
+
+### D31 — Entrypoint report on the application root, python's four keys
+`application.entrypoint_report{frameworks_detected, rulesets, unresolved, errors}` — identical to
+`PyEntrypointReport` so one SDK model parses either analyzer's `entrypoint_report_json`. Java's
+`rulesets` is the five hardcoded finder names (Spring, JaxRs, Jakarta, Struts, Camel); that *is* Java's
+ruleset vocabulary, hardcoded rather than data-driven. `unresolved` counts per-finder near-misses,
+`errors` records a finder that threw. Projected as python does — `entrypoint_frameworks: string[]` plus
+sorted-key `entrypoint_report_json: string` on `:JApplication` — and **always present, even when
+empty**: the detection pass under-approximates by design, so an absent report and an empty one must not
+be the same observation. Before this, `:JApplication` carried only `name`/`schema_version`/
+`analyzer_name`/`analyzer_version`, and the 2,604 projected `:JEntrypoint` marks came with no record of
+how the pass that found them behaved.
+
+### Graph contract version, on both of the above
+`V2SchemaCatalog.SCHEMA_VERSION` does **not** move. Both additions are additive over labels the held
+`2.0.0` baseline already reserves, and a re-baseline is a coordinated cross-analyzer decision
+(codellm-devkit/.github#50), not a local bump. Recorded consequence: a consumer cannot detect
+`J_USES_CONFIG` or the entrypoint properties from `schema_version` alone — detection is by presence
+until #50 lands, the same gap the `_module` removal already lives with.
+
 ### Scope guard
 The analyzer is a **pure graph provider**: it emits the CFG/PDG/SDG substrate and
 stops. Slicing, taint, and reachability are **SDK queries** over the emitted graph
