@@ -50,7 +50,8 @@ import java.util.Map;
 
 /**
  * The schema v2 → Neo4j projection: a pure {@code (Analysis, appName) → GraphRows} function, no
- * I/O, no driver. The vocabulary is {@link V2SchemaCatalog} (graph contract 2.2.0): call sites
+ * I/O, no driver. The vocabulary is {@link V2SchemaCatalog} (whose {@code SCHEMA_VERSION} is the
+ * contract version; do not restate the number here): call sites
  * are {@code :JBodyNode} rows (no call-site nodes),
  * parameters flatten to {@code parameters_json}, javadoc collapses to {@code docstring}, and the
  * L3 {@code cfg}/{@code cdg}/{@code ddg} and L4 {@code param_in}/{@code param_out}/{@code summary}

@@ -44,7 +44,7 @@ public final class Schema {
             // graph stays constraint-protected in a shared database.
             "CREATE CONSTRAINT j_module_id IF NOT EXISTS FOR (m:JModule) REQUIRE m.id IS UNIQUE",
             "CREATE CONSTRAINT j_body_node_id IF NOT EXISTS FOR (bn:JBodyNode) REQUIRE bn.id IS UNIQUE",
-            // Repository-artifact layer (graph 2.2.0) additions — no `j_` prefix, matching the
+            // Repository-artifact layer additions — no `j_` prefix, matching the
             // labels themselves (Artifact/Package/ConfigKey are un-prefixed cross-language merge
             // targets, see V2SchemaCatalog). Names/alias match V2SchemaCatalog.uniquenessConstraints()'s
             // auto-derived output verbatim so the emitted schema.neo4j.json document and this
