@@ -39,6 +39,8 @@ public final class RowBuilder {
     private final List<EdgeRow> deferred = new ArrayList<>();
     /** Every node value seen, for resolved-gating. */
     private final Set<String> keys = new HashSet<>();
+    /** First {@link NodeRef} minted per node value, so an edge can address a node by id alone. */
+    private final Map<String, NodeRef> refByValue = new LinkedHashMap<>();
 
     /** Convenience: a new mutable props map. */
     public static Map<String, Object> props() {
@@ -106,7 +108,19 @@ public final class RowBuilder {
             nodes.put(id, new NodeRow(allLabels, keyProp, value, p, moduleKey));
         }
         keys.add(value);
-        return new NodeRef(labels.get(0), keyProp, value);
+        NodeRef ref = new NodeRef(labels.get(0), keyProp, value);
+        refByValue.putIfAbsent(value, ref);
+        return ref;
+    }
+
+    /**
+     * The {@link NodeRef} a node was minted under, or {@code null} if this run emitted no node with
+     * that id. Lets an edge whose source may be any of several node families -- J_USES_CONFIG, whose
+     * source is a body node, callable, field or type -- address it by id without the caller having to
+     * know which merge label it landed on.
+     */
+    public NodeRef refTo(String value) {
+        return refByValue.get(value);
     }
 
     /** The marker label carried by every node keyed on a {@code can://} id. */
