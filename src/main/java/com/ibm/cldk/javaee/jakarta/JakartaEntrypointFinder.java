@@ -11,6 +11,11 @@ import com.ibm.cldk.javaee.utils.interfaces.AbstractEntrypointFinder;
 @SuppressWarnings({"unchecked", "rawtypes"})
 public class JakartaEntrypointFinder extends AbstractEntrypointFinder {
     @Override
+    public String framework() {
+        return "jakarta";
+    }
+
+    @Override
     public boolean isEntrypointClass(TypeDeclaration typeDecl) {
         if (!(typeDecl instanceof ClassOrInterfaceDeclaration)) {
             return false;

@@ -7,6 +7,7 @@ import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.type.Type;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JComment;
+import com.ibm.cldk.schema.JEntrypointReport;
 import com.ibm.cldk.schema.Span;
 import com.ibm.cldk.schema.Spans;
 import com.ibm.cldk.utils.Log;
@@ -52,6 +53,14 @@ public final class L1BuildContext {
      */
     private final Set<String> unresolvedTypes = new HashSet<>();
 
+    /**
+     * The RUN-scoped entrypoint report, shared across every per-file context of one extraction so the
+     * finders' failures accumulate in one place. Never {@code null}: a context built without one gets
+     * its own throwaway, so a caller that does not want the report is not forced to allocate it and
+     * {@link com.ibm.cldk.javaee.EntrypointScan} never has to null-check on the hot path.
+     */
+    private final JEntrypointReport entrypointReport;
+
     public L1BuildContext(String applicationId, String fileKey, String source) {
         this(applicationId, fileKey, source, 1, 3, "ast");
     }
@@ -63,6 +72,13 @@ public final class L1BuildContext {
 
     public L1BuildContext(String applicationId, String fileKey, String source, int analysisLevel,
             int graphFieldDepth, String l3Engine) {
+        this(applicationId, fileKey, source, analysisLevel, graphFieldDepth, l3Engine,
+                new JEntrypointReport());
+    }
+
+    public L1BuildContext(String applicationId, String fileKey, String source, int analysisLevel,
+            int graphFieldDepth, String l3Engine, JEntrypointReport entrypointReport) {
+        this.entrypointReport = entrypointReport != null ? entrypointReport : new JEntrypointReport();
         this.applicationId = applicationId;
         this.fileKey = fileKey;
         this.source = source;

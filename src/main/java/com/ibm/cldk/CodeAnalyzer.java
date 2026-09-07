@@ -26,11 +26,13 @@ import com.ibm.cldk.artifacts.ConfigKeys;
 import com.ibm.cldk.artifacts.ConfigUses;
 import com.ibm.cldk.artifacts.DependencyView;
 import com.ibm.cldk.entities.JavaCompilationUnit;
+import com.ibm.cldk.javaee.EntrypointScan;
 import com.ibm.cldk.neo4j.BoltConfig;
 import com.ibm.cldk.neo4j.Neo4jEmitter;
 import com.ibm.cldk.schema.Analysis;
 import com.ibm.cldk.schema.JArtifact;
 import com.ibm.cldk.schema.JDependency;
+import com.ibm.cldk.schema.JEntrypointReport;
 import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.schema.V2Emitter;
 import com.ibm.cldk.schema.V2Json;
@@ -477,10 +479,12 @@ public class CodeAnalyzer implements Runnable {
         Map<String, JModule> modules;
         List<L2CallGraph.RtaEndpoint> rtaEndpoints = null;
         WalaAnalysis wala = null;
+        // Run-scoped: the finders' failures accumulate across every file of one extraction.
+        JEntrypointReport entrypointReport = new JEntrypointReport();
         try {
             modules = L1Extractor.extractAll(
                     Paths.get(input), application, dependencyDir, cached,
-                    analysisLevel, graphFieldDepth, l3Engine);
+                    analysisLevel, graphFieldDepth, l3Engine, entrypointReport);
             // The WALA L3 engine needs the RTA build; --no-rta suppresses it, so a level-3 wala run with
             // --no-rta would silently carry no overlays. Warn rather than degrade without a signal.
             if (analysisLevel >= 3 && noRta && "wala".equalsIgnoreCase(l3Engine)) {
@@ -583,6 +587,12 @@ public class CodeAnalyzer implements Runnable {
             analysis = V2Emitter.emit(application, analysisLevel, modules, version,
                     null, null, null, null, artifacts, dependencies);
         }
+
+        // frameworks_detected is a union over the BUILT tree, so it must run after the modules are
+        // final -- and it is correct on a warm cache for the same reason, where a tally kept during
+        // the walk would not be.
+        EntrypointScan.completeReport(entrypointReport, modules);
+        analysis.getApplication().setEntrypointReport(entrypointReport);
 
         // Config reads join the L1 tree to the artifact layer's declared keys, so it runs after both
         // exist and at every analysis level -- the literal tier needs no call graph. Absence means

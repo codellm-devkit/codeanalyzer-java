@@ -59,4 +59,11 @@ public class JApplication {
      * {@code null} (absent) when there are none.
      */
     private List<JConfigRead> configReadsUnresolved;
+
+    /**
+     * Coverage and failure record for the entrypoint pass. Unlike every other overlay on this node,
+     * it is emitted <b>always, even when empty</b>: the pass under-approximates by design, so an
+     * absent report and an empty one must not read the same.
+     */
+    private JEntrypointReport entrypointReport = new JEntrypointReport();
 }

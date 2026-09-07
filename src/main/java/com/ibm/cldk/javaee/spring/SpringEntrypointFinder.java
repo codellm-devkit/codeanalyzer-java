@@ -10,6 +10,11 @@ import java.util.List;
 
 public class SpringEntrypointFinder extends AbstractEntrypointFinder {
     @Override
+    public String framework() {
+        return "spring";
+    }
+
+    @Override
     public boolean isEntrypointClass(TypeDeclaration typeDeclaration) {
         List<AnnotationExpr> annotations = typeDeclaration.getAnnotations();
         for (AnnotationExpr annotation : annotations) {
