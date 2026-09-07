@@ -19,6 +19,7 @@ import com.ibm.cldk.L3WalaOverlays.TypeEntry;
 import com.ibm.cldk.schema.JCallable;
 import com.ibm.cldk.schema.JDdgEdge;
 import com.ibm.cldk.schema.JModule;
+import com.ibm.cldk.syntactic_analysis.dataflow.DdgEdges;
 import com.ibm.cldk.utils.Log;
 import com.ibm.cldk.wala.InstructionToNode;
 import com.ibm.cldk.wala.WalaAnalysis;
@@ -261,7 +262,9 @@ public final class L4WalaOverlays {
         }
 
         int added = 0;
-        for (JDdgEdge edge : produced) {
+        // An unmapped WALA instruction maps to the "<line>:0" sentinel, which names no body node;
+        // an edge on one is unfollowable in JSON and unwritable in Neo4j, so it never lands (#228).
+        for (JDdgEdge edge : DdgEdges.dropDangling(callable, produced)) {
             if (!edge.getProv().contains("points-to")) {
                 continue;
             }

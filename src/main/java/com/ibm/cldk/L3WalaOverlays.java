@@ -23,11 +23,13 @@ import com.github.javaparser.ast.body.TypeDeclaration;
 import com.github.javaparser.ast.stmt.BlockStmt;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JCallable;
+import com.ibm.cldk.schema.JDdgEdge;
 import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.schema.JType;
 import com.ibm.cldk.syntactic_analysis.L1BuildContext;
 import com.ibm.cldk.syntactic_analysis.controlflow.BodyNodeBuilder;
 import com.ibm.cldk.syntactic_analysis.controlflow.ControlFlowGraph;
+import com.ibm.cldk.syntactic_analysis.dataflow.DdgEdges;
 import com.ibm.cldk.utils.Log;
 import com.ibm.cldk.wala.InstructionToNode;
 import com.ibm.cldk.wala.WalaAnalysis;
@@ -87,6 +89,7 @@ public final class L3WalaOverlays {
         int matched = 0;
         int skippedNoMatch = 0;
         int totalOverApprox = 0;
+        int droppedDangling = 0;
 
         for (MethodIr m : wala.applicationMethods()) {
             Optional<Joined> joinedOpt = join(m, typeIndex, parseCache, modules);
@@ -125,7 +128,11 @@ public final class L3WalaOverlays {
             callable.setBody(cfg.nodes());
             callable.setCfg(cfg.toCfgEdges());
             callable.setCdg(pdg.cdg);
-            callable.setDdg(pdg.ddg);
+            // An edge whose endpoint is an unmapped sentinel names no body node, so no consumer can
+            // follow it (issue #228). The body is already set above, so the guard sees the final map.
+            List<JDdgEdge> resolved = DdgEdges.dropDangling(callable, pdg.ddg);
+            droppedDangling += pdg.ddg.size() - resolved.size();
+            callable.setDdg(resolved);
 
             matched++;
             totalOverApprox += mapper.overApproximationCount();
@@ -133,7 +140,8 @@ public final class L3WalaOverlays {
 
         Log.info("L3 WALA overlays applied: " + matched + " callable(s) covered, "
                 + skippedNoMatch + " skipped (no source match), "
-                + totalOverApprox + " sentinel over-approximation(s)");
+                + totalOverApprox + " sentinel over-approximation(s), "
+                + droppedDangling + " unresolved ddg edge(s) dropped");
     }
 
     // ----- the WALA-method → JCallable join -----------------------------------------------------
