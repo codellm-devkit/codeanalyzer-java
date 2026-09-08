@@ -137,24 +137,25 @@ class CypherWriterStreamingTest {
     @Test
     void theWipePreambleMatchesAV2RootByIdAndALegacyV1RootByNameButNotAnotherApplication()
             throws IOException {
-        // v2 roots are keyed on `id` (Task 3), which is unique-constrained and exact -- but legacy
-        // v1 roots (GraphProjector.java) never write `id` at all, only `name`. An id-only match
-        // would orphan a prior v1 graph of the same app instead of replacing it; a name-only match
-        // reaches every OTHER application sharing that display name, since `name` stopped being
-        // unique once the id re-key landed. The predicate must do both without regressing either:
-        // `a.id = <id> OR (a.id IS NULL AND a.name = <name>)`.
+        // v2 roots are keyed on `id`, which is unique-constrained and exact -- but legacy v1 roots
+        // (GraphProjector.java) never write `id` at all, only `name`. An id-only match would orphan
+        // a prior v1 graph of the same app instead of replacing it; an ungated `a.name =` disjunct
+        // reaches every v2 root carrying that display name, including roots this analyzer never
+        // minted, since `name` stopped being unique once the id re-key landed. The predicate must
+        // do both without regressing either: `a.id = <id> OR (a.id IS NULL AND a.name = <name>)`.
+        // It does not separate two services sharing an --app-name -- CanId.applicationId is
+        // "can://" + appName, so those share an id and are one node regardless.
         String out = CypherWriter.renderCypher(new RowBuilder().finish(), "app");
 
         assertTrue(out.contains("a.id = 'can://app'"),
                 "must reach a v2 root of THIS app by its unique id, got: " + out);
         assertTrue(out.contains("a.id IS NULL AND a.name = 'app'"),
                 "must reach a legacy v1 root (no id) by name, guarded by id IS NULL, got: " + out);
-        // A same-named different v2 application has its OWN non-null id, so it can only be reached
-        // through a bare (unguarded) `a.name = ...` disjunct. Assert that disjunct does not exist:
-        // every `a.name =` in the predicate must be inside the `a.id IS NULL AND ...` guard.
+        // Every `a.name =` in the predicate must be inside the `a.id IS NULL AND ...` guard: an
+        // unguarded one reaches v2 roots this analyzer never minted that carry the same name.
         assertFalse(out.replace("a.id IS NULL AND a.name = 'app'", "").contains("a.name ="),
                 "a.name must never be matched outside the a.id IS NULL guard -- that would reach "
-                        + "a different application's v2 root sharing this display name, got: " + out);
+                        + "any v2 root carrying this display name, not just this app's, got: " + out);
         assertFalse(out.contains("JApplication {name:"),
                 "the wipe must not property-match :JApplication by its no-longer-unique name: " + out);
     }

@@ -157,8 +157,14 @@ public final class CypherWriter {
         // legacy v1 root (identifiable because v1 never writes `id`) -- v1 keys :JApplication on
         // name alone (GraphProjector.java), so an id-only match would orphan a prior v1 graph
         // instead of replacing it, breaking the very cross-generation guarantee this wipe exists
-        // for. A same-named DIFFERENT v2 application has its own non-null, non-matching id, so
-        // neither branch reaches it -- the id re-key's collision fix survives this widening.
+        // for. The `a.id IS NULL` guard confines the name branch to those legacy roots; an ungated
+        // `a.name =` disjunct would additionally reach every v2 root carrying this display name,
+        // including roots this analyzer never minted, so do not widen it.
+        //
+        // What this does NOT do -- and must not be documented as doing -- is separate two distinct
+        // applications sharing an --app-name. `CanId.applicationId` is `"can://" + appName`, so
+        // they share an id byte-for-byte and are ONE node; there is nothing here to tell apart.
+        // Distinct services need distinct `--app-name` values, not a wider predicate.
         return "MATCH (a:JApplication) WHERE a.id = " + cypherValue(CanId.applicationId(appName))
                 + " OR (a.id IS NULL AND a.name = " + cypherValue(appName) + ")\n"
                 + "OPTIONAL MATCH (a)-[:J_HAS_UNIT|J_HAS_MODULE]->(c)\n"

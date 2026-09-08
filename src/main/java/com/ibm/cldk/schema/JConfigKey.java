@@ -7,7 +7,7 @@ import lombok.Data;
 /**
  * A configuration key defined or referenced in an artifact — a property in a {@code .properties}
  * file, a YAML key path, an XML element, an environment variable, or a Dockerfile argument.
- * {@code id} is the canonical {@code can://artifact/<app>/<path>@key/<dotted.key>} reference, nesting
+ * {@code id} is the canonical {@code can://<app>/artifact/<path>@key/<dotted.key>} reference, nesting
  * under the artifact's id so the key is discoverable and addressable.
  *
  * <p>{@code namespace} is free-vocabulary (properties, yaml, xml, env, dockerfile) and identifies

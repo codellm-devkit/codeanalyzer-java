@@ -50,7 +50,13 @@ public final class CanId {
         return applicationId(appName) + "/" + LANG + "/@external/" + binaryType + "/" + signature;
     }
 
-    /** {@code can://<app>/artifact/<rel-path>} — language-neutral, now nested under the app. */
+    /**
+     * {@code can://<app>/artifact/<rel-path>} — a language-neutral artifact id, nested under the app
+     * rather than under a language. The {@code artifact} segment is deliberately chosen over
+     * {@code java} so a sibling-language analyzer scanning the same repository lands on the same
+     * node rather than a duplicate. {@code CypherWriter.DESCENDANTS} cites that sharing by name as
+     * the reason the artifact/config-key subtree stays outside every wipe.
+     */
     public static String artifactId(String appName, String relPath) {
         return applicationId(appName) + "/artifact/" + relPath;
     }

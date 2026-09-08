@@ -72,7 +72,7 @@ public final class L1Extractor {
      * Build the v2 symbol table for a project.
      *
      * @param projectRoot the project's root directory
-     * @param appName the application name — the {@code can://java/<app>} segment of every id
+     * @param appName the application name — the {@code can://<app>} prefix of every id
      * @param dependencyDir directory of dependency jars to put on the solver's path, or {@code null};
      *     missing or unreadable jars are skipped rather than failing the analysis
      * @return modules keyed by relative file path, iterated in sorted key order for determinism

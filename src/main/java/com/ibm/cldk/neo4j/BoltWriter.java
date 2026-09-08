@@ -52,7 +52,7 @@ public final class BoltWriter implements BoltSink {
     /**
      * The v2 purge: scoped by the module's own {@code can://} id rather than by a bare file key.
      *
-     * <p>The id is a path — {@code can://java/<app>/<file>} — so matching the module itself by
+     * <p>The id is a path — {@code can://<app>/java/<file>} — so matching the module itself by
      * equality and its declarations by {@code id STARTS WITH <id> + '/'} is containment, and it is
      * simultaneously scoped to one language, one application and one module. That last one is what
      * neither a label anchor nor {@code _module} could give: two java applications sharing
@@ -78,10 +78,16 @@ public final class BoltWriter implements BoltSink {
      * The orphan prune: matches the application root by its {@code can://} {@code id} when it is a
      * v2 root (exact, unique-constrained), OR by {@code name} when it is a legacy v1 root --
      * identifiable because v1 never writes {@code id} (see {@code GraphProjector.java}). An
-     * id-only match would orphan a prior v1 graph instead of pruning it; a name-only match would
-     * reach every OTHER application sharing that display name, since {@code name} stopped being
-     * unique-constrained once the root was re-keyed (Task 3). A same-named different v2
-     * application has its own non-null, non-matching id, so neither branch reaches it.
+     * id-only match would orphan a prior v1 graph instead of pruning it; an ungated
+     * {@code a.name =} disjunct would reach every v2 root carrying that display name -- including
+     * roots this analyzer never minted -- since {@code name} stopped being unique-constrained once
+     * the root was re-keyed. Hence the {@code a.id IS NULL} guard, which confines the name branch
+     * to legacy roots.
+     *
+     * <p>This does <b>not</b> separate two distinct applications sharing an {@code --app-name}:
+     * {@link com.ibm.cldk.schema.CanId#applicationId} is {@code "can://" + appName}, so they share
+     * an id byte-for-byte and are one node. Distinct services need distinct {@code --app-name}
+     * values; no predicate here can recover a distinction the id never encoded.
      */
     static final String PRUNE_VANISHED_UNITS_V2 =
             "MATCH (a:JApplication)-[:J_HAS_UNIT|J_HAS_MODULE]->(c) "
@@ -92,8 +98,8 @@ public final class BoltWriter implements BoltSink {
 
     /**
      * The prefix that matches a module's declarations but not a sibling module whose path merely
-     * starts the same way. The separator is the whole point: {@code can://java/app/src/Foo.java}
-     * is also a prefix of {@code can://java/app/src/Foo.javaX}, so a bare {@code STARTS WITH} on
+     * starts the same way. The separator is the whole point: {@code can://app/java/src/Foo.java}
+     * is also a prefix of {@code can://app/java/src/Foo.javaX}, so a bare {@code STARTS WITH} on
      * the module id would purge a different module's nodes. The module itself is matched by
      * equality instead, since its own id does not end in a separator.
      */

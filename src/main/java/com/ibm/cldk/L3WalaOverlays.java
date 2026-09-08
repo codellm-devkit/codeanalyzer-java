@@ -365,7 +365,7 @@ public final class L3WalaOverlays {
     // ----- applicationId derivation -------------------------------------------------------------
 
     /**
-     * Derives the {@code can://java/<app>} applicationId from the first entry in {@code modules}.
+     * Derives the {@code can://<app>} applicationId from the first entry in {@code modules}.
      * The module id has the form {@code applicationId/normalizedFileKey}, so strip the suffix.
      */
     private static String deriveApplicationId(Map<String, JModule> modules) {

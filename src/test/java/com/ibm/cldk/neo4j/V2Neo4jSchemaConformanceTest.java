@@ -454,8 +454,10 @@ public class V2Neo4jSchemaConformanceTest {
 
     @Test
     void twoApplicationsProjectAsTwoDistinctRoots() {
-        // The multi-service failure mode: before this change both merged onto one :JApplication
-        // keyed on the free-text --app-name, with no diagnostic.
+        // Two DIFFERENTLY-named services: the root is keyed on `can://<app-name>`, so each gets
+        // its own id and its own prefix, and neither's wipe reaches the other. Two services sharing
+        // an --app-name would still be one node -- the id is derived from the name, so it cannot
+        // encode a distinction the operator did not make.
         GraphRows a = V2GraphProjector.project(
                 V2Emitter.emit("svc-quotes", 1, Map.of(), "test"), "svc-quotes");
         GraphRows b = V2GraphProjector.project(
@@ -465,7 +467,7 @@ public class V2Neo4jSchemaConformanceTest {
                 .findFirst().orElseThrow().value;
         String idb = b.nodes.stream().filter(n -> n.labels.contains("JApplication"))
                 .findFirst().orElseThrow().value;
-        assertNotEquals(ida, idb, "two services must not share a root node");
+        assertNotEquals(ida, idb, "two differently-named services must not share a root node");
         assertEquals(CanId.applicationId("svc-quotes"), ida);
         assertEquals(CanId.applicationId("svc-orders"), idb);
     }

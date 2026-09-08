@@ -243,7 +243,10 @@ the same repository lands on the same nodes instead of a per-language duplicate.
 
 Every node id is `can://<app>/java/…`, so `can://<app>` is a prefix of every node the
 application emits — which is what the destructive statements scope on. `:JApplication` is keyed on
-that id, not on `--app-name`, so two applications analyzed under the same name stay two nodes.
+that id, not on the free-text `--app-name`, so the root is addressable by the same id its
+descendants are prefixed with. The id is derived from `--app-name` (`can://<app-name>`), so it does
+**not** disambiguate two services analyzed under the same name — those still merge onto one root.
+Give each service its own `--app-name` if they share a database.
 
 **Configuration reads.** `DEFINES_CONFIG` says which artifact declares a key; `J_USES_CONFIG` says
 which code reads one. Its source is whichever node the read was attributed to — a `:JBodyNode` for
