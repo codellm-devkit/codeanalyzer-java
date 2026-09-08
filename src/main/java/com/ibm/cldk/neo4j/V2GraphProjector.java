@@ -74,7 +74,11 @@ public final class V2GraphProjector {
         RowBuilder b = new RowBuilder();
         Map<String, JModule> symbolTable = analysis.getApplication().getSymbolTable();
 
-        String appId = analysis.getApplication().getId();
+        // Unguarded this yields `MERGE (:JApplication {id: null})` -- an unkeyed root that every
+        // id-scoped wipe and prune misses. Unreachable via CodeAnalyzer (V2Emitter always stamps
+        // it), but this is a public entry point.
+        String appId = java.util.Objects.requireNonNull(analysis.getApplication().getId(),
+                "application.id is null -- the can:// root id must be stamped by V2Emitter before projection");
         Map<String, Object> appProps = RowBuilder.props();
         appProps.put("id", appId);
         appProps.put("name", appName);
