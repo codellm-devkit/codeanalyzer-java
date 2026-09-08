@@ -46,9 +46,11 @@ class CanIdTest {
     }
 
     @Test
-    void externalIdIsAppThenLanguage() {
+    void externalIdIsLanguageNeutralUnderTheApp() {
+        // No `/java/` segment: @external sits where the language sits for code nodes, so a sibling
+        // analyzer over the same app mints the same id and merges onto the same node (#244).
         assertEquals(
-                "can://daytrader8/java/@external/java.util.Map/get(java.lang.Object)",
+                "can://daytrader8/@external/java.util.Map/get(java.lang.Object)",
                 CanId.externalId("daytrader8", "java.util.Map", "get(java.lang.Object)"));
     }
 
