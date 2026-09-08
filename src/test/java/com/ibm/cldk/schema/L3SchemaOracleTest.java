@@ -103,7 +103,7 @@ class L3SchemaOracleTest {
 
     @Test
     void aCfgEdgeWithACanIdEndpointIsRejected() throws IOException {
-        assertRejected(payload("\"cfg\":[{\"src\":\"" + CanId.applicationId("x") + "\",\"dst\":\"2:5\",\"kind\":\"true\"}]"),
+        assertRejected(payload("\"cfg\":[{\"src\":\"" + CALLABLE_ID + "\",\"dst\":\"2:5\",\"kind\":\"true\"}]"),
                 "cfg endpoints are body-node local ids, not can:// ids");
     }
 
