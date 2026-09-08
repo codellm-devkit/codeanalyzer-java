@@ -9,12 +9,38 @@ and emits them either as the canonical `analysis.json`, or as a **Neo4j property
 
 ## Quick install
 
-From PyPI, with a bundled JVM (no system Java needed). Installs a `canjv` launcher:
+From PyPI, with a bundled JVM. Installs a `canjv` launcher:
 
 ```sh
 pip install codeanalyzer-java
-canjv -i /path/to/project -a 2 -o ./out
+canjv -i /path/to/project -a 1 -o ./out
 ```
+
+> [!IMPORTANT]
+> **The bundled JVM is a JRE, and it is only enough for `-a 1`.** `pip install` pulls
+> [`jdk4py`](https://pypi.org/project/jdk4py/), whose runtime has `java` but **no `javac`**.
+>
+> **`-a 2` and above need a real JDK on `JAVA_HOME`.** From level 2 the analyzer shells out to
+> your project's Maven or Gradle wrapper to resolve dependencies and compile the application —
+> WALA reads the *compiled classes*, not the source — so a JRE cannot get you a call graph:
+>
+> ```sh
+> export JAVA_HOME=/path/to/a/real/jdk   # Java 11+, must contain bin/javac
+> canjv -i /path/to/project -a 2 -o ./out
+> ```
+>
+> **Without it the analyzer still exits 0.** It degrades and says so on stderr, but a caller
+> reading only the exit code sees success:
+>
+> ```
+> [WARN]  RTA call graph unavailable (RuntimeException: No application classes found.); emitting declared edges only
+> [WARN]  L4 semantic ddg unavailable (WALA build failed); emitting the derived SDG vertices and param edges only
+> ```
+>
+> You get declared call edges and the syntactic DDG; you do not get the RTA overlay or the
+> alias-aware `prov: ["points-to"]` edges. Check for those warnings, not just the exit status.
+>
+> `--emit neo4j` always projects at full depth regardless of `-a`, so it needs a JDK too.
 
 Or grab the latest release jar and a `codeanalyzer` launcher (requires a Java 11+ runtime):
 
@@ -289,6 +315,29 @@ RUN_CONTAINER_TESTS=1 ./gradlew test
       c. Then build using the instructions in [§3.3](./README.md#33-build-the-project).
 
    The problem should be resolved.
+
+2. I passed `--no-build`, but Maven still ran and wrote jars into my project.
+
+   Expected, and the flag's description undersells it. `--no-build` suppresses the *application*
+   build that WALA needs — it does not suppress **dependency resolution**, which runs at every
+   level so that third-party types resolve to qualified names instead of degrading to bare
+   spellings. That step invokes your project's wrapper:
+
+   ```sh
+   mvnw --no-transfer-progress -f <pom> dependency:copy-dependencies \
+        -DoutputDirectory=<project>/target/_library_dependencies -Doverwrite=true --fail-never
+   ```
+
+   So it writes into `<project>/target/_library_dependencies/` even under `--no-build`, and
+   prints `BUILD SUCCESS`. It compiles nothing.
+
+3. With `--no-build` I get `No application classes found` and no call graph.
+
+   `--no-build` means "I have already built this application" — the analyzer takes you at your
+   word and skips the compile. WALA then finds no classes under `target/classes`, because
+   dependency resolution (above) does not produce any. Either build the project first, or drop
+   `--no-build` and give the analyzer a real JDK (see the note in [Quick install](#quick-install)
+   — the bundled `jdk4py` runtime has no `javac`).
 
 ## LICENSE
 
