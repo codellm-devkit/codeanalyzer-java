@@ -4,7 +4,7 @@ package com.ibm.cldk.schema;
  * Canonical {@code can://} id construction for schema v2.
  *
  * <p>Durable ids (&ge; callable) are containment paths
- * {@code can://java/<app>/<file>/<type>/<callable-signature>}; ordinal ids (&lt; callable) are
+ * {@code can://<app>/java/<file>/<type>/<callable-signature>}; ordinal ids (&lt; callable) are
  * {@code <callable-id>@<tag>} where {@code <tag>} is a source position {@code line:col} (real
  * nodes) or a synthetic tag (e.g. {@code entry}). Pure functions; ids are opaque handles (the
  * {@code <file>} segment itself may contain {@code /}).
@@ -13,18 +13,21 @@ public final class CanId {
 
     private CanId() {}
 
-    /** The scheme + language segment for this analyzer's ids. */
-    public static final String SCHEME = "can://java";
+    /** The scheme prefix. The language is no longer part of it — see {@link #LANG}. */
+    public static final String SCHEME = "can://";
 
-    /** {@code can://java/<app>}. */
+    /** This analyzer's language segment, which now sits INSIDE the app rather than above it. */
+    public static final String LANG = "java";
+
+    /** {@code can://<app>} — the application root, and the prefix every id below it shares. */
     public static String applicationId(String appName) {
-        return SCHEME + "/" + appName;
+        return SCHEME + appName;
     }
 
-    /** {@code <applicationId>/<relative-file-key>} (separators normalized to {@code /}). */
+    /** {@code <applicationId>/java/<relative-file-key>} (separators normalized to {@code /}). */
     public static String moduleId(String applicationId, String fileKey) {
         String rel = fileKey.replace("\\", "/").replaceFirst("^[./]+", "");
-        return applicationId + "/" + rel;
+        return applicationId + "/" + LANG + "/" + rel;
     }
 
     /** {@code <parentId>/<segment>} — one downward step in the containment path. */
@@ -38,22 +41,18 @@ public final class CanId {
     }
 
     /**
-     * {@code can://java/<app>/@external/<binary-type>/<signature>} — a callable outside the project.
+     * {@code can://<app>/java/@external/<binary-type>/<signature>} — a callable outside the project.
      * Positionally parallel to an in-project callable id with {@code @external} in the file slot (D19);
      * the type is a <em>binary</em> name ({@code java.util.Map$Entry}) so the id is unambiguous and
      * joins WALA natively.
      */
     public static String externalId(String appName, String binaryType, String signature) {
-        return applicationId(appName) + "/@external/" + binaryType + "/" + signature;
+        return applicationId(appName) + "/" + LANG + "/@external/" + binaryType + "/" + signature;
     }
 
-    /**
-     * {@code can://artifact/<app>/<rel-path>} — a language-neutral artifact id. The {@code artifact}
-     * segment is deliberately chosen over {@code java} so a sibling-language analyzer scanning the same
-     * repository lands on the same node rather than a duplicate.
-     */
+    /** {@code can://<app>/artifact/<rel-path>} — language-neutral, now nested under the app. */
     public static String artifactId(String appName, String relPath) {
-        return "can://artifact/" + appName + "/" + relPath;
+        return applicationId(appName) + "/artifact/" + relPath;
     }
 
     /**
