@@ -51,7 +51,7 @@
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `CanId.applicationId(String appName)` → `can://<app>`; `CanId.externalId(String appName, String binaryType, String signature)` → `can://<app>/java/@external/<binaryType>/<signature>`; `CanId.artifactId(String appName, String relPath)` → `can://<app>/artifact/<relPath>`; `CanId.LANG` (`"java"`). `moduleId`, `childId`, `ordinalId`, `configKeyId`, `configKeyEnvDualMintId`, `purlMaven` keep their current signatures and behaviour.
+- Produces: `CanId.applicationId(String appName)` → `can://<app>`; `CanId.externalId(String appName, String binaryType, String signature)` → `can://<app>/java/@external/<binaryType>/<signature>`; `CanId.artifactId(String appName, String relPath)` → `can://<app>/artifact/<relPath>`; `CanId.LANG` (`"java"`); `moduleId(String applicationId, String fileKey)` keeps its signature but its OUTPUT changes — it now inserts the language segment, yielding `can://<app>/java/<file>`. `childId`, `ordinalId`, `configKeyId`, `configKeyEnvDualMintId`, `purlMaven` keep both their signatures and their behaviour.
 
 - [ ] **Step 1: Write the failing tests**
 
