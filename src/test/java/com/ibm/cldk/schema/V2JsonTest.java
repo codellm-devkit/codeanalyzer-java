@@ -85,7 +85,7 @@ class V2JsonTest {
     @Test
     void applicationCarriesIdKindAndFileKeyedSymbolTable() {
         JsonObject app = payload().getAsJsonObject("application");
-        assertEquals("can://java/myapp", app.get("id").getAsString());
+        assertEquals(CanId.applicationId("myapp"), app.get("id").getAsString());
         assertEquals("application", app.get("kind").getAsString());
         assertTrue(app.getAsJsonObject("symbol_table").has(FILE_KEY));
     }

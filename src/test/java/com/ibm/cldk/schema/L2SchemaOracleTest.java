@@ -29,6 +29,18 @@ class L2SchemaOracleTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    private static final String APP_ID = CanId.applicationId("myapp");
+    private static final String USER_TYPE =
+            CanId.childId(CanId.moduleId(APP_ID, "src/main/java/org/example/User.java"), "User");
+    private static final String USER_HELLO = USER_TYPE + "/helloString()";
+    private static final String USER_LOG = USER_TYPE + "/log()";
+    private static final String A_TYPE = CanId.childId(CanId.moduleId(APP_ID, "A.java"), "A");
+    private static final String A_F = A_TYPE + "/f()";
+    private static final String A_G = A_TYPE + "/g()";
+    private static final String STRING_VALUE_OF = CanId.externalId("myapp", "java.lang.String", "valueOf(int)");
+    private static final String STRING_CASE_ORDER =
+            CanId.externalId("myapp", "java.lang.String", "CASE_INSENSITIVE_ORDER");
+
     /** Wrap application-level members in an otherwise-minimal conformant envelope. */
     private static String payload(String applicationMembers) {
         return "{"
@@ -36,7 +48,7 @@ class L2SchemaOracleTest {
                 + "\"language\":\"java\","
                 + "\"max_level\":2,"
                 + "\"application\":{"
-                + "\"id\":\"can://java/myapp\","
+                + "\"id\":\"" + APP_ID + "\","
                 + "\"kind\":\"application\","
                 + "\"symbol_table\":{}"
                 + (applicationMembers.isEmpty() ? "" : "," + applicationMembers)
@@ -62,12 +74,12 @@ class L2SchemaOracleTest {
     }
 
     private static final String EDGE = "{"
-            + "\"src\":\"can://java/myapp/src/main/java/org/example/User.java/User/helloString()\","
-            + "\"dst\":\"can://java/myapp/src/main/java/org/example/User.java/User/log()\","
+            + "\"src\":\"" + USER_HELLO + "\","
+            + "\"dst\":\"" + USER_LOG + "\","
             + "\"prov\":[\"declared\",\"rta\"],"
             + "\"weight\":2}";
 
-    private static final String EXTERNAL = "\"can://java/myapp/@external/java.lang.String/valueOf(int)\":{"
+    private static final String EXTERNAL = "\"" + STRING_VALUE_OF + "\":{"
             + "\"kind\":\"method\","
             + "\"signature\":\"valueOf(int)\","
             + "\"declaring_type\":\"java.lang.String\"}";
@@ -86,8 +98,8 @@ class L2SchemaOracleTest {
     @Test
     void anEdgeMissingItsWeightIsRejected() throws IOException {
         assertRejected(payload("\"call_graph\":[{"
-                        + "\"src\":\"can://java/myapp/A.java/A/f()\","
-                        + "\"dst\":\"can://java/myapp/A.java/A/g()\","
+                        + "\"src\":\"" + A_F + "\","
+                        + "\"dst\":\"" + A_G + "\","
                         + "\"prov\":[\"declared\"]}]"),
                 "weight is the call-site count, so an edge without one asserts nothing about strength");
     }
@@ -95,8 +107,8 @@ class L2SchemaOracleTest {
     @Test
     void aZeroWeightEdgeIsRejected() throws IOException {
         assertRejected(payload("\"call_graph\":[{"
-                        + "\"src\":\"can://java/myapp/A.java/A/f()\","
-                        + "\"dst\":\"can://java/myapp/A.java/A/g()\","
+                        + "\"src\":\"" + A_F + "\","
+                        + "\"dst\":\"" + A_G + "\","
                         + "\"prov\":[\"declared\"],\"weight\":0}]"),
                 "an edge with no call sites behind it should not have been emitted at all");
     }
@@ -104,8 +116,8 @@ class L2SchemaOracleTest {
     @Test
     void anEdgeWithNoProvenanceIsRejected() throws IOException {
         assertRejected(payload("\"call_graph\":[{"
-                        + "\"src\":\"can://java/myapp/A.java/A/f()\","
-                        + "\"dst\":\"can://java/myapp/A.java/A/g()\","
+                        + "\"src\":\"" + A_F + "\","
+                        + "\"dst\":\"" + A_G + "\","
                         + "\"prov\":[],\"weight\":1}]"),
                 "every edge is attested by at least one analysis");
     }
@@ -115,8 +127,8 @@ class L2SchemaOracleTest {
         // `ast` is reserved for a future purely-syntactic fallback. Until something produces it, the
         // oracle accepting it would let a typo through as a new analysis name.
         assertRejected(payload("\"call_graph\":[{"
-                        + "\"src\":\"can://java/myapp/A.java/A/f()\","
-                        + "\"dst\":\"can://java/myapp/A.java/A/g()\","
+                        + "\"src\":\"" + A_F + "\","
+                        + "\"dst\":\"" + A_G + "\","
                         + "\"prov\":[\"ast\"],\"weight\":1}]"),
                 "L2 provenance is the closed enum [declared, rta]");
     }
@@ -125,7 +137,7 @@ class L2SchemaOracleTest {
     void anEdgeEndpointThatIsNotACanIdIsRejected() throws IOException {
         assertRejected(payload("\"call_graph\":[{"
                         + "\"src\":\"org.example.A.f()\","
-                        + "\"dst\":\"can://java/myapp/A.java/A/g()\","
+                        + "\"dst\":\"" + A_G + "\","
                         + "\"prov\":[\"declared\"],\"weight\":1}]"),
                 "endpoints are durable can-ids, not display names");
     }
@@ -133,8 +145,8 @@ class L2SchemaOracleTest {
     @Test
     void anEdgeCarryingAnUnknownKeyIsRejected() throws IOException {
         assertRejected(payload("\"call_graph\":[{"
-                        + "\"src\":\"can://java/myapp/A.java/A/f()\","
-                        + "\"dst\":\"can://java/myapp/A.java/A/g()\","
+                        + "\"src\":\"" + A_F + "\","
+                        + "\"dst\":\"" + A_G + "\","
                         + "\"prov\":[\"declared\"],\"weight\":1,\"line\":12}]"),
                 "a stray key means a producer emitting a fact no consumer was told about");
     }
@@ -144,7 +156,7 @@ class L2SchemaOracleTest {
         // The overlay rule: external_symbols may only ever describe symbols outside the project. An
         // in-project id here would be a type the tree should have held, silently reclassified.
         assertRejected(payload("\"external_symbols\":{"
-                        + "\"can://java/myapp/src/main/java/org/example/User.java/User/log()\":{"
+                        + "\"" + USER_LOG + "\":{"
                         + "\"kind\":\"method\",\"signature\":\"log()\",\"declaring_type\":\"org.example.User\"}}"),
                 "an in-project can-id is not an external symbol");
     }
@@ -152,7 +164,7 @@ class L2SchemaOracleTest {
     @Test
     void anExternalSymbolMissingItsDeclaringTypeIsRejected() throws IOException {
         assertRejected(payload("\"external_symbols\":{"
-                        + "\"can://java/myapp/@external/java.lang.String/valueOf(int)\":{"
+                        + "\"" + STRING_VALUE_OF + "\":{"
                         + "\"kind\":\"method\",\"signature\":\"valueOf(int)\"}}"),
                 "declaring_type is the dotted source spelling the id only carries in binary form");
     }
@@ -161,7 +173,7 @@ class L2SchemaOracleTest {
     void anExternalSymbolOfAnUnmodelledKindIsRejected() throws IOException {
         // Only call sites mint external symbols, and a call site resolves to a method or a constructor.
         assertRejected(payload("\"external_symbols\":{"
-                        + "\"can://java/myapp/@external/java.lang.String/CASE_INSENSITIVE_ORDER\":{"
+                        + "\"" + STRING_CASE_ORDER + "\":{"
                         + "\"kind\":\"field\",\"signature\":\"CASE_INSENSITIVE_ORDER\","
                         + "\"declaring_type\":\"java.lang.String\"}}"),
                 "external symbol kinds are exactly [method, constructor]");
@@ -170,7 +182,7 @@ class L2SchemaOracleTest {
     @Test
     void anExternalSymbolCarryingAnUnknownKeyIsRejected() throws IOException {
         assertRejected(payload("\"external_symbols\":{"
-                        + "\"can://java/myapp/@external/java.lang.String/valueOf(int)\":{"
+                        + "\"" + STRING_VALUE_OF + "\":{"
                         + "\"kind\":\"method\",\"signature\":\"valueOf(int)\","
                         + "\"declaring_type\":\"java.lang.String\",\"jar\":\"rt.jar\"}}"),
                 "a stray key means a producer emitting a fact no consumer was told about");

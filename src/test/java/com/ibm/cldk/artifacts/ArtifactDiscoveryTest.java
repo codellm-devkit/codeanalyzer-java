@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JArtifact;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -46,7 +47,7 @@ class ArtifactDiscoveryTest {
 
         JArtifact pom = artifacts.get("pom.xml");
         assertNotNull(pom);
-        assertEquals("can://artifact/app/pom.xml", pom.getId());
+        assertEquals(CanId.artifactId("app", "pom.xml"), pom.getId());
         assertEquals("pom.xml", pom.getPath());
         // configKeys/extraction are later tasks' fields; discovery must leave their defaults alone.
         assertEquals("artifact", pom.getKind());

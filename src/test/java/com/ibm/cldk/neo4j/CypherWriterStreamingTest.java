@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.ibm.cldk.neo4j.GraphRows.NodeRef;
+import com.ibm.cldk.schema.CanId;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.io.Writer;
@@ -30,7 +31,8 @@ class CypherWriterStreamingTest {
             Map<String, Object> p = RowBuilder.props();
             p.put("name", "Type" + i);
             p.put("code", "class Type" + i + " { void m() {} }");
-            refs.add(b.node(Arrays.asList("JType", "JSymbol"), "id", "can://java/app/T" + i + ".java/Type" + i, p));
+            String moduleId = CanId.moduleId(CanId.applicationId("app"), "T" + i + ".java");
+            refs.add(b.node(Arrays.asList("JType", "JSymbol"), "id", CanId.childId(moduleId, "Type" + i), p));
         }
         for (int i = 1; i < nodes; i++) {
             b.edge("J_CALLS", refs.get(i - 1), refs.get(i));

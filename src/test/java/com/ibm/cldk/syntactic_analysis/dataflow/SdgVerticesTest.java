@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.schema.JCallable;
 import com.ibm.cldk.schema.JIdEdge;
@@ -17,13 +18,18 @@ import org.junit.jupiter.api.Test;
 
 class SdgVerticesTest {
 
+    private static final String MODULE_ID = CanId.moduleId(CanId.applicationId("app"), "A.java");
+    private static final String TYPE_ID = CanId.childId(MODULE_ID, "A");
+    private static final String A_ID = TYPE_ID + "/a(int)";
+    private static final String B_ID = TYPE_ID + "/b(int)";
+
     /** a(int x) at 3:16 calls b(int) — the minimal HRB shape. */
     private static Map<String, JModule> twoCallableModule() {
         JModule m = new JModule();
-        m.setId("can://java/app/A.java");
+        m.setId(MODULE_ID);
 
         JCallable b = new JCallable();
-        b.setId("can://java/app/A.java/A/b(int)");
+        b.setId(B_ID);
         b.setReturnType("int");
         JParameter p = new JParameter();
         p.setName("y");
@@ -31,7 +37,7 @@ class SdgVerticesTest {
         b.getParameters().add(p);
 
         JCallable a = new JCallable();
-        a.setId("can://java/app/A.java/A/a(int)");
+        a.setId(A_ID);
         a.setReturnType("int");
         JParameter px = new JParameter();
         px.setName("x");
@@ -39,13 +45,13 @@ class SdgVerticesTest {
         a.getParameters().add(px);
         JBodyNode call = new JBodyNode();
         call.setKind("call");
-        call.setCallee("can://java/app/A.java/A/b(int)");
+        call.setCallee(B_ID);
         call.getArgumentExpr().add("x + 1");
         call.setReturnType("int");
         a.getBody().put("3:16", call);
 
         JType t = new JType();
-        t.setId("can://java/app/A.java/A");
+        t.setId(TYPE_ID);
         t.getCallables().put("a(int)", a);
         t.getCallables().put("b(int)", b);
         m.getTypes().put("A", t);
@@ -74,11 +80,11 @@ class SdgVerticesTest {
 
         assertEquals(1, r.paramIn.size());
         JIdEdge in = r.paramIn.get(0);
-        assertEquals("can://java/app/A.java/A/a(int)@3:16/actual_in:0", in.getSrc());
-        assertEquals("can://java/app/A.java/A/b(int)@formal_in:0", in.getDst());
+        assertEquals(CanId.ordinalId(A_ID, "3:16/actual_in:0"), in.getSrc());
+        assertEquals(CanId.ordinalId(B_ID, "formal_in:0"), in.getDst());
         assertEquals(1, r.paramOut.size());
-        assertEquals("can://java/app/A.java/A/b(int)@formal_out", r.paramOut.get(0).getSrc());
-        assertEquals("can://java/app/A.java/A/a(int)@3:16/actual_out", r.paramOut.get(0).getDst());
+        assertEquals(CanId.ordinalId(B_ID, "formal_out"), r.paramOut.get(0).getSrc());
+        assertEquals(CanId.ordinalId(A_ID, "3:16/actual_out"), r.paramOut.get(0).getDst());
     }
 
     @Test
@@ -87,7 +93,7 @@ class SdgVerticesTest {
         JCallable a = modules.get("A.java").getTypes().get("A").getCallables().get("a(int)");
         JBodyNode ext = new JBodyNode();
         ext.setKind("call");
-        ext.setCallee("can://java/app/@external/java.lang.Math/max(int, int)");
+        ext.setCallee(CanId.externalId("app", "java.lang.Math", "max(int, int)"));
         ext.getArgumentExpr().add("x");
         a.getBody().put("4:9", ext);
 

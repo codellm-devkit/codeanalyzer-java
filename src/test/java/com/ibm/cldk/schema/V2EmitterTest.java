@@ -12,8 +12,9 @@ class V2EmitterTest {
 
     @Test
     void emit_wrapsModulesIntoEnvelopeAndApplication() {
+        String appId = CanId.applicationId("myapp");
         JModule module = new JModule();
-        module.setId("can://java/myapp/src/Foo.java");
+        module.setId(CanId.moduleId(appId, "src/Foo.java"));
         module.setPackageName("com.example");
         Map<String, JModule> modules = new LinkedHashMap<>();
         modules.put("src/Foo.java", module);
@@ -23,7 +24,7 @@ class V2EmitterTest {
         assertEquals("2.0.0", analysis.getSchemaVersion());
         assertEquals("java", analysis.getLanguage());
         assertEquals(1, analysis.getMaxLevel());
-        assertEquals("can://java/myapp", analysis.getApplication().getId());
+        assertEquals(appId, analysis.getApplication().getId());
         assertEquals("application", analysis.getApplication().getKind());
         assertSame(module, analysis.getApplication().getSymbolTable().get("src/Foo.java"));
     }

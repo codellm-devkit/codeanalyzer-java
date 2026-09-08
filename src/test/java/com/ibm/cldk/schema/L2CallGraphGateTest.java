@@ -44,15 +44,17 @@ class L2CallGraphGateTest {
     private static final String APP = "call-graph-test";
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    private static final String USER = "can://java/call-graph-test/src/main/java/org/example/User.java/User";
+    private static final String APP_ID = CanId.applicationId(APP);
+    private static final String USER = CanId.childId(
+            CanId.moduleId(APP_ID, "src/main/java/org/example/User.java"), "User");
     private static final String HELLO = USER + "/helloString()";
     private static final String LOG = USER + "/log()";
     private static final String GETNAME = USER + "/getName()";
     private static final String LOGLOG = USER + "/loglog()";
-    private static final String GREETER =
-            "can://java/call-graph-test/src/main/java/org/example/greeting/Greeter.java/Greeter";
+    private static final String GREETER = CanId.childId(
+            CanId.moduleId(APP_ID, "src/main/java/org/example/greeting/Greeter.java"), "Greeter");
     private static final String GREET = GREETER + "/greet(java.lang.String)";
-    private static final String TRIM = "can://java/call-graph-test/@external/java.lang.String/trim()";
+    private static final String TRIM = CanId.externalId(APP, "java.lang.String", "trim()");
 
     /** Analyse the fixture at level 2 (declared only) and return the emitted payload as a Gson tree. */
     private static JsonObject analyseL2() throws IOException {

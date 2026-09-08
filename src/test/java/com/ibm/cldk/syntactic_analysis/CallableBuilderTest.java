@@ -24,7 +24,7 @@ import org.junit.jupiter.api.Test;
 class CallableBuilderTest {
 
     private static final String FILE_KEY = "src/main/java/com/example/Foo.java";
-    private static final String TYPE_ID = "can://java/myapp/" + FILE_KEY + "/Foo";
+    private static final String TYPE_ID = CanId.childId(CanId.moduleId(CanId.applicationId("myapp"), FILE_KEY), "Foo");
 
     private static JCallable build(String memberSource, List<String> classFieldNames) {
         String source = "package com.example;\nimport java.io.IOException;\nimport java.util.*;\n"

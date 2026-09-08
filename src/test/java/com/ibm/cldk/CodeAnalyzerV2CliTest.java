@@ -12,6 +12,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.ibm.cldk.schema.CanId;
 import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
 import com.networknt.schema.SpecVersion;
@@ -128,7 +129,7 @@ class CodeAnalyzerV2CliTest {
         assertEquals("codeanalyzer-java", root.getAsJsonObject("analyzer").get("name").getAsString());
 
         JsonObject app = root.getAsJsonObject("application");
-        assertEquals("can://java/widgets", app.get("id").getAsString());
+        assertEquals(CanId.applicationId("widgets"), app.get("id").getAsString());
         JsonObject symbolTable = app.getAsJsonObject("symbol_table");
         assertTrue(symbolTable.has("src/main/java/com/example/Widget.java"),
                 "keyed by relative path, got: " + symbolTable.keySet());

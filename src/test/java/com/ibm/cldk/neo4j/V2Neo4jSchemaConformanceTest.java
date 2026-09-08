@@ -466,8 +466,8 @@ public class V2Neo4jSchemaConformanceTest {
         String idb = b.nodes.stream().filter(n -> n.labels.contains("JApplication"))
                 .findFirst().orElseThrow().value;
         assertNotEquals(ida, idb, "two services must not share a root node");
-        assertEquals("can://svc-quotes", ida);
-        assertEquals("can://svc-orders", idb);
+        assertEquals(CanId.applicationId("svc-quotes"), ida);
+        assertEquals(CanId.applicationId("svc-orders"), idb);
     }
 
     @Test

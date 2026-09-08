@@ -25,13 +25,15 @@ class L4ModelSerializationTest {
     @Test
     void applicationCarriesParamEdgesOnlyWhenSet() {
         JApplication app = new JApplication();
-        app.setId("can://java/x");
+        String appId = CanId.applicationId("x");
+        app.setId(appId);
         assertFalse(V2Json.compact().toJson(app).contains("param_in"),
                 "absent means no fact — no empty lists below L4");
 
+        String aType = CanId.childId(CanId.moduleId(appId, "f.java"), "A");
         JIdEdge e = new JIdEdge();
-        e.setSrc("can://java/x/f.java/A/a(int)@3:16/actual_in:0");
-        e.setDst("can://java/x/f.java/A/b(int)@formal_in:0");
+        e.setSrc(CanId.ordinalId(aType + "/a(int)", "3:16/actual_in:0"));
+        e.setDst(CanId.ordinalId(aType + "/b(int)", "formal_in:0"));
         app.setParamIn(List.of(e));
         String json = V2Json.compact().toJson(app);
         assertTrue(json.contains("\"param_in\""), json);

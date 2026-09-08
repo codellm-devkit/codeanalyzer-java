@@ -27,7 +27,7 @@ class L2CallGraphTest {
 
     private static final String APP = "app";
     private static final String FILE = "Foo.java";
-    private static final String FOO = "can://java/app/Foo.java/Foo";
+    private static final String FOO = CanId.childId(CanId.moduleId(CanId.applicationId(APP), FILE), "Foo");
 
     private static Map<String, JModule> modulesFrom(String source) {
         CompilationUnit cu = TestParsers.parseResolved(source);
@@ -110,7 +110,7 @@ class L2CallGraphTest {
         // edge does not dangle, and the dispatch-precision win survives.
         Map<String, JModule> modules = twoMethodModule();
         String a = FOO + "/a()";
-        String listAdd = "can://java/app/@external/java.util.List/add(java.lang.Object)";
+        String listAdd = CanId.externalId(APP, "java.util.List", "add(java.lang.Object)");
         List<RtaEndpoint> rta = List.of(
                 new RtaEndpoint(true, "p.Foo", "a()", false, "java.util.List", "add(java.lang.Object)"));
         L2CallGraph.Result result = L2CallGraph.build(APP, modules, rta);
@@ -154,7 +154,7 @@ class L2CallGraphTest {
         String src = "package p;\nclass Foo {\n  void a() {\n    b();\n    \"x\".trim();\n  }\n  void b() {}\n}\n";
         String a = FOO + "/a()";
         String b = FOO + "/b()";
-        String trim = "can://java/app/@external/java.lang.String/trim()";
+        String trim = CanId.externalId(APP, "java.lang.String", "trim()");
 
         L2CallGraph.Result off = L2CallGraph.build(APP, modulesFrom(src), null, false);
         assertTrue(hasEdge(off, a, b), "in-project edges are unaffected by --external-calls");
