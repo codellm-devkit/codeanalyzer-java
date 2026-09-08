@@ -144,8 +144,13 @@ public final class BoltWriter implements BoltSink {
         }
 
         void run(GraphRows rows, boolean fullRun) {
-            // 1. schema (DDL runs in its own autocommit transactions).
+            // 1. schema (DDL runs in its own autocommit transactions). Migrations run FIRST: a
+            // constraint an older release created on a property this generation no longer keys on
+            // is still live and enforcing, and would fail the very first push (see Schema.MIGRATIONS).
             try (Session s = session()) {
+                for (String stmt : Schema.MIGRATIONS) {
+                    s.run(stmt);
+                }
                 for (String stmt : Schema.CONSTRAINTS) {
                     s.run(stmt);
                 }

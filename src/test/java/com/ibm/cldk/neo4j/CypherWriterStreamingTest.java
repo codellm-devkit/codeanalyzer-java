@@ -114,6 +114,27 @@ class CypherWriterStreamingTest {
     }
 
     @Test
+    void theOldApplicationNameConstraintIsDroppedBeforeAnyConstraintIsCreated() throws IOException {
+        // Regression for the upgrade path. Pre-3.1.1 databases carry `j_application_name`
+        // (:JApplication.name IS UNIQUE). The root is now keyed on its can:// id, so on an upgraded
+        // DB the MERGE-on-id misses the id-less legacy root, CREATEs a second one, and `SET n +=
+        // {name: ...}` trips that surviving constraint -- ConstraintValidationFailed kills the whole
+        // push. `CREATE CONSTRAINT ... IF NOT EXISTS` cannot supersede it; only a DROP can, and it
+        // has to run BEFORE the load. The Bolt path (Neo4jBoltWriterTest) starts on a virgin
+        // container and so cannot see this; the emitted preamble is where the ordering is pinned.
+        String out = CypherWriter.renderCypher(new RowBuilder().finish(), "app");
+        int drop = out.indexOf("DROP CONSTRAINT j_application_name IF EXISTS;");
+        assertTrue(drop >= 0, "the legacy name constraint must be dropped on every load, got: " + out);
+        assertTrue(drop < out.indexOf("CREATE CONSTRAINT"),
+                "the DROP must precede every CREATE CONSTRAINT, or the load runs under the old "
+                        + "constraint it exists to remove, got: " + out);
+        for (String stmt : Schema.MIGRATIONS) {
+            assertTrue(out.contains(stmt + ";"),
+                    "every Schema.MIGRATIONS statement must reach the script: " + stmt);
+        }
+    }
+
+    @Test
     void theWipePreambleMatchesAV2RootByIdAndALegacyV1RootByNameButNotAnotherApplication()
             throws IOException {
         // v2 roots are keyed on `id` (Task 3), which is unique-constrained and exact -- but legacy

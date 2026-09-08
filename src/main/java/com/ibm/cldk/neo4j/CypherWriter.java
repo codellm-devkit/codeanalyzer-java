@@ -89,6 +89,14 @@ public final class CypherWriter {
      */
     public static void writeCypher(Appendable out, GraphRows rows, String appName) throws IOException {
         Statements s = new Statements(out);
+        // Migrations first: a constraint an older release created on a property this generation no
+        // longer keys on must be dropped BEFORE the load, or it is still live and enforcing.
+        s.add("// ── migrations ──");
+        for (String stmt : Schema.MIGRATIONS) {
+            s.add(stmt + ";");
+        }
+
+        s.add("");
         s.add("// ── constraints & indexes ──");
         for (String stmt : Schema.CONSTRAINTS) {
             s.add(stmt + ";");
