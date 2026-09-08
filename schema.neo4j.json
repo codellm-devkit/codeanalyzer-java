@@ -9,8 +9,9 @@
     {
       "label": "JApplication",
       "merge_label": "JApplication",
-      "key": "name",
+      "key": "id",
       "properties": {
+        "id": "string",
         "name": "string",
         "schema_version": "string",
         "analyzer_name": "string",
@@ -527,7 +528,7 @@
     }
   ],
   "constraints": [
-    "CREATE CONSTRAINT japplication_name IF NOT EXISTS FOR (x:JApplication) REQUIRE x.name IS UNIQUE",
+    "CREATE CONSTRAINT japplication_id IF NOT EXISTS FOR (x:JApplication) REQUIRE x.id IS UNIQUE",
     "CREATE CONSTRAINT jmodule_id IF NOT EXISTS FOR (x:JModule) REQUIRE x.id IS UNIQUE",
     "CREATE CONSTRAINT jsymbol_id IF NOT EXISTS FOR (x:JSymbol) REQUIRE x.id IS UNIQUE",
     "CREATE CONSTRAINT jfield_id IF NOT EXISTS FOR (x:JField) REQUIRE x.id IS UNIQUE",

@@ -74,7 +74,9 @@ public final class V2GraphProjector {
         RowBuilder b = new RowBuilder();
         Map<String, JModule> symbolTable = analysis.getApplication().getSymbolTable();
 
+        String appId = analysis.getApplication().getId();
         Map<String, Object> appProps = RowBuilder.props();
+        appProps.put("id", appId);
         appProps.put("name", appName);
         appProps.put("schema_version", V2SchemaCatalog.SCHEMA_VERSION);
         if (analysis.getAnalyzer() != null) {
@@ -93,7 +95,7 @@ public final class V2GraphProjector {
         // After prune, so an application with zero entrypoints still carries the key rather than
         // having it dropped as an empty list.
         prunedAppProps.put("entrypoint_frameworks", entrypointReport.getFrameworksDetected());
-        NodeRef app = b.node(Arrays.asList("JApplication"), "name", appName, prunedAppProps);
+        NodeRef app = b.node(Arrays.asList("JApplication"), "id", appId, prunedAppProps);
 
         // First pass: an in-project index from a type's qualified (dotted) name to its node id and
         // owning module id, for resolving extends/implements/import spellings to emitted nodes.

@@ -64,7 +64,8 @@ public class V2Neo4jSchemaConformanceTest {
     // l4-sdg-test (not call-graph-test): its calls are all 1-arg with a transitive a→b→c chain, so
     // J_PARAM_IN/J_SUMMARY are guaranteed non-empty here. The v1/v2 conformance tests still exercise
     // call-graph-test.
-    private static final Path FIXTURE = Paths.get("src/test/resources/test-applications/l4-sdg-test");
+    private static final String APP_NAME = "l4-sdg-test";
+    private static final Path FIXTURE = Paths.get("src/test/resources/test-applications/" + APP_NAME);
 
     // A throwaway repository-artifact fixture, independent of FIXTURE above: ArtifactDiscovery /
     // DependencyView / ConfigKeys only care about non-.java files, so this is populated with a
@@ -90,8 +91,8 @@ public class V2Neo4jSchemaConformanceTest {
             REL_BY_TYPE.put(rt.type, rt);
         }
         Map<String, JModule> modules = L1Extractor.extractAll(
-                FIXTURE, "l4-sdg-test", null, new LinkedHashMap<>(), 3, 3, "ast");
-        L2CallGraph.Result l2 = L2CallGraph.build("l4-sdg-test", modules, null, true);
+                FIXTURE, APP_NAME, null, new LinkedHashMap<>(), 3, 3, "ast");
+        L2CallGraph.Result l2 = L2CallGraph.build(APP_NAME, modules, null, true);
         SdgVertices.Result sdg = SdgVertices.apply(modules);
         SummaryPass.apply(modules, l2.callGraph(), 3);
 
@@ -108,7 +109,7 @@ public class V2Neo4jSchemaConformanceTest {
         Files.writeString(ARTIFACT_TMP.resolve("application.properties"),
                 "server.port=8080\nspring.datasource.url=${DB_URL}\n", StandardCharsets.UTF_8);
         Map<String, JArtifact> artifacts =
-                ArtifactDiscovery.discover(ARTIFACT_TMP, "l4-sdg-test", true, 262144);
+                ArtifactDiscovery.discover(ARTIFACT_TMP, APP_NAME, true, 262144);
         List<JDependency> dependencies = DependencyView.build(ARTIFACT_TMP, artifacts);
         for (JArtifact a : artifacts.values()) {
             if (ConfigKeys.isEligible(a)) {
@@ -119,9 +120,9 @@ public class V2Neo4jSchemaConformanceTest {
         }
 
         Analysis analysis = V2Emitter.emit(
-                "l4-sdg-test", 3, modules, "test", l2.callGraph(), l2.externalSymbols(),
+                APP_NAME, 3, modules, "test", l2.callGraph(), l2.externalSymbols(),
                 sdg.paramIn, sdg.paramOut, artifacts, dependencies);
-        rows = V2GraphProjector.project(analysis, "l4-sdg-test");
+        rows = V2GraphProjector.project(analysis, APP_NAME);
     }
 
     private static String specificLabel(List<String> labels) {
@@ -215,7 +216,7 @@ public class V2Neo4jSchemaConformanceTest {
 
     @Test
     public void wipeCoversBothGenerationsSoV2ReplacesAPriorV1Graph() {
-        String cypher = CypherWriter.renderCypher(rows, "l4-sdg-test");
+        String cypher = CypherWriter.renderCypher(rows, APP_NAME);
         assertTrue(cypher.contains("J_HAS_UNIT|J_HAS_MODULE"),
                 "the wipe must traverse both generations' unit relationship");
         assertTrue(cypher.contains("MATCH (s:JSymbol) WHERE NOT (s)--() DELETE s"),
@@ -285,14 +286,14 @@ public class V2Neo4jSchemaConformanceTest {
         // wipeStaysOffTheCrossLanguageArtifactPackageSubgraph below, which exists because only the
         // positive case had ever been asserted): a mis-sourced edge still lands on the expected
         // target, so nothing except the source endpoint can catch it.
-        String appName = "l4-sdg-test";
-        String pomId = CanId.artifactId(appName, "pom.xml");
-        String lockId = CanId.artifactId(appName, "gradle.lockfile");
+        String pomId = CanId.artifactId(APP_NAME, "pom.xml");
+        String lockId = CanId.artifactId(APP_NAME, "gradle.lockfile");
         for (EdgeRow edge : rows.edges) {
             if (edge.type.equals("HAS_ARTIFACT")) {
                 hasArtifact = true;
                 assertEquals("JApplication", edge.from.label, "HAS_ARTIFACT runs application -> artifact");
-                assertEquals(appName, edge.from.value, "the application is the source endpoint");
+                assertEquals(CanId.applicationId(APP_NAME), edge.from.value,
+                        "the application is the source endpoint, keyed on its can:// id");
                 assertEquals("Artifact", edge.to.label);
             }
             if (edge.type.equals("DEFINES_CONFIG")) {
@@ -396,7 +397,7 @@ public class V2Neo4jSchemaConformanceTest {
         // that other analyzer's own edges on every Java re-push of the same app -- silent
         // corruption in a tool this one cannot see or repair. Read CypherWriter.DESCENDANTS'
         // javadoc before ever widening either pattern checked below.
-        assertTrue(CypherWriter.renderCypher(rows, "l4-sdg-test")
+        assertTrue(CypherWriter.renderCypher(rows, APP_NAME)
                         .contains("OPTIONAL MATCH (a)-[:J_HAS_UNIT|J_HAS_MODULE]->(c)"),
                 "the wipe's app-anchor hop must stay exactly J_HAS_UNIT|J_HAS_MODULE -- widening it "
                         + "to HAS_ARTIFACT lets a Java re-push delete another analyzer's edges on "
@@ -436,6 +437,18 @@ public class V2Neo4jSchemaConformanceTest {
                     + dm.group(1) + ", " + dm.group(2) + ") -- schema.neo4j.json promises one but no load "
                     + "would create it");
         }
+    }
+
+    @Test
+    void theApplicationRootIsAddressableByItsCanId() {
+        NodeRow app = rows.nodes.stream()
+                .filter(n -> n.labels.contains("JApplication"))
+                .findFirst().orElseThrow();
+        assertEquals("id", app.keyProp, "the root must merge on its id, not a display name");
+        assertEquals(CanId.applicationId(APP_NAME), app.value);
+        assertEquals(APP_NAME, app.props.get("name"), "name survives as a display property");
+        assertTrue(app.labels.contains(RowBuilder.CAN_NODE),
+                "the root must carry the index anchor, so the prefix-scoped delete can reach it");
     }
 
     private static NodeRow findNode(String mergeLabel, String value) {

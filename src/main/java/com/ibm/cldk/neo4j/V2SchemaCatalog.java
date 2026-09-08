@@ -107,8 +107,8 @@ public final class V2SchemaCatalog {
         // application has no entrypoints" from "the pass found nothing". An absent report and an empty
         // one reading the same is the failure this record exists to prevent. Mirrors what
         // codeanalyzer-python projects onto :PyApplication.
-        n.add(node("JApplication", "JApplication", "name",
-                new P().put("name", "string").put("schema_version", "string")
+        n.add(node("JApplication", "JApplication", "id",
+                new P().put("id", "string").put("name", "string").put("schema_version", "string")
                         .put("analyzer_name", "string").put("analyzer_version", "string")
                         .put("entrypoint_frameworks", "string[]")
                         .put("entrypoint_report_json", "string").done()));
