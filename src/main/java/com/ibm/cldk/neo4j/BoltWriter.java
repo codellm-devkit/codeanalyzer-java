@@ -75,14 +75,18 @@ public final class BoltWriter implements BoltSink {
                     + "AND NOT x.id IN $keys DETACH DELETE x";
 
     /**
-     * The orphan prune: matches the application root by its {@code can://} {@code id} (Task 3) —
-     * not {@code name}, which stopped being unique-constrained once the root was re-keyed, so
-     * matching by it would reach every application sharing that display name and prune (or wipe)
-     * their units too.
+     * The orphan prune: matches the application root by its {@code can://} {@code id} when it is a
+     * v2 root (exact, unique-constrained), OR by {@code name} when it is a legacy v1 root --
+     * identifiable because v1 never writes {@code id} (see {@code GraphProjector.java}). An
+     * id-only match would orphan a prior v1 graph instead of pruning it; a name-only match would
+     * reach every OTHER application sharing that display name, since {@code name} stopped being
+     * unique-constrained once the root was re-keyed (Task 3). A same-named different v2
+     * application has its own non-null, non-matching id, so neither branch reaches it.
      */
     static final String PRUNE_VANISHED_UNITS_V2 =
-            "MATCH (:JApplication {id: $app})-[:J_HAS_UNIT|J_HAS_MODULE]->(c) "
-                    + "WHERE NOT c.file_key IN $present "
+            "MATCH (a:JApplication)-[:J_HAS_UNIT|J_HAS_MODULE]->(c) "
+                    + "WHERE (a.id = $appId OR (a.id IS NULL AND a.name = $appName)) "
+                    + "AND NOT c.file_key IN $present "
                     + "OPTIONAL MATCH (c)-" + CypherWriter.DESCENDANTS + "->(x) "
                     + "DETACH DELETE x, c RETURN count(c) AS pruned";
 
@@ -236,12 +240,13 @@ public final class BoltWriter implements BoltSink {
             // units (and other applications in the database are never touched).
             if (fullRun) {
                 List<String> present = new ArrayList<>(byUnit.keySet());
-                String appId = CanId.applicationId(appNameOf(rows));
+                String appName = appNameOf(rows);
+                String appId = CanId.applicationId(appName);
                 // Checked against the same hazard as the _module purges above (#213) and found
                 // sound, so deliberately left alone: this traversal never leaves java's own graph.
                 // It enters at :JApplication (java-owned, and scoped to this app by its unique
-                // can:// id -- name is no longer constraint-unique since Task 3, so matching by it
-                // would reach every application sharing that display name), hops a java-owned
+                // can:// id when the root is v2, or by name when it is a legacy v1 root that never
+                // got an id -- see PRUNE_VANISHED_UNITS_V2's javadoc), hops a java-owned
                 // relationship type, and expands only through DESCENDANTS -- every member of which
                 // is J_-prefixed containment. `c` and `x` are unlabelled but unreachable except
                 // along those edges, and DESCENDANTS deliberately excludes HAS_ARTIFACT, so no
@@ -249,7 +254,8 @@ public final class BoltWriter implements BoltSink {
                 // reached. Do not add a non-containment type to DESCENDANTS without re-checking that.
                 try (Session s = session()) {
                     long pruned = s.run(PRUNE_VANISHED_UNITS_V2,
-                            Values.parameters("present", present, "app", appId)).single().get("pruned").asLong(0);
+                            Values.parameters("present", present, "appId", appId, "appName", appName))
+                            .single().get("pruned").asLong(0);
                     Log.info("neo4j(bolt): pruned " + pruned + " vanished unit(s)");
                 }
             } else {

@@ -60,17 +60,23 @@ class BoltWriterPurgeTest {
     }
 
     @Test
-    void theOrphanPruneMatchesTheApplicationRootByIdNotName() {
-        // The root's uniqueness constraint moved from `name` to `id` (Task 3): two applications can
-        // share a display name, so a prune keyed on `name` would reach both roots' units. Pinned as
-        // a regression guard because the earlier version of this statement compiled and ran fine
-        // (`name` is still a real property) while silently widening the delete scope.
-        assertTrue(BoltWriter.PRUNE_VANISHED_UNITS_V2.contains("{id: $app}"),
-                "the prune must match :JApplication by its can:// id: "
-                        + BoltWriter.PRUNE_VANISHED_UNITS_V2);
-        assertFalse(BoltWriter.PRUNE_VANISHED_UNITS_V2.contains("{name:"),
-                "the prune must not match :JApplication by its no-longer-unique name: "
-                        + BoltWriter.PRUNE_VANISHED_UNITS_V2);
+    void theOrphanPruneMatchesAV2RootByIdAndALegacyV1RootByNameButNotAnotherApplication() {
+        // v2 roots are keyed on `id` (Task 3) -- unique-constrained and exact -- but legacy v1
+        // roots (GraphProjector.java) never write `id`, only `name`. An id-only match orphans a
+        // prior v1 graph instead of pruning it; a name-only match reaches every OTHER application
+        // sharing that display name, since `name` stopped being unique once the id re-key landed.
+        String stmt = BoltWriter.PRUNE_VANISHED_UNITS_V2;
+        assertTrue(stmt.contains("a.id = $appId"),
+                "must reach a v2 root of THIS app by its unique id: " + stmt);
+        assertTrue(stmt.contains("a.id IS NULL AND a.name = $appName"),
+                "must reach a legacy v1 root (no id) by name, guarded by id IS NULL: " + stmt);
+        // A same-named different v2 application has its OWN non-null id, so it can only be reached
+        // through a bare (unguarded) `a.name = ...` disjunct. Assert that disjunct does not exist.
+        assertFalse(stmt.replace("a.id IS NULL AND a.name = $appName", "").contains("a.name ="),
+                "a.name must never be matched outside the a.id IS NULL guard -- that would reach a "
+                        + "different application's v2 root sharing this display name: " + stmt);
+        assertFalse(stmt.contains("{name:"),
+                "the prune must not property-match :JApplication by its no-longer-unique name: " + stmt);
     }
 
     @Test

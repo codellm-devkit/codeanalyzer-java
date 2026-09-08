@@ -112,16 +112,27 @@ class CypherWriterStreamingTest {
     }
 
     @Test
-    void theWipePreambleMatchesTheApplicationRootByIdNotName() throws IOException {
-        // The root's uniqueness constraint moved from `name` to `id` (Task 3): two applications can
-        // share a display name, so a wipe keyed on `name` would reach both roots and delete both --
-        // the exact multi-tenant collision this task exists to eliminate, reintroduced on the
-        // destructive path. Pinned so a regression to name-keying fails here rather than silently
-        // widening the delete scope.
+    void theWipePreambleMatchesAV2RootByIdAndALegacyV1RootByNameButNotAnotherApplication()
+            throws IOException {
+        // v2 roots are keyed on `id` (Task 3), which is unique-constrained and exact -- but legacy
+        // v1 roots (GraphProjector.java) never write `id` at all, only `name`. An id-only match
+        // would orphan a prior v1 graph of the same app instead of replacing it; a name-only match
+        // reaches every OTHER application sharing that display name, since `name` stopped being
+        // unique once the id re-key landed. The predicate must do both without regressing either:
+        // `a.id = <id> OR (a.id IS NULL AND a.name = <name>)`.
         String out = CypherWriter.renderCypher(new RowBuilder().finish(), "app");
-        assertTrue(out.contains("MATCH (a:JApplication {id: 'can://app'})"),
-                "the wipe must match :JApplication by its can:// id, got: " + out);
+
+        assertTrue(out.contains("a.id = 'can://app'"),
+                "must reach a v2 root of THIS app by its unique id, got: " + out);
+        assertTrue(out.contains("a.id IS NULL AND a.name = 'app'"),
+                "must reach a legacy v1 root (no id) by name, guarded by id IS NULL, got: " + out);
+        // A same-named different v2 application has its OWN non-null id, so it can only be reached
+        // through a bare (unguarded) `a.name = ...` disjunct. Assert that disjunct does not exist:
+        // every `a.name =` in the predicate must be inside the `a.id IS NULL AND ...` guard.
+        assertFalse(out.replace("a.id IS NULL AND a.name = 'app'", "").contains("a.name ="),
+                "a.name must never be matched outside the a.id IS NULL guard -- that would reach "
+                        + "a different application's v2 root sharing this display name, got: " + out);
         assertFalse(out.contains("JApplication {name:"),
-                "the wipe must not match :JApplication by its no-longer-unique name: " + out);
+                "the wipe must not property-match :JApplication by its no-longer-unique name: " + out);
     }
 }

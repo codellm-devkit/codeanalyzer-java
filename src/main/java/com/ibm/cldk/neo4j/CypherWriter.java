@@ -145,7 +145,14 @@ public final class CypherWriter {
         // import-materialized bodyless :JType stubs hang off units via J_IMPORTS only, so the
         // DETACH DELETE above orphans them; degree-0 symbols are unreferencable junk in any
         // generation, and a symbol another application still uses keeps its edges and survives.
-        return "MATCH (a:JApplication {id: " + cypherValue(CanId.applicationId(appName)) + "})\n"
+        // Matched by id when the root is v2 (exact, unique-constrained) OR by name when it is a
+        // legacy v1 root (identifiable because v1 never writes `id`) -- v1 keys :JApplication on
+        // name alone (GraphProjector.java), so an id-only match would orphan a prior v1 graph
+        // instead of replacing it, breaking the very cross-generation guarantee this wipe exists
+        // for. A same-named DIFFERENT v2 application has its own non-null, non-matching id, so
+        // neither branch reaches it -- the id re-key's collision fix survives this widening.
+        return "MATCH (a:JApplication) WHERE a.id = " + cypherValue(CanId.applicationId(appName))
+                + " OR (a.id IS NULL AND a.name = " + cypherValue(appName) + ")\n"
                 + "OPTIONAL MATCH (a)-[:J_HAS_UNIT|J_HAS_MODULE]->(c)\n"
                 + "OPTIONAL MATCH (c)-" + DESCENDANTS + "->(x)\n"
                 + "DETACH DELETE x, c, a;\n"
