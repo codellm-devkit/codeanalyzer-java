@@ -470,6 +470,29 @@ public class V2Neo4jSchemaConformanceTest {
         assertEquals("can://svc-orders", idb);
     }
 
+    @Test
+    void everyProjectedIdSitsUnderTheApplicationPrefix() {
+        String prefix = CanId.applicationId(APP_NAME) + "/";
+        String root = CanId.applicationId(APP_NAME);
+        for (NodeRow n : rows.nodes) {
+            if (!RowBuilder.isCanId(n.value)) {
+                continue; // JPackage/JAnnotation are name-keyed by design
+            }
+            assertTrue(n.value.equals(root) || n.value.startsWith(prefix),
+                    n.value + " escapes the application prefix, so a scoped delete would miss it");
+        }
+    }
+
+    @Test
+    void noIdCarriesTheOldLanguageFirstShape() {
+        for (NodeRow n : rows.nodes) {
+            assertFalse(n.value.startsWith("can://java/"),
+                    "old-shape id survived: " + n.value);
+            assertFalse(n.value.startsWith("can://artifact/"),
+                    "old-shape artifact id survived: " + n.value);
+        }
+    }
+
     private static NodeRow findNode(String mergeLabel, String value) {
         for (NodeRow node : rows.nodes) {
             if (node.labels.get(0).equals(mergeLabel) && node.value.equals(value)) {
