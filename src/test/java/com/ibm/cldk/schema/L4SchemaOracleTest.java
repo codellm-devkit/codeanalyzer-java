@@ -30,20 +30,25 @@ class L4SchemaOracleTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    private static final String APP_ID = CanId.applicationId("myapp");
+    private static final String MODULE_ID = CanId.moduleId(APP_ID, "Foo.java");
+    private static final String TYPE_ID = CanId.childId(MODULE_ID, "Foo");
+    private static final String CALLABLE_ID = TYPE_ID + "/m()";
+
     /** A level-4 payload whose single callable carries one body node under the given local id. */
     private static String payload(String localId, String kind) {
         String callable = "{"
-                + "\"id\":\"can://java/myapp/Foo.java/Foo/m()\","
+                + "\"id\":\"" + CALLABLE_ID + "\","
                 + "\"kind\":\"method\","
                 + "\"signature\":\"m()\","
                 + "\"body\":{\"" + localId + "\":{\"kind\":\"" + kind + "\"}}"
                 + "}";
         String type = "{"
-                + "\"id\":\"can://java/myapp/Foo.java/Foo\","
+                + "\"id\":\"" + TYPE_ID + "\","
                 + "\"kind\":\"class\","
                 + "\"callables\":{\"m()\":" + callable + "}}";
         String module = "{"
-                + "\"id\":\"can://java/myapp/Foo.java\","
+                + "\"id\":\"" + MODULE_ID + "\","
                 + "\"kind\":\"module\","
                 + "\"source\":\"\","
                 + "\"types\":{\"Foo\":" + type + "}}";
@@ -52,7 +57,7 @@ class L4SchemaOracleTest {
                 + "\"language\":\"java\","
                 + "\"max_level\":4,"
                 + "\"application\":{"
-                + "\"id\":\"can://java/myapp\","
+                + "\"id\":\"" + APP_ID + "\","
                 + "\"kind\":\"application\","
                 + "\"symbol_table\":{\"Foo.java\":" + module + "}}}";
     }

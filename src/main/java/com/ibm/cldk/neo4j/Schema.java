@@ -16,17 +16,35 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * The Cypher DDL — uniqueness constraints and indexes — shared by both writers. Run BEFORE any
- * load so MERGE uses an index seek (not a label scan) and the identity invariant is enforced by the
- * database. Every statement is idempotent ({@code IF NOT EXISTS}).
+ * The Cypher DDL — migrations, uniqueness constraints and indexes — shared by both writers. Run
+ * BEFORE any load so MERGE uses an index seek (not a label scan) and the identity invariant is
+ * enforced by the database. Every statement is idempotent ({@code IF [NOT] EXISTS}).
  */
 public final class Schema {
 
     private Schema() {}
 
+    /**
+     * Schema migrations, run BEFORE {@link #CONSTRAINTS} on every load. These drop constraints an
+     * older release created that a current load would now violate — a {@code CREATE CONSTRAINT …
+     * IF NOT EXISTS} cannot supersede a differently-named constraint on a different property, so a
+     * renamed constraint leaves the old one live and enforcing unless it is dropped here.
+     *
+     * <p>{@code j_application_name}: pre-3.1.1 releases keyed {@code :JApplication} on {@code name}
+     * and constrained it unique. The root is now keyed on its {@code can://} {@code id}
+     * ({@code j_application_id}), so an upgraded database still holds an id-less root whose
+     * {@code name} the MERGE-on-id misses: the load CREATEs a second root and then
+     * {@code SET n += {name: …}} trips the surviving old constraint with
+     * {@code ConstraintValidationFailed}, killing the whole push. The {@code .cypher} path escapes
+     * only because its wipe deletes the legacy root first; the Bolt path does not wipe, so without
+     * this DROP the very first incremental push against any pre-3.1.1 database fails outright.
+     */
+    public static final List<String> MIGRATIONS = Arrays.asList(
+            "DROP CONSTRAINT j_application_name IF EXISTS");
+
     public static final List<String> CONSTRAINTS = Arrays.asList(
             "CREATE CONSTRAINT j_symbol_id IF NOT EXISTS FOR (s:JSymbol) REQUIRE s.id IS UNIQUE",
-            "CREATE CONSTRAINT j_application_name IF NOT EXISTS FOR (a:JApplication) REQUIRE a.name IS UNIQUE",
+            "CREATE CONSTRAINT j_application_id IF NOT EXISTS FOR (a:JApplication) REQUIRE a.id IS UNIQUE",
             "CREATE CONSTRAINT j_compilation_unit_key IF NOT EXISTS FOR (c:JCompilationUnit) REQUIRE c.file_key IS UNIQUE",
             "CREATE CONSTRAINT j_package_name IF NOT EXISTS FOR (p:JPackage) REQUIRE p.name IS UNIQUE",
             "CREATE CONSTRAINT j_annotation_name IF NOT EXISTS FOR (an:JAnnotation) REQUIRE an.name IS UNIQUE",

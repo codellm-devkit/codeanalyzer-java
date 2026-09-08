@@ -27,8 +27,13 @@
 
     "canId": {
       "type": "string",
-      "pattern": "^can://java/",
-      "description": "Durable id for nodes at or above callable depth."
+      "pattern": "^can://[^/]+/java/",
+      "description": "Durable id for nodes at or above callable depth: can://<app>/java/..."
+    },
+    "applicationCanId": {
+      "type": "string",
+      "pattern": "^can://[^/]+$",
+      "description": "Id of the application root node: can://<app>, no trailing segment."
     },
 
     "localId": {
@@ -102,7 +107,7 @@
       "additionalProperties": false,
       "required": ["id", "kind", "symbol_table"],
       "properties": {
-        "id": { "$ref": "#/$defs/canId" },
+        "id": { "$ref": "#/$defs/applicationCanId" },
         "kind": { "const": "application" },
         "symbol_table": {
           "type": "object",
@@ -245,7 +250,7 @@
 
     "externalCanId": {
       "type": "string",
-      "pattern": "^can://java/[^/]+/@external/",
+      "pattern": "^can://[^/]+/java/@external/",
       "description": "Id of a symbol outside the project, so an in-project id landing in the external map fails the gate instead of validating happily."
     },
 
@@ -266,8 +271,8 @@
 
     "artifactCanId": {
       "type": "string",
-      "pattern": "^can://artifact/",
-      "description": "Id of a repository-artifact node: a language-neutral scheme, distinct from can://java/."
+      "pattern": "^can://[^/]+/artifact/",
+      "description": "Id of a repository-artifact node: nested under the app, language-neutral."
     },
 
     "artifact": {

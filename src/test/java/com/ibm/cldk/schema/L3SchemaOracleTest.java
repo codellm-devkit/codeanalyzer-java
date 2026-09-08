@@ -29,20 +29,25 @@ class L3SchemaOracleTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    private static final String APP_ID = CanId.applicationId("myapp");
+    private static final String MODULE_ID = CanId.moduleId(APP_ID, "Foo.java");
+    private static final String TYPE_ID = CanId.childId(MODULE_ID, "Foo");
+    private static final String CALLABLE_ID = TYPE_ID + "/m()";
+
     /** A level-3 payload with one callable carrying the given cfg/cdg/ddg member JSON. */
     private static String payload(String overlays) {
         String callable = "{"
-                + "\"id\":\"can://java/myapp/Foo.java/Foo/m()\","
+                + "\"id\":\"" + CALLABLE_ID + "\","
                 + "\"kind\":\"method\","
                 + "\"signature\":\"m()\","
                 + overlays
                 + "}";
         String type = "{"
-                + "\"id\":\"can://java/myapp/Foo.java/Foo\","
+                + "\"id\":\"" + TYPE_ID + "\","
                 + "\"kind\":\"class\","
                 + "\"callables\":{\"m()\":" + callable + "}}";
         String module = "{"
-                + "\"id\":\"can://java/myapp/Foo.java\","
+                + "\"id\":\"" + MODULE_ID + "\","
                 + "\"kind\":\"module\","
                 + "\"source\":\"\","
                 + "\"types\":{\"Foo\":" + type + "}}";
@@ -51,7 +56,7 @@ class L3SchemaOracleTest {
                 + "\"language\":\"java\","
                 + "\"max_level\":3,"
                 + "\"application\":{"
-                + "\"id\":\"can://java/myapp\","
+                + "\"id\":\"" + APP_ID + "\","
                 + "\"kind\":\"application\","
                 + "\"symbol_table\":{\"Foo.java\":" + module + "}}}";
     }
@@ -98,7 +103,7 @@ class L3SchemaOracleTest {
 
     @Test
     void aCfgEdgeWithACanIdEndpointIsRejected() throws IOException {
-        assertRejected(payload("\"cfg\":[{\"src\":\"can://java/x\",\"dst\":\"2:5\",\"kind\":\"true\"}]"),
+        assertRejected(payload("\"cfg\":[{\"src\":\"" + CALLABLE_ID + "\",\"dst\":\"2:5\",\"kind\":\"true\"}]"),
                 "cfg endpoints are body-node local ids, not can:// ids");
     }
 

@@ -65,7 +65,7 @@ callable and post-dominators computed; what remains is the region decomposition
 itself. WALA's HRB summaries are lazily computed inside its
 Slicer and not cleanly exposable. Heaviest L4 unit; lands last.
 
-### D8 — Identity: `can://java/<app>/<file>/<type>/<signature>`
+### D8 — Identity: `can://<app>/java/<file>/<type>/<signature>`
 Built from the existing `signatureOf()`.
 Ordinal ids `…@<line>:<col>` (real) / `…@<tag>` (synthetic) within a callable.
 
@@ -270,7 +270,7 @@ this is a new fact, not a reshaping of an existing one.
 - **Oracle:** emitted output is validated against an in-repo JSON Schema,
   `src/test/resources/schema/analysis.v2.schema.json`, because the SDK's v2 models do not exist yet.
   The schema is **strict** (`additionalProperties: false`) so a renamed or stray key fails the gate
-  instead of reaching consumers, and it encodes the structural invariants directly: `can://java/` id
+  instead of reaching consumers, and it encodes the structural invariants directly: `can://<app>/java/` id
   prefixes, `line:col`/`@tag` body keys via `propertyNames`, relative `symbol_table` keys, and
   `[from, to)` byte spans. Replace it with the SDK models once they land.
 - **The gate runs at two scales.** In-repo fixtures run in the default `test` task on every change.
@@ -308,7 +308,7 @@ in-project nodes — a WALA endpoint absent from the tree (a bridge/`access$`/`l
 
 ### D19 — `external_symbols`: flat map keyed by binary-name `@external` can-id
 Out-of-project call targets are homed in an application-scope `external_symbols{}` map so no edge
-dangles, keyed by an `@external` can-id (`can://java/<app>/@external/<binary-type>/<signature>`),
+dangles, keyed by an `@external` can-id (`can://<app>/java/@external/<binary-type>/<signature>`),
 positionally parallel to an in-project callable id with `@external` in the file slot. The key carries
 the **binary** type name (`java.util.Map$Entry`) — unambiguous about where the package ends, and the
 spelling WALA emits natively so the `rta` overlay joins — while the `declaring_type` field carries the

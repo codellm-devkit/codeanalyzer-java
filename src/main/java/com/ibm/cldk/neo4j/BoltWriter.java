@@ -14,6 +14,7 @@ package com.ibm.cldk.neo4j;
 
 import com.ibm.cldk.neo4j.GraphRows.EdgeRow;
 import com.ibm.cldk.neo4j.GraphRows.NodeRow;
+import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.utils.Log;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -51,7 +52,7 @@ public final class BoltWriter implements BoltSink {
     /**
      * The v2 purge: scoped by the module's own {@code can://} id rather than by a bare file key.
      *
-     * <p>The id is a path — {@code can://java/<app>/<file>} — so matching the module itself by
+     * <p>The id is a path — {@code can://<app>/java/<file>} — so matching the module itself by
      * equality and its declarations by {@code id STARTS WITH <id> + '/'} is containment, and it is
      * simultaneously scoped to one language, one application and one module. That last one is what
      * neither a label anchor nor {@code _module} could give: two java applications sharing
@@ -74,9 +75,31 @@ public final class BoltWriter implements BoltSink {
                     + "AND NOT x.id IN $keys DETACH DELETE x";
 
     /**
+     * The orphan prune: matches the application root by its {@code can://} {@code id} when it is a
+     * v2 root (exact, unique-constrained), OR by {@code name} when it is a legacy v1 root --
+     * identifiable because v1 never writes {@code id} (see {@code GraphProjector.java}). An
+     * id-only match would orphan a prior v1 graph instead of pruning it; an ungated
+     * {@code a.name =} disjunct would reach every v2 root carrying that display name -- including
+     * roots this analyzer never minted -- since {@code name} stopped being unique-constrained once
+     * the root was re-keyed. Hence the {@code a.id IS NULL} guard, which confines the name branch
+     * to legacy roots.
+     *
+     * <p>This does <b>not</b> separate two distinct applications sharing an {@code --app-name}:
+     * {@link com.ibm.cldk.schema.CanId#applicationId} is {@code "can://" + appName}, so they share
+     * an id byte-for-byte and are one node. Distinct services need distinct {@code --app-name}
+     * values; no predicate here can recover a distinction the id never encoded.
+     */
+    static final String PRUNE_VANISHED_UNITS_V2 =
+            "MATCH (a:JApplication)-[:J_HAS_UNIT|J_HAS_MODULE]->(c) "
+                    + "WHERE (a.id = $appId OR (a.id IS NULL AND a.name = $appName)) "
+                    + "AND NOT c.file_key IN $present "
+                    + "OPTIONAL MATCH (c)-" + CypherWriter.DESCENDANTS + "->(x) "
+                    + "DETACH DELETE x, c RETURN count(c) AS pruned";
+
+    /**
      * The prefix that matches a module's declarations but not a sibling module whose path merely
-     * starts the same way. The separator is the whole point: {@code can://java/app/src/Foo.java}
-     * is also a prefix of {@code can://java/app/src/Foo.javaX}, so a bare {@code STARTS WITH} on
+     * starts the same way. The separator is the whole point: {@code can://app/java/src/Foo.java}
+     * is also a prefix of {@code can://app/java/src/Foo.javaX}, so a bare {@code STARTS WITH} on
      * the module id would purge a different module's nodes. The module itself is matched by
      * equality instead, since its own id does not end in a separator.
      */
@@ -127,8 +150,13 @@ public final class BoltWriter implements BoltSink {
         }
 
         void run(GraphRows rows, boolean fullRun) {
-            // 1. schema (DDL runs in its own autocommit transactions).
+            // 1. schema (DDL runs in its own autocommit transactions). Migrations run FIRST: a
+            // constraint an older release created on a property this generation no longer keys on
+            // is still live and enforcing, and would fail the very first push (see Schema.MIGRATIONS).
             try (Session s = session()) {
+                for (String stmt : Schema.MIGRATIONS) {
+                    s.run(stmt);
+                }
                 for (String stmt : Schema.CONSTRAINTS) {
                     s.run(stmt);
                 }
@@ -223,22 +251,31 @@ public final class BoltWriter implements BoltSink {
             // units (and other applications in the database are never touched).
             if (fullRun) {
                 List<String> present = new ArrayList<>(byUnit.keySet());
-                String app = appNameOf(rows);
+                String appName = appNameOf(rows);
+                String appId = CanId.applicationId(appName);
                 // Checked against the same hazard as the _module purges above (#213) and found
                 // sound, so deliberately left alone: this traversal never leaves java's own graph.
-                // It enters at :JApplication (java-owned, and scoped to this app by name), hops a
-                // java-owned relationship type, and expands only through DESCENDANTS -- every
-                // member of which is J_-prefixed containment. `c` and `x` are unlabelled but
-                // unreachable except along those edges, and DESCENDANTS deliberately excludes
-                // HAS_ARTIFACT, so no cross-language :Artifact/:ConfigKey and no shared
-                // :JPackage/:JAnnotation can be reached. Do not add a non-containment type to
-                // DESCENDANTS without re-checking that.
+                // It enters at :JApplication (java-owned, and scoped to this app by its unique
+                // can:// id when the root is v2, or by name when it is a legacy v1 root that never
+                // got an id -- see PRUNE_VANISHED_UNITS_V2's javadoc), hops a java-owned
+                // relationship type, and expands only through DESCENDANTS -- every member of which
+                // is J_-prefixed containment. `c` and `x` are unlabelled but unreachable except
+                // along those edges, and DESCENDANTS deliberately excludes HAS_ARTIFACT, so no
+                // cross-language :Artifact/:ConfigKey and no shared :JPackage/:JAnnotation can be
+                // reached. Do not add a non-containment type to DESCENDANTS without re-checking that.
+                //
+                // The snapshot path (CypherWriter.wipe) deliberately went the other way and now
+                // deletes this app's :Artifact/:ConfigKey via a `can://<app>/` prefix sweep, so a
+                // full snapshot rebuilds them instead of letting them accumulate. That widening is
+                // NOT mirrored here, on purpose: this writer is incremental. Its unit of
+                // replacement is one module (descendantPrefix(moduleId)) or one vanished unit, and
+                // an app-level artifact belongs to neither -- an app-wide artifact sweep would
+                // delete artifacts a targeted `--target-files` run never re-pushes. The snapshot can
+                // afford the widening only because it always writes the full truth back.
                 try (Session s = session()) {
-                    long pruned = s.run("MATCH (:JApplication {name: $app})-[:J_HAS_UNIT|J_HAS_MODULE]->(c) "
-                                    + "WHERE NOT c.file_key IN $present "
-                                    + "OPTIONAL MATCH (c)-" + CypherWriter.DESCENDANTS + "->(x) "
-                                    + "DETACH DELETE x, c RETURN count(c) AS pruned",
-                            Values.parameters("present", present, "app", app)).single().get("pruned").asLong(0);
+                    long pruned = s.run(PRUNE_VANISHED_UNITS_V2,
+                            Values.parameters("present", present, "appId", appId, "appName", appName))
+                            .single().get("pruned").asLong(0);
                     Log.info("neo4j(bolt): pruned " + pruned + " vanished unit(s)");
                 }
             } else {
@@ -318,11 +355,18 @@ public final class BoltWriter implements BoltSink {
             return null;
         }
 
-        /** The application anchor's name — the one {@code :JApplication} row every projection emits. */
+        /**
+         * The application anchor's display name — read from the {@code name} property rather than
+         * {@link NodeRow#value}, because that merge value is generation-dependent (the raw name
+         * for v1, the {@code can://} id for v2 since Task 3). The {@code name} property is set
+         * identically by both generations, so this always yields the true app name to re-derive
+         * the id from.
+         */
         private static String appNameOf(GraphRows rows) {
             for (NodeRow n : rows.nodes) {
                 if (n.labels.get(0).equals("JApplication")) {
-                    return n.value;
+                    Object name = n.props.get("name");
+                    return name != null ? name.toString() : n.value;
                 }
             }
             return "application";

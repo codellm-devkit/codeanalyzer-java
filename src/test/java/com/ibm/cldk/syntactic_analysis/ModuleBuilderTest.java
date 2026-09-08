@@ -40,7 +40,7 @@ class ModuleBuilderTest {
 
         JModule module = new ModuleBuilder(ctx).build(cu);
 
-        assertEquals("can://java/myapp/" + fileKey, module.getId());
+        assertEquals(CanId.moduleId(CanId.applicationId("myapp"), fileKey), module.getId());
         assertEquals("module", module.getKind());
         assertEquals("com.example", module.getPackageName());
         assertEquals(source, module.getSource());
@@ -57,7 +57,8 @@ class ModuleBuilderTest {
         assertEquals(Set.of("Foo", "Bar"), module.getTypes().keySet());
         assertEquals("class", module.getTypes().get("Foo").getKind());
         assertEquals("interface", module.getTypes().get("Bar").getKind());
-        assertEquals("can://java/myapp/src/Foo.java/Foo", module.getTypes().get("Foo").getId());
+        assertEquals(CanId.childId(CanId.moduleId(CanId.applicationId("myapp"), "src/Foo.java"), "Foo"),
+                module.getTypes().get("Foo").getId());
     }
 
     @Test

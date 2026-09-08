@@ -41,7 +41,7 @@ class TypeBuilderTest {
     @Test
     void build_setsIdAndClassKind() {
         JType t = buildFirstType("package com.example;\n\npublic class Foo {}\n");
-        assertEquals("can://java/myapp/" + FILE_KEY + "/Foo", t.getId());
+        assertEquals(CanId.childId(CanId.moduleId(CanId.applicationId("myapp"), FILE_KEY), "Foo"), t.getId());
         assertEquals("class", t.getKind());
     }
 

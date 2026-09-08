@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.schema.JCallEdge;
 import com.ibm.cldk.schema.JCallable;
@@ -27,6 +28,8 @@ import org.junit.jupiter.api.Test;
 class SummaryPassTest {
 
     private static final String FIXTURE = "src/test/resources/test-applications/l4-sdg-test";
+    private static final String PASS_MODULE_ID = CanId.moduleId(CanId.applicationId("pass"), "Pass.java");
+    private static final String PASS_TYPE_ID = CanId.childId(PASS_MODULE_ID, "Pass");
 
     private static Map<String, JModule> analyzed() throws Exception {
         Map<String, JModule> modules = L1Extractor.extractAll(
@@ -232,7 +235,7 @@ class SummaryPassTest {
     /** {@code m} copies its parameter into a local and returns the local; {@code top} calls it. */
     private static Map<String, JModule> localCopyChain() {
         JType type = new JType();
-        type.setId("can://java/pass/Pass.java/Pass");
+        type.setId(PASS_TYPE_ID);
 
         JCallable m = method("m(int)", "q");
         m.getBody().put("@entry", node("entry", null, LOCAL_SOURCE));
@@ -251,7 +254,7 @@ class SummaryPassTest {
         type.getCallables().put("top(int)", top);
 
         JModule module = new JModule();
-        module.setId("can://java/pass/Pass.java");
+        module.setId(PASS_MODULE_ID);
         module.setSource(LOCAL_SOURCE);
         module.getTypes().put("Pass", type);
         return new LinkedHashMap<>(Map.of("Pass.java", module));
@@ -267,7 +270,7 @@ class SummaryPassTest {
 
     private static Map<String, JModule> wrappedChain() {
         JType type = new JType();
-        type.setId("can://java/pass/Pass.java/Pass");
+        type.setId(PASS_TYPE_ID);
 
         JCallable id = method("id(int)", "p");
         id.getBody().put("@entry", node("entry", null, WRAP_SOURCE));
@@ -293,7 +296,7 @@ class SummaryPassTest {
         type.getCallables().put("top(int)", top);
 
         JModule module = new JModule();
-        module.setId("can://java/pass/Pass.java");
+        module.setId(PASS_MODULE_ID);
         module.setSource(WRAP_SOURCE);
         module.getTypes().put("Pass", type);
         return new LinkedHashMap<>(Map.of("Pass.java", module));
@@ -312,7 +315,7 @@ class SummaryPassTest {
     /** {@code callee → mid → top}, each level passing its argument out through the return. */
     private static Map<String, JModule> passThroughChain() {
         JType type = new JType();
-        type.setId("can://java/pass/Pass.java/Pass");
+        type.setId(PASS_TYPE_ID);
 
         JCallable callee = method("callee(int)", "q");
         callee.getBody().put("@entry", node("entry", null, PASS_SOURCE));
@@ -339,7 +342,7 @@ class SummaryPassTest {
         type.getCallables().put("top(int)", top);
 
         JModule module = new JModule();
-        module.setId("can://java/pass/Pass.java");
+        module.setId(PASS_MODULE_ID);
         module.setSource(PASS_SOURCE);
         module.getTypes().put("Pass", type);
         return new LinkedHashMap<>(Map.of("Pass.java", module));
@@ -356,7 +359,7 @@ class SummaryPassTest {
 
     private static JCallable method(String signature, String param) {
         JCallable c = new JCallable();
-        c.setId("can://java/pass/Pass.java/Pass/" + signature);
+        c.setId(PASS_TYPE_ID + "/" + signature);
         c.setKind("method");
         c.setSignature(signature);
         c.setReturnType("int");
@@ -381,7 +384,7 @@ class SummaryPassTest {
 
     private static JBodyNode callNode(String snippet, String calleeSignature, String source) {
         JBodyNode n = node("call", snippet, source);
-        n.setCallee("can://java/pass/Pass.java/Pass/" + calleeSignature);
+        n.setCallee(PASS_TYPE_ID + "/" + calleeSignature);
         n.setReturnType("int");
         n.setArgumentExpr(new ArrayList<>(List.of(snippet.substring(snippet.indexOf('(') + 1, snippet.length() - 1))));
         return n;
@@ -395,8 +398,8 @@ class SummaryPassTest {
 
     private static JCallEdge callEdge(String from, String to) {
         JCallEdge e = new JCallEdge();
-        e.setSrc("can://java/pass/Pass.java/Pass/" + from);
-        e.setDst("can://java/pass/Pass.java/Pass/" + to);
+        e.setSrc(PASS_TYPE_ID + "/" + from);
+        e.setDst(PASS_TYPE_ID + "/" + to);
         return e;
     }
 

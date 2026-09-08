@@ -365,14 +365,14 @@ public final class L3WalaOverlays {
     // ----- applicationId derivation -------------------------------------------------------------
 
     /**
-     * Derives the {@code can://java/<app>} applicationId from the first entry in {@code modules}.
+     * Derives the {@code can://<app>} applicationId from the first entry in {@code modules}.
      * The module id has the form {@code applicationId/normalizedFileKey}, so strip the suffix.
      */
     private static String deriveApplicationId(Map<String, JModule> modules) {
         Map.Entry<String, JModule> first = modules.entrySet().iterator().next();
         String moduleId = first.getValue().getId();
         if (moduleId == null) {
-            return CanId.SCHEME + "/unknown";
+            return CanId.applicationId("unknown");
         }
         String normalizedFileKey = first.getKey().replace("\\", "/").replaceFirst("^[./]+", "");
         int sep = moduleId.lastIndexOf("/" + normalizedFileKey);

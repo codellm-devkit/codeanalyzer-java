@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.stmt.BlockStmt;
+import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JDdgEdge;
 import com.ibm.cldk.syntactic_analysis.L1BuildContext;
 import com.ibm.cldk.syntactic_analysis.L3Overlays;
@@ -29,7 +30,7 @@ class DdgBuilderEntryDefsTest {
         BlockStmt body = md.getBody().orElseThrow();
         List<String> formals = md.getParameters().stream()
                 .map(p -> p.getNameAsString()).collect(Collectors.toList());
-        L1BuildContext ctx = new L1BuildContext("can://java/t", "T.java", source, 3, 3, "ast");
+        L1BuildContext ctx = new L1BuildContext(CanId.applicationId("t"), "T.java", source, 3, 3, "ast");
         return L3Overlays.build(body, new LinkedHashMap<>(), ctx, 3, formals).ddg();
     }
 

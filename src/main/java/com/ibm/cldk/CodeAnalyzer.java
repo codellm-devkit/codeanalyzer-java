@@ -638,7 +638,11 @@ public class CodeAnalyzer implements Runnable {
         }
 
         if ("neo4j".equalsIgnoreCase(emit)) {
-            Neo4jEmitter.emitV2(analysis, appName, input, output, boltConfig());
+            // The RESOLVED name, not the raw --app-name: the payload and the root's can:// id are
+            // both built from `application`, so handing the emitter a blank/raw `appName` here keys
+            // the root `can://<dirname>` while `name` and both destructive predicates use "" --
+            // wipe and prune then match nothing and the graph accretes forever.
+            Neo4jEmitter.emitV2(analysis, application, input, output, boltConfig());
             return;
         }
 

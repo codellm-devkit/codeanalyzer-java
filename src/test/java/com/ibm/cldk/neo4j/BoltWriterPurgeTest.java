@@ -3,6 +3,7 @@ package com.ibm.cldk.neo4j;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.ibm.cldk.schema.CanId;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -15,7 +16,7 @@ import org.junit.jupiter.api.Test;
  * except identity.
  *
  * <p>Scoping on the module's own {@code can://} id fixes both at once, because the id is a path —
- * {@code can://java/<app>/<file>} — so a prefix match is language-, application- and module-scoped
+ * {@code can://<app>/java/<file>} — so a prefix match is language-, application- and module-scoped
  * simultaneously.
  *
  * <p>Asserted on the statement text rather than through a live database: that path needs Docker and
@@ -49,21 +50,46 @@ class BoltWriterPurgeTest {
 
     @Test
     void theDescendantPrefixEndsWithTheSeparator() {
-        // Dropping the separator is silent and wrong: can://java/app/src/Foo.java also prefixes
-        // can://java/app/src/Foo.javaX, so a bare STARTS WITH would purge a different module.
-        String prefix = BoltWriter.descendantPrefix("can://java/app/src/Foo.java");
+        // Dropping the separator is silent and wrong: <moduleId> also prefixes <moduleId>X,
+        // so a bare STARTS WITH would purge a different module.
+        String app = CanId.applicationId("app");
+        String moduleId = CanId.moduleId(app, "src/Foo.java");
+        String prefix = BoltWriter.descendantPrefix(moduleId);
         assertTrue(prefix.endsWith("/"), prefix);
-        assertFalse("can://java/app/src/Foo.javaX".startsWith(prefix),
+        assertFalse((moduleId + "X").startsWith(prefix),
                 "a sibling module whose path merely starts the same way must not match");
-        assertTrue("can://java/app/src/Foo.java/Foo/m()".startsWith(prefix),
+        assertTrue(CanId.childId(CanId.childId(moduleId, "Foo"), "m()").startsWith(prefix),
                 "a real declaration of this module must match");
+    }
+
+    @Test
+    void theOrphanPruneMatchesAV2RootByIdAndALegacyV1RootByNameButNotAnotherApplication() {
+        // v2 roots are keyed on `id` -- unique-constrained and exact -- but legacy v1 roots
+        // (GraphProjector.java) never write `id`, only `name`. An id-only match orphans a prior v1
+        // graph instead of pruning it; an ungated `a.name =` disjunct reaches every v2 root
+        // carrying that display name, including roots this analyzer never minted, since `name`
+        // stopped being unique once the id re-key landed. Note this is scoping hygiene, not
+        // disambiguation: CanId.applicationId is "can://" + appName, so two services sharing an
+        // --app-name share an id and are one node either way.
+        String stmt = BoltWriter.PRUNE_VANISHED_UNITS_V2;
+        assertTrue(stmt.contains("a.id = $appId"),
+                "must reach a v2 root of THIS app by its unique id: " + stmt);
+        assertTrue(stmt.contains("a.id IS NULL AND a.name = $appName"),
+                "must reach a legacy v1 root (no id) by name, guarded by id IS NULL: " + stmt);
+        // Every `a.name =` must sit inside the `a.id IS NULL` guard: an unguarded one reaches v2
+        // roots this analyzer never minted that merely carry the same display name.
+        assertFalse(stmt.replace("a.id IS NULL AND a.name = $appName", "").contains("a.name ="),
+                "a.name must never be matched outside the a.id IS NULL guard -- that would reach "
+                        + "any v2 root carrying this display name, not just this app's: " + stmt);
+        assertFalse(stmt.contains("{name:"),
+                "the prune must not property-match :JApplication by its no-longer-unique name: " + stmt);
     }
 
     @Test
     void aCanIdIsRecognizedAndAVersionOneIdIsNot() {
         // What selects the purge path at all: v1 ids are FQN-shaped and carry no application
         // segment, so there is nothing to prefix and the purge is skipped rather than mis-scoped.
-        assertTrue(RowBuilder.isCanId("can://java/app/src/Foo.java"));
+        assertTrue(RowBuilder.isCanId(CanId.moduleId(CanId.applicationId("app"), "src/Foo.java")));
         assertFalse(RowBuilder.isCanId("com.l4.Arity#caller(int, int)@22:16-22:25"));
         assertFalse(RowBuilder.isCanId(null));
     }

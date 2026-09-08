@@ -13,9 +13,9 @@ class ArtifactModelTest {
 
     @Test
     void artifactIdIsLanguageNeutral() {
-        assertEquals("can://artifact/myapp/deploy/docker-compose.yml",
+        assertEquals(CanId.applicationId("myapp") + "/artifact/deploy/docker-compose.yml",
                 CanId.artifactId("myapp", "deploy/docker-compose.yml"),
-                "the scheme carries `artifact`, not `java` — sibling analyzers must land on this node");
+                "the segment carries `artifact`, not `java` — sibling analyzers must land on this node");
     }
 
     @Test
@@ -61,7 +61,7 @@ class ArtifactModelTest {
     @Test
     void applicationOmitsTheLayerWhenEmpty() {
         JApplication app = new JApplication();
-        app.setId("can://java/x");
+        app.setId(CanId.applicationId("x"));
         String json = V2Json.compact().toJson(app);
         assertFalse(json.contains("artifacts"), json);
         assertFalse(json.contains("dependencies"), json);

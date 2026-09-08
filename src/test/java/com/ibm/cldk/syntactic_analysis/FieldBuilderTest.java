@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
 class FieldBuilderTest {
 
     private static final String FILE_KEY = "src/main/java/com/example/Foo.java";
-    private static final String TYPE_ID = "can://java/myapp/" + FILE_KEY + "/Foo";
+    private static final String TYPE_ID = CanId.childId(CanId.moduleId(CanId.applicationId("myapp"), FILE_KEY), "Foo");
 
     private static List<JField> build(String memberSource) {
         String source = "package com.example;\nclass Foo {\n  " + memberSource + "\n}\n";

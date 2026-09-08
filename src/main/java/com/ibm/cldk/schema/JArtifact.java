@@ -6,7 +6,7 @@ import lombok.Data;
 
 /**
  * A build or configuration artifact in the repository — a build manifest, config file, Dockerfile,
- * CI definition, or other non-source file. The {@code id} is the canonical {@code can://artifact/}
+ * CI definition, or other non-source file. The {@code id} is the canonical {@code can://<app>/artifact/}
  * path, and {@code path} is its repo-relative location (also the map key in {@code application.artifacts}),
  * allowing consumers to navigate back to the filesystem.
  *

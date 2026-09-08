@@ -87,7 +87,7 @@ public final class L1BuildContext {
         this.l3Engine = l3Engine != null ? l3Engine.toLowerCase(java.util.Locale.ROOT) : "ast";
     }
 
-    /** The {@code can://java/<app>/<file>} id for this module. */
+    /** The {@code can://<app>/java/<file>} id for this module. */
     public String moduleId() {
         return CanId.moduleId(applicationId, fileKey);
     }

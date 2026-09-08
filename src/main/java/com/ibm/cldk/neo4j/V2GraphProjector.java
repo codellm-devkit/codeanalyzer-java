@@ -74,7 +74,13 @@ public final class V2GraphProjector {
         RowBuilder b = new RowBuilder();
         Map<String, JModule> symbolTable = analysis.getApplication().getSymbolTable();
 
+        // Unguarded this yields `MERGE (:JApplication {id: null})` -- an unkeyed root that every
+        // id-scoped wipe and prune misses. Unreachable via CodeAnalyzer (V2Emitter always stamps
+        // it), but this is a public entry point.
+        String appId = java.util.Objects.requireNonNull(analysis.getApplication().getId(),
+                "application.id is null -- the can:// root id must be stamped by V2Emitter before projection");
         Map<String, Object> appProps = RowBuilder.props();
+        appProps.put("id", appId);
         appProps.put("name", appName);
         appProps.put("schema_version", V2SchemaCatalog.SCHEMA_VERSION);
         if (analysis.getAnalyzer() != null) {
@@ -93,7 +99,7 @@ public final class V2GraphProjector {
         // After prune, so an application with zero entrypoints still carries the key rather than
         // having it dropped as an empty list.
         prunedAppProps.put("entrypoint_frameworks", entrypointReport.getFrameworksDetected());
-        NodeRef app = b.node(Arrays.asList("JApplication"), "name", appName, prunedAppProps);
+        NodeRef app = b.node(Arrays.asList("JApplication"), "id", appId, prunedAppProps);
 
         // First pass: an in-project index from a type's qualified (dotted) name to its node id and
         // owning module id, for resolving extends/implements/import spellings to emitted nodes.

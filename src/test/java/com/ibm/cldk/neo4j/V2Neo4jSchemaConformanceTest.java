@@ -14,6 +14,7 @@ package com.ibm.cldk.neo4j;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -64,7 +65,8 @@ public class V2Neo4jSchemaConformanceTest {
     // l4-sdg-test (not call-graph-test): its calls are all 1-arg with a transitive a→b→c chain, so
     // J_PARAM_IN/J_SUMMARY are guaranteed non-empty here. The v1/v2 conformance tests still exercise
     // call-graph-test.
-    private static final Path FIXTURE = Paths.get("src/test/resources/test-applications/l4-sdg-test");
+    private static final String APP_NAME = "l4-sdg-test";
+    private static final Path FIXTURE = Paths.get("src/test/resources/test-applications/" + APP_NAME);
 
     // A throwaway repository-artifact fixture, independent of FIXTURE above: ArtifactDiscovery /
     // DependencyView / ConfigKeys only care about non-.java files, so this is populated with a
@@ -90,8 +92,8 @@ public class V2Neo4jSchemaConformanceTest {
             REL_BY_TYPE.put(rt.type, rt);
         }
         Map<String, JModule> modules = L1Extractor.extractAll(
-                FIXTURE, "l4-sdg-test", null, new LinkedHashMap<>(), 3, 3, "ast");
-        L2CallGraph.Result l2 = L2CallGraph.build("l4-sdg-test", modules, null, true);
+                FIXTURE, APP_NAME, null, new LinkedHashMap<>(), 3, 3, "ast");
+        L2CallGraph.Result l2 = L2CallGraph.build(APP_NAME, modules, null, true);
         SdgVertices.Result sdg = SdgVertices.apply(modules);
         SummaryPass.apply(modules, l2.callGraph(), 3);
 
@@ -108,7 +110,7 @@ public class V2Neo4jSchemaConformanceTest {
         Files.writeString(ARTIFACT_TMP.resolve("application.properties"),
                 "server.port=8080\nspring.datasource.url=${DB_URL}\n", StandardCharsets.UTF_8);
         Map<String, JArtifact> artifacts =
-                ArtifactDiscovery.discover(ARTIFACT_TMP, "l4-sdg-test", true, 262144);
+                ArtifactDiscovery.discover(ARTIFACT_TMP, APP_NAME, true, 262144);
         List<JDependency> dependencies = DependencyView.build(ARTIFACT_TMP, artifacts);
         for (JArtifact a : artifacts.values()) {
             if (ConfigKeys.isEligible(a)) {
@@ -119,9 +121,9 @@ public class V2Neo4jSchemaConformanceTest {
         }
 
         Analysis analysis = V2Emitter.emit(
-                "l4-sdg-test", 3, modules, "test", l2.callGraph(), l2.externalSymbols(),
+                APP_NAME, 3, modules, "test", l2.callGraph(), l2.externalSymbols(),
                 sdg.paramIn, sdg.paramOut, artifacts, dependencies);
-        rows = V2GraphProjector.project(analysis, "l4-sdg-test");
+        rows = V2GraphProjector.project(analysis, APP_NAME);
     }
 
     private static String specificLabel(List<String> labels) {
@@ -215,11 +217,20 @@ public class V2Neo4jSchemaConformanceTest {
 
     @Test
     public void wipeCoversBothGenerationsSoV2ReplacesAPriorV1Graph() {
-        String cypher = CypherWriter.renderCypher(rows, "l4-sdg-test");
+        String cypher = CypherWriter.renderCypher(rows, APP_NAME);
         assertTrue(cypher.contains("J_HAS_UNIT|J_HAS_MODULE"),
                 "the wipe must traverse both generations' unit relationship");
         assertTrue(cypher.contains("MATCH (s:JSymbol) WHERE NOT (s)--() DELETE s"),
                 "the wipe must sweep orphaned symbols (v1 import-materialized type stubs)");
+        // The v1 path is NOT reachable by the can:// prefix sweep -- v1 ids are FQNs and v1 roots
+        // carry no `id` at all -- so replacing the containment traversal with the sweep orphans
+        // every prior v1 graph. That was tried on this branch and reverted; both must be present.
+        assertTrue(cypher.contains("OPTIONAL MATCH (a)-[:J_HAS_UNIT|J_HAS_MODULE]->(c)")
+                        && cypher.contains("OPTIONAL MATCH (c)-" + CypherWriter.DESCENDANTS + "->(x)")
+                        && cypher.contains("DETACH DELETE x, c, a;"),
+                "the v1-reaching containment traversal must survive alongside the prefix sweep: " + cypher);
+        assertTrue(cypher.contains("a.id IS NULL AND a.name = '" + APP_NAME + "'"),
+                "a legacy v1 root has no id and is reachable only by the guarded name branch: " + cypher);
         for (String rel : new String[] {"J_HAS_CALLSITE", "J_HAS_COMMENT", "J_HAS_PARAMETER",
                 "J_DECLARES", "J_HAS_METHOD", "J_HAS_BODY_NODE"}) {
             assertTrue(CypherWriter.DESCENDANTS.contains(rel),
@@ -285,14 +296,14 @@ public class V2Neo4jSchemaConformanceTest {
         // wipeStaysOffTheCrossLanguageArtifactPackageSubgraph below, which exists because only the
         // positive case had ever been asserted): a mis-sourced edge still lands on the expected
         // target, so nothing except the source endpoint can catch it.
-        String appName = "l4-sdg-test";
-        String pomId = CanId.artifactId(appName, "pom.xml");
-        String lockId = CanId.artifactId(appName, "gradle.lockfile");
+        String pomId = CanId.artifactId(APP_NAME, "pom.xml");
+        String lockId = CanId.artifactId(APP_NAME, "gradle.lockfile");
         for (EdgeRow edge : rows.edges) {
             if (edge.type.equals("HAS_ARTIFACT")) {
                 hasArtifact = true;
                 assertEquals("JApplication", edge.from.label, "HAS_ARTIFACT runs application -> artifact");
-                assertEquals(appName, edge.from.value, "the application is the source endpoint");
+                assertEquals(CanId.applicationId(APP_NAME), edge.from.value,
+                        "the application is the source endpoint, keyed on its can:// id");
                 assertEquals("Artifact", edge.to.label);
             }
             if (edge.type.equals("DEFINES_CONFIG")) {
@@ -385,26 +396,65 @@ public class V2Neo4jSchemaConformanceTest {
     }
 
     @Test
-    void wipeStaysOffTheCrossLanguageArtifactPackageSubgraph() {
-        // The negative counterpart to wipeCoversBothGenerationsSoV2ReplacesAPriorV1Graph above,
-        // which asserts what the wipe DOES reach; nothing asserted what it must NOT, which is
-        // exactly how a well-intentioned widening (fold Artifact/ConfigKey into the same wipe that
-        // already unifies v1/v2) shipped and had to be reverted. :Artifact, :ConfigKey and :Package
-        // are un-prefixed cross-language merge targets (CanId.artifactId's own javadoc: the
-        // `artifact` id segment exists so a sibling-language analyzer over the same repository
-        // lands on the same node, not a duplicate). A wipe reaching any of them would DETACH DELETE
-        // that other analyzer's own edges on every Java re-push of the same app -- silent
-        // corruption in a tool this one cannot see or repair. Read CypherWriter.DESCENDANTS'
-        // javadoc before ever widening either pattern checked below.
-        assertTrue(CypherWriter.renderCypher(rows, "l4-sdg-test")
-                        .contains("OPTIONAL MATCH (a)-[:J_HAS_UNIT|J_HAS_MODULE]->(c)"),
-                "the wipe's app-anchor hop must stay exactly J_HAS_UNIT|J_HAS_MODULE -- widening it "
-                        + "to HAS_ARTIFACT lets a Java re-push delete another analyzer's edges on "
-                        + "the shared :Artifact merge target");
+    void theWipeReachesThisAppsArtifactsAndConfigKeysButNeverAPackage() {
+        // The deliberate widening (#244), mirroring codeanalyzer-python: :Artifact/:ConfigKey are
+        // under `can://<app>/` now that the app is the outermost id segment, so the snapshot's
+        // prefix sweep rebuilds them instead of letting stale ones accumulate forever with nothing
+        // ever cleaning them up. The accepted cost is one behavioural widening: a sibling-language
+        // analyzer's edge into a shared :Artifact is dropped by a Java snapshot and restored on that
+        // analyzer's next push. :Package (a `pkg:` purl) sits under no application, so it stays out
+        // by construction -- assert that, because it is the only thing left holding the line.
+        String cypher = CypherWriter.renderCypher(rows, APP_NAME);
+        String prefix = "can://" + APP_NAME + "/";
+
+        assertTrue(cypher.contains("MATCH (x:" + RowBuilder.CAN_NODE + ") WHERE x.id = 'can://" + APP_NAME
+                        + "' OR x.id STARTS WITH '" + prefix + "'"),
+                "the wipe must sweep the whole app prefix, rooted on the label-anchored index: " + cypher);
+        assertTrue(cypher.contains("CALL { WITH x DETACH DELETE x } IN TRANSACTIONS OF 1000 ROWS;"),
+                "the prefix sweep must batch, or a large app's wipe is one unbounded transaction: " + cypher);
+
+        // Not "an id that looks like an artifact id" -- the actual rows the projector emitted.
+        int artifacts = 0;
+        int configKeys = 0;
+        int packages = 0;
+        for (NodeRow n : rows.nodes) {
+            if (n.labels.contains("Artifact")) {
+                artifacts++;
+                assertTrue(n.value.startsWith(prefix),
+                        "an :Artifact must be under the app prefix the wipe sweeps, got: " + n.value);
+                assertTrue(n.labels.contains(RowBuilder.CAN_NODE),
+                        ":Artifact needs the index anchor or the prefix sweep cannot seek it: " + n.value);
+            }
+            if (n.labels.contains("ConfigKey")) {
+                configKeys++;
+                assertTrue(n.value.startsWith(prefix),
+                        "a :ConfigKey must be under the app prefix the wipe sweeps, got: " + n.value);
+                assertTrue(n.labels.contains(RowBuilder.CAN_NODE),
+                        ":ConfigKey needs the index anchor or the prefix sweep cannot seek it: " + n.value);
+            }
+            if (n.labels.contains("Package")) {
+                packages++;
+                assertFalse(n.value.startsWith(prefix),
+                        ":Package is a pkg: purl under no application -- the wipe must not reach it: " + n.value);
+                assertFalse(n.labels.contains(RowBuilder.CAN_NODE),
+                        ":Package must not carry the can:// index anchor: " + n.value);
+            }
+        }
+        assertTrue(artifacts > 0, "fixture emitted no :Artifact -- this test would pass vacuously");
+        assertTrue(configKeys > 0, "fixture emitted no :ConfigKey -- this test would pass vacuously");
+        assertTrue(packages > 0, "fixture emitted no :Package -- this test would pass vacuously");
+        assertFalse(CanId.purlMaven("org.example", "widget").startsWith(prefix),
+                "a maven purl must never fall under an application prefix");
+
+        // DESCENDANTS still excludes the artifact/package edges, for a reason that did NOT change:
+        // BoltWriter.PRUNE_VANISHED_UNITS_V2 shares this constant, and its unit of deletion is one
+        // vanished compilation unit. An app-level :Artifact is not a descendant of any one unit and
+        // must not die with one -- the widening above is snapshot-only, because only the snapshot
+        // writes the full truth back.
         for (String rel : new String[] {"HAS_ARTIFACT", "DEFINES_CONFIG", "DECLARES_DEPENDENCY", "LOCKS"}) {
             assertFalse(CypherWriter.DESCENDANTS.contains(rel),
-                    "wipe/prune descendant traversal must never include " + rel + " -- "
-                            + "Artifact/Package/ConfigKey are cross-language merge targets a wipe must not touch");
+                    "the unit-scoped descendant traversal must never include " + rel + " -- it is shared "
+                            + "with BoltWriter's per-unit prune, where an app-level artifact is out of scope");
         }
     }
 
@@ -435,6 +485,61 @@ public class V2Neo4jSchemaConformanceTest {
             assertTrue(present, "Schema.CONSTRAINTS has no uniqueness constraint for ("
                     + dm.group(1) + ", " + dm.group(2) + ") -- schema.neo4j.json promises one but no load "
                     + "would create it");
+        }
+    }
+
+    @Test
+    void theApplicationRootIsAddressableByItsCanId() {
+        NodeRow app = rows.nodes.stream()
+                .filter(n -> n.labels.contains("JApplication"))
+                .findFirst().orElseThrow();
+        assertEquals("id", app.keyProp, "the root must merge on its id, not a display name");
+        assertEquals(CanId.applicationId(APP_NAME), app.value);
+        assertEquals(APP_NAME, app.props.get("name"), "name survives as a display property");
+        assertTrue(app.labels.contains(RowBuilder.CAN_NODE),
+                "the root must carry the index anchor, so the prefix-scoped delete can reach it");
+    }
+
+    @Test
+    void twoApplicationsProjectAsTwoDistinctRoots() {
+        // Two DIFFERENTLY-named services: the root is keyed on `can://<app-name>`, so each gets
+        // its own id and its own prefix, and neither's wipe reaches the other. Two services sharing
+        // an --app-name would still be one node -- the id is derived from the name, so it cannot
+        // encode a distinction the operator did not make.
+        GraphRows a = V2GraphProjector.project(
+                V2Emitter.emit("svc-quotes", 1, Map.of(), "test"), "svc-quotes");
+        GraphRows b = V2GraphProjector.project(
+                V2Emitter.emit("svc-orders", 1, Map.of(), "test"), "svc-orders");
+
+        String ida = a.nodes.stream().filter(n -> n.labels.contains("JApplication"))
+                .findFirst().orElseThrow().value;
+        String idb = b.nodes.stream().filter(n -> n.labels.contains("JApplication"))
+                .findFirst().orElseThrow().value;
+        assertNotEquals(ida, idb, "two differently-named services must not share a root node");
+        assertEquals(CanId.applicationId("svc-quotes"), ida);
+        assertEquals(CanId.applicationId("svc-orders"), idb);
+    }
+
+    @Test
+    void everyProjectedIdSitsUnderTheApplicationPrefix() {
+        String prefix = CanId.applicationId(APP_NAME) + "/";
+        String root = CanId.applicationId(APP_NAME);
+        for (NodeRow n : rows.nodes) {
+            if (!RowBuilder.isCanId(n.value)) {
+                continue; // JPackage/JAnnotation are name-keyed by design
+            }
+            assertTrue(n.value.equals(root) || n.value.startsWith(prefix),
+                    n.value + " escapes the application prefix, so a scoped delete would miss it");
+        }
+    }
+
+    @Test
+    void noIdCarriesTheOldLanguageFirstShape() {
+        for (NodeRow n : rows.nodes) {
+            assertFalse(n.value.startsWith("can://java/"),
+                    "old-shape id survived: " + n.value);
+            assertFalse(n.value.startsWith("can://artifact/"),
+                    "old-shape artifact id survived: " + n.value);
         }
     }
 
