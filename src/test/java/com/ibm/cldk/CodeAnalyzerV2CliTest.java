@@ -295,6 +295,59 @@ class CodeAnalyzerV2CliTest {
     }
 
     @Test
+    void strictTurnsASilentDegradationIntoAFailure(@TempDir Path tmp) throws IOException {
+        // The complaint this flag answers: without it, `-a 2 --no-build` on an unbuilt project exits 0
+        // with a declared-edges-only call graph and a WARN on stderr, which a scripted caller cannot
+        // tell apart from a complete run.
+        Path in = project(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+
+        assertNotEquals(0, run("-i", in.toString(), "-o", out.toString(),
+                "--schema", "v2", "-a", "2", "--no-build", "--strict"),
+                "--strict must fail when the RTA overlay could not be produced");
+    }
+
+    @Test
+    void strictIsOffByDefaultSoDegradingStaysASupportedMode(@TempDir Path tmp) throws IOException {
+        // Degrading is deliberate, not a bug: `--no-build` on an unbuilt project still yields the
+        // tree, the declared call graph and the syntactic overlays. --strict is opt-in precisely so
+        // this keeps working for everyone who relies on it.
+        Path in = project(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(),
+                "--schema", "v2", "-a", "2", "--no-build"),
+                "without --strict the run must still exit 0 and emit declared edges");
+        assertTrue(Files.exists(out.resolve("analysis.json")),
+                "the degraded run must still write its payload");
+    }
+
+    @Test
+    void strictPassesWhenNothingDegraded(@TempDir Path tmp) throws IOException {
+        // --strict must not fail a run that asked for nothing WALA-dependent: at -a 1 there is no
+        // overlay to lose, so the flag has nothing to complain about.
+        Path in = project(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(),
+                "--schema", "v2", "-a", "1", "--no-build", "--strict"),
+                "--strict at -a 1 has no WALA overlay to lose and must pass");
+    }
+
+    @Test
+    void strictFailsBeforeWritingAMisleadingPayload(@TempDir Path tmp) throws IOException {
+        // A strict failure must not leave behind an analysis.json that looks complete — the whole
+        // point is that the caller cannot mistake a thin result for a full one.
+        Path in = project(tmp.resolve("app"));
+        Path out = tmp.resolve("out");
+
+        assertNotEquals(0, run("-i", in.toString(), "-o", out.toString(),
+                "--schema", "v2", "-a", "4", "--no-build", "--strict"));
+        assertFalse(Files.exists(out.resolve("analysis.json")),
+                "a --strict failure must not write a payload a caller could pick up anyway");
+    }
+
+    @Test
     void v2WalaL3EngineDegradesClearlyWhenBuildAbsent(@TempDir Path tmp) throws IOException {
         // No class files present — WALA cannot build the call graph; must exit 0 with declared
         // edges (L2 degraded mode) rather than crashing or rejecting the flag.
