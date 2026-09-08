@@ -241,6 +241,10 @@ build manifest or a configuration key is not a Java concept — a sibling-langua
 the same repository lands on the same nodes instead of a per-language duplicate.
 `SCHEMA_VERSION` is stamped onto the `:JApplication` node of every emitted graph.
 
+Every node id is `can://<app>/java/…`, so `can://<app>` is a prefix of every node the
+application emits — which is what the destructive statements scope on. `:JApplication` is keyed on
+that id, not on `--app-name`, so two applications analyzed under the same name stay two nodes.
+
 **Configuration reads.** `DEFINES_CONFIG` says which artifact declares a key; `J_USES_CONFIG` says
 which code reads one. Its source is whichever node the read was attributed to — a `:JBodyNode` for
 a call site (`System.getenv("X")`, `env.getProperty("X")`), or the `:JField` / `:JCallable` /
