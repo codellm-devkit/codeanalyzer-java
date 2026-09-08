@@ -242,13 +242,24 @@ the same repository lands on the same nodes instead of a per-language duplicate.
 `SCHEMA_VERSION` is stamped onto the `:JApplication` node of every emitted graph.
 
 Every node id starts with `can://<app>/` — `can://<app>/java/…` for code, `can://<app>/artifact/…`
-for build manifests and config keys — so `can://<app>` is a prefix of every node the application
-emits, which is what the destructive statements scope on. (`:Package` is the exception: it is keyed
-on a `pkg:` purl, sits under no application, and no wipe reaches it.) `:JApplication` is keyed on
-that id, not on the free-text `--app-name`, so the root is addressable by the same id its
+for build manifests and config keys, `can://<app>/@external/…` for library symbols — so
+`can://<app>` is a prefix of every node the application emits, which is what the destructive
+statements scope on. (`:Package` is the exception: it is keyed on a `pkg:` purl, sits under no
+application, and no wipe reaches it.) `:JApplication` is keyed on that id, not on the free-text
+`--app-name`, so the root is addressable by the same id its
 descendants are prefixed with. The id is derived from `--app-name` (`can://<app-name>`), so it does
 **not** disambiguate two services analyzed under the same name — those still merge onto one root.
 Give each service its own `--app-name` if they share a database.
+
+**Polyglot ids.** The `/java/` segment is what makes a code node this analyzer's. Three id families
+deliberately omit it and are therefore **language-neutral, shared merge targets**: `:Artifact`,
+`:ConfigKey` and `@external` symbols. A sibling analyzer over the same `<app>` mints byte-identical
+ids for them, so a `pom.xml`, a config key or `java.util.Map#get` is *one* node in a merged graph
+rather than a per-language duplicate. That sharing is the point, and its cost is accepted: two
+analyzers' notions of a library symbol are not necessarily the same thing, and merging them says
+they are. The consequence for writes: because these shared nodes sit inside `can://<app>/`, a Cypher
+snapshot's prefix wipe rebuilds them, so a cross-language edge into a shared `:Artifact` is dropped
+by one analyzer's snapshot and restored on the other's next push.
 
 **Configuration reads.** `DEFINES_CONFIG` says which artifact declares a key; `J_USES_CONFIG` says
 which code reads one. Its source is whichever node the read was attributed to — a `:JBodyNode` for
