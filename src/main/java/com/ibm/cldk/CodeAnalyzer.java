@@ -53,6 +53,7 @@ import java.lang.reflect.Type;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -158,6 +159,15 @@ public class CodeAnalyzer implements Runnable {
                     + "emitting declared-only call edges without building the application. Does not "
                     + "suppress the L4 WALA build at --analysis-level 4: the semantic ddg still needs it.")
     private boolean noRta = false;
+
+    @Option(names = {
+            "--strict" }, description = "Fail with a non-zero exit when a requested analysis degrades "
+                    + "(the RTA overlay or the L4 semantic ddg unavailable) instead of warning and "
+                    + "continuing. Off by default: degrading is a supported mode, and this flag is for "
+                    + "callers who need to detect it without parsing stderr.")
+    // Deliberately an INSTANCE field: the pre-existing options on this class are static, which leaks
+    // values between CommandLine instances in the same JVM. New flags do not add to that.
+    private boolean strict = false;
 
     @Option(names = {
             "--external-calls" }, description = "Home out-of-project call targets as external_symbols at "
@@ -481,6 +491,9 @@ public class CodeAnalyzer implements Runnable {
         WalaAnalysis wala = null;
         // Run-scoped: the finders' failures accumulate across every file of one extraction.
         JEntrypointReport entrypointReport = new JEntrypointReport();
+        // Overlays that were requested but could not be produced. Warned about either way; `--strict`
+        // is what turns them into a non-zero exit for a caller that cannot read stderr.
+        List<String> degraded = new ArrayList<>();
         try {
             modules = L1Extractor.extractAll(
                     Paths.get(input), application, dependencyDir, cached,
@@ -502,10 +515,17 @@ public class CodeAnalyzer implements Runnable {
                     wala = WalaAnalysis.of(input, deps, buildCommand).orElse(null);
                     if (wala == null) {
                         Log.warn("WALA L3 engine unavailable; emitting L2 declared edges only");
+                        degraded.add("--l3-engine wala: WALA could not build the call graph");
                     }
                     rtaEndpoints = wala != null ? wala.rtaEndpoints() : java.util.List.of();
                 } else {
                     rtaEndpoints = RtaCallGraph.endpoints(input, deps, buildCommand);
+                    // An empty endpoint set means the RTA overlay contributed nothing — either the
+                    // build produced no classes or the scope admitted none. Both leave the call graph
+                    // with declared edges only, which is exactly what a strict caller wants to know.
+                    if (rtaEndpoints.isEmpty()) {
+                        degraded.add("RTA overlay: no entrypoints; call graph is declared edges only");
+                    }
                 }
             }
             // Apply WALA L3 overlays while the dependency jars are still live (PDG/CFG need class files).
@@ -528,6 +548,7 @@ public class CodeAnalyzer implements Runnable {
                 } else {
                     Log.warn("L4 semantic ddg unavailable (WALA build failed); emitting the derived "
                             + "SDG vertices and param edges only");
+                    degraded.add("L4 semantic ddg: WALA build failed, no points-to ddg edges");
                 }
             }
         } finally {
@@ -586,6 +607,16 @@ public class CodeAnalyzer implements Runnable {
         } else {
             analysis = V2Emitter.emit(application, analysisLevel, modules, version,
                     null, null, null, null, artifacts, dependencies);
+        }
+
+        // Enforced here, after every overlay pass has had its chance and before anything is written:
+        // a strict run must not leave a half-written payload that looks like a complete one.
+        if (strict && !degraded.isEmpty()) {
+            throw new ParameterException(spec.commandLine(),
+                    "error: analysis degraded and --strict was requested:\n  - "
+                            + String.join("\n  - ", degraded)
+                            + "\nBuild the project (or drop --no-build) to get these overlays, or rerun"
+                            + " without --strict to accept the degraded output.");
         }
 
         // frameworks_detected is a union over the BUILT tree, so it must run after the modules are

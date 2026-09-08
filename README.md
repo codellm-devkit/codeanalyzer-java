@@ -339,6 +339,29 @@ RUN_CONTAINER_TESTS=1 ./gradlew test
    `--no-build` and give the analyzer a real JDK (see the note in [Quick install](#quick-install)
    — the bundled `jdk4py` runtime has no `javac`).
 
+   Degrading here is deliberate, not a bug: you still get the tree, the declared call graph, the
+   syntactic CFG/CDG/DDG and (at `-a 4`) the SDG vertices, `param_in`/`param_out` and summaries.
+   Only the WALA-derived overlays — the RTA edges and the alias-aware `prov: ["points-to"]` ddg
+   edges — are missing.
+
+4. How do I tell a degraded run from a complete one in a script?
+
+   Pass `--strict`. By default a degraded run exits **0** and reports the loss only as a `WARN` on
+   stderr, which is fine interactively and useless in a pipeline. `--strict` turns any missing
+   overlay into a non-zero exit, names what was lost, and writes no `analysis.json` — so a caller
+   cannot pick up a thin payload believing it is complete:
+
+   ```console
+   $ codeanalyzer -i ./app -a 2 --no-build --strict
+   error: analysis degraded and --strict was requested:
+     - RTA overlay: no entrypoints; call graph is declared edges only
+   Build the project (or drop --no-build) to get these overlays, or rerun without --strict to
+   accept the degraded output.
+   ```
+
+   It is opt-in on purpose: degrading is a supported mode, and defaulting to failure would break
+   every caller who relies on it.
+
 ## LICENSE
 
 ```LICENSE
