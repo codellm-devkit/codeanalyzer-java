@@ -372,7 +372,7 @@ public final class L3WalaOverlays {
         Map.Entry<String, JModule> first = modules.entrySet().iterator().next();
         String moduleId = first.getValue().getId();
         if (moduleId == null) {
-            return CanId.SCHEME + "/unknown";
+            return CanId.applicationId("unknown");
         }
         String normalizedFileKey = first.getKey().replace("\\", "/").replaceFirst("^[./]+", "");
         int sep = moduleId.lastIndexOf("/" + normalizedFileKey);
