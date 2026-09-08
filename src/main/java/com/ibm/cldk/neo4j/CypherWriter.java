@@ -14,6 +14,7 @@ package com.ibm.cldk.neo4j;
 
 import com.ibm.cldk.neo4j.GraphRows.EdgeRow;
 import com.ibm.cldk.neo4j.GraphRows.NodeRow;
+import com.ibm.cldk.schema.CanId;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.util.ArrayList;
@@ -144,7 +145,7 @@ public final class CypherWriter {
         // import-materialized bodyless :JType stubs hang off units via J_IMPORTS only, so the
         // DETACH DELETE above orphans them; degree-0 symbols are unreferencable junk in any
         // generation, and a symbol another application still uses keeps its edges and survives.
-        return "MATCH (a:JApplication {name: " + cypherValue(appName) + "})\n"
+        return "MATCH (a:JApplication {id: " + cypherValue(CanId.applicationId(appName)) + "})\n"
                 + "OPTIONAL MATCH (a)-[:J_HAS_UNIT|J_HAS_MODULE]->(c)\n"
                 + "OPTIONAL MATCH (c)-" + DESCENDANTS + "->(x)\n"
                 + "DETACH DELETE x, c, a;\n"

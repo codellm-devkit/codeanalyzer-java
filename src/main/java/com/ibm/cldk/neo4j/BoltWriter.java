@@ -14,6 +14,7 @@ package com.ibm.cldk.neo4j;
 
 import com.ibm.cldk.neo4j.GraphRows.EdgeRow;
 import com.ibm.cldk.neo4j.GraphRows.NodeRow;
+import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.utils.Log;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -72,6 +73,18 @@ public final class BoltWriter implements BoltSink {
     static final String PURGE_VANISHED_NODES_V2 =
             "MATCH (x:" + RowBuilder.CAN_NODE + ") WHERE (x.id = $mid OR x.id STARTS WITH $pre) "
                     + "AND NOT x.id IN $keys DETACH DELETE x";
+
+    /**
+     * The orphan prune: matches the application root by its {@code can://} {@code id} (Task 3) —
+     * not {@code name}, which stopped being unique-constrained once the root was re-keyed, so
+     * matching by it would reach every application sharing that display name and prune (or wipe)
+     * their units too.
+     */
+    static final String PRUNE_VANISHED_UNITS_V2 =
+            "MATCH (:JApplication {id: $app})-[:J_HAS_UNIT|J_HAS_MODULE]->(c) "
+                    + "WHERE NOT c.file_key IN $present "
+                    + "OPTIONAL MATCH (c)-" + CypherWriter.DESCENDANTS + "->(x) "
+                    + "DETACH DELETE x, c RETURN count(c) AS pruned";
 
     /**
      * The prefix that matches a module's declarations but not a sibling module whose path merely
@@ -223,22 +236,20 @@ public final class BoltWriter implements BoltSink {
             // units (and other applications in the database are never touched).
             if (fullRun) {
                 List<String> present = new ArrayList<>(byUnit.keySet());
-                String app = appNameOf(rows);
+                String appId = CanId.applicationId(appNameOf(rows));
                 // Checked against the same hazard as the _module purges above (#213) and found
                 // sound, so deliberately left alone: this traversal never leaves java's own graph.
-                // It enters at :JApplication (java-owned, and scoped to this app by name), hops a
-                // java-owned relationship type, and expands only through DESCENDANTS -- every
-                // member of which is J_-prefixed containment. `c` and `x` are unlabelled but
-                // unreachable except along those edges, and DESCENDANTS deliberately excludes
-                // HAS_ARTIFACT, so no cross-language :Artifact/:ConfigKey and no shared
-                // :JPackage/:JAnnotation can be reached. Do not add a non-containment type to
-                // DESCENDANTS without re-checking that.
+                // It enters at :JApplication (java-owned, and scoped to this app by its unique
+                // can:// id -- name is no longer constraint-unique since Task 3, so matching by it
+                // would reach every application sharing that display name), hops a java-owned
+                // relationship type, and expands only through DESCENDANTS -- every member of which
+                // is J_-prefixed containment. `c` and `x` are unlabelled but unreachable except
+                // along those edges, and DESCENDANTS deliberately excludes HAS_ARTIFACT, so no
+                // cross-language :Artifact/:ConfigKey and no shared :JPackage/:JAnnotation can be
+                // reached. Do not add a non-containment type to DESCENDANTS without re-checking that.
                 try (Session s = session()) {
-                    long pruned = s.run("MATCH (:JApplication {name: $app})-[:J_HAS_UNIT|J_HAS_MODULE]->(c) "
-                                    + "WHERE NOT c.file_key IN $present "
-                                    + "OPTIONAL MATCH (c)-" + CypherWriter.DESCENDANTS + "->(x) "
-                                    + "DETACH DELETE x, c RETURN count(c) AS pruned",
-                            Values.parameters("present", present, "app", app)).single().get("pruned").asLong(0);
+                    long pruned = s.run(PRUNE_VANISHED_UNITS_V2,
+                            Values.parameters("present", present, "app", appId)).single().get("pruned").asLong(0);
                     Log.info("neo4j(bolt): pruned " + pruned + " vanished unit(s)");
                 }
             } else {
@@ -318,11 +329,18 @@ public final class BoltWriter implements BoltSink {
             return null;
         }
 
-        /** The application anchor's name — the one {@code :JApplication} row every projection emits. */
+        /**
+         * The application anchor's display name — read from the {@code name} property rather than
+         * {@link NodeRow#value}, because that merge value is generation-dependent (the raw name
+         * for v1, the {@code can://} id for v2 since Task 3). The {@code name} property is set
+         * identically by both generations, so this always yields the true app name to re-derive
+         * the id from.
+         */
         private static String appNameOf(GraphRows rows) {
             for (NodeRow n : rows.nodes) {
                 if (n.labels.get(0).equals("JApplication")) {
-                    return n.value;
+                    Object name = n.props.get("name");
+                    return name != null ? name.toString() : n.value;
                 }
             }
             return "application";

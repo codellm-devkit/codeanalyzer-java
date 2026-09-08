@@ -60,6 +60,20 @@ class BoltWriterPurgeTest {
     }
 
     @Test
+    void theOrphanPruneMatchesTheApplicationRootByIdNotName() {
+        // The root's uniqueness constraint moved from `name` to `id` (Task 3): two applications can
+        // share a display name, so a prune keyed on `name` would reach both roots' units. Pinned as
+        // a regression guard because the earlier version of this statement compiled and ran fine
+        // (`name` is still a real property) while silently widening the delete scope.
+        assertTrue(BoltWriter.PRUNE_VANISHED_UNITS_V2.contains("{id: $app}"),
+                "the prune must match :JApplication by its can:// id: "
+                        + BoltWriter.PRUNE_VANISHED_UNITS_V2);
+        assertFalse(BoltWriter.PRUNE_VANISHED_UNITS_V2.contains("{name:"),
+                "the prune must not match :JApplication by its no-longer-unique name: "
+                        + BoltWriter.PRUNE_VANISHED_UNITS_V2);
+    }
+
+    @Test
     void aCanIdIsRecognizedAndAVersionOneIdIsNot() {
         // What selects the purge path at all: v1 ids are FQN-shaped and carry no application
         // segment, so there is nothing to prefix and the purge is skipped rather than mis-scoped.

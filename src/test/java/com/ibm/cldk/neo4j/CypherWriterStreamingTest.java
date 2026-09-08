@@ -110,4 +110,18 @@ class CypherWriterStreamingTest {
         assertTrue(out.contains("DETACH DELETE"), "the wipe is emitted even with no rows");
         assertEquals(CypherWriter.renderCypher(new RowBuilder().finish(), "app"), out);
     }
+
+    @Test
+    void theWipePreambleMatchesTheApplicationRootByIdNotName() throws IOException {
+        // The root's uniqueness constraint moved from `name` to `id` (Task 3): two applications can
+        // share a display name, so a wipe keyed on `name` would reach both roots and delete both --
+        // the exact multi-tenant collision this task exists to eliminate, reintroduced on the
+        // destructive path. Pinned so a regression to name-keying fails here rather than silently
+        // widening the delete scope.
+        String out = CypherWriter.renderCypher(new RowBuilder().finish(), "app");
+        assertTrue(out.contains("MATCH (a:JApplication {id: 'can://app'})"),
+                "the wipe must match :JApplication by its can:// id, got: " + out);
+        assertFalse(out.contains("JApplication {name:"),
+                "the wipe must not match :JApplication by its no-longer-unique name: " + out);
+    }
 }
