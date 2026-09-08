@@ -14,6 +14,7 @@ package com.ibm.cldk.neo4j;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -449,6 +450,24 @@ public class V2Neo4jSchemaConformanceTest {
         assertEquals(APP_NAME, app.props.get("name"), "name survives as a display property");
         assertTrue(app.labels.contains(RowBuilder.CAN_NODE),
                 "the root must carry the index anchor, so the prefix-scoped delete can reach it");
+    }
+
+    @Test
+    void twoApplicationsProjectAsTwoDistinctRoots() {
+        // The multi-service failure mode: before this change both merged onto one :JApplication
+        // keyed on the free-text --app-name, with no diagnostic.
+        GraphRows a = V2GraphProjector.project(
+                V2Emitter.emit("svc-quotes", 1, Map.of(), "test"), "svc-quotes");
+        GraphRows b = V2GraphProjector.project(
+                V2Emitter.emit("svc-orders", 1, Map.of(), "test"), "svc-orders");
+
+        String ida = a.nodes.stream().filter(n -> n.labels.contains("JApplication"))
+                .findFirst().orElseThrow().value;
+        String idb = b.nodes.stream().filter(n -> n.labels.contains("JApplication"))
+                .findFirst().orElseThrow().value;
+        assertNotEquals(ida, idb, "two services must not share a root node");
+        assertEquals("can://svc-quotes", ida);
+        assertEquals("can://svc-orders", idb);
     }
 
     private static NodeRow findNode(String mergeLabel, String value) {
