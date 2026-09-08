@@ -188,7 +188,7 @@
       "required": ["src", "dst", "prov", "weight"],
       "properties": {
         "src": { "$ref": "#/$defs/canId" },
-        "dst": { "$ref": "#/$defs/canId" },
+        "dst": { "$ref": "#/$defs/codeOrExternalCanId" },
         "prov": {
           "type": "array",
           "items": { "enum": ["declared", "rta"] },
@@ -250,8 +250,8 @@
 
     "externalCanId": {
       "type": "string",
-      "pattern": "^can://[^/]+/java/@external/",
-      "description": "Id of a symbol outside the project, so an in-project id landing in the external map fails the gate instead of validating happily."
+      "pattern": "^can://[^/]+/@external/",
+      "description": "Id of a symbol outside the project, so an in-project id landing in the external map fails the gate instead of validating happily. Language-NEUTRAL like artifactCanId: @external sits where the language segment sits for code nodes, so sibling analyzers over the same <app> name a library symbol identically. It therefore does NOT match canId."
     },
 
     "externalSymbol": {
@@ -267,6 +267,11 @@
           "description": "Dotted source spelling; the id carries the binary name."
         }
       }
+    },
+
+    "codeOrExternalCanId": {
+      "anyOf": [{ "$ref": "#/$defs/canId" }, { "$ref": "#/$defs/externalCanId" }],
+      "description": "A call target: an in-project canId, or an externalCanId when --external-calls homed it out of project. externalCanId is language-neutral and so does not match canId; this union is the fix, rather than loosening canId to admit ids that are not this analyzer's."
     },
 
     "artifactCanId": {
@@ -514,7 +519,7 @@
         "span": { "$ref": "#/$defs/span" },
         "parent": { "$ref": "#/$defs/localId" },
         "of": { "type": "string" },
-        "callee": { "$ref": "#/$defs/canId" },
+        "callee": { "$ref": "#/$defs/codeOrExternalCanId" },
         "arguments": { "type": "array", "items": { "$ref": "#/$defs/localId" } },
         "receiver_expr": { "type": "string" },
         "receiver_type": { "type": "string" },

@@ -41,13 +41,24 @@ public final class CanId {
     }
 
     /**
-     * {@code can://<app>/java/@external/<binary-type>/<signature>} — a callable outside the project.
-     * Positionally parallel to an in-project callable id with {@code @external} in the file slot (D19);
-     * the type is a <em>binary</em> name ({@code java.util.Map$Entry}) so the id is unambiguous and
-     * joins WALA natively.
+     * {@code can://<app>/@external/<binary-type>/<signature>} — a callable outside the project. The
+     * type is a <em>binary</em> name ({@code java.util.Map$Entry}) so the id is unambiguous and joins
+     * WALA natively.
+     *
+     * <p>Language-NEUTRAL, like {@link #artifactId}: {@code @external} sits in the position the
+     * language occupies for code nodes, so sibling analyzers over the same {@code <app>} name a
+     * library symbol identically and it is one node in a merged graph. The cost is real and was
+     * accepted deliberately — two analyzers' notions of {@code java.util.Map#get} are not necessarily
+     * the same thing, and merging them says they are. codeanalyzer-typescript's form;
+     * codeanalyzer-python follows it, and so does this.
+     *
+     * <p>Consequently an external id does <em>not</em> match the {@code canId} shape
+     * ({@code ^can://[^/]+/java/}): the analysis schema's {@code externalCanId} is a separate
+     * definition, and the two sites that hold either — a call edge's {@code dst} and a body node's
+     * {@code callee} — {@code $ref} the union, not a widened {@code canId}.
      */
     public static String externalId(String appName, String binaryType, String signature) {
-        return applicationId(appName) + "/" + LANG + "/@external/" + binaryType + "/" + signature;
+        return applicationId(appName) + "/@external/" + binaryType + "/" + signature;
     }
 
     /**
