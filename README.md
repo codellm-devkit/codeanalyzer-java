@@ -246,8 +246,8 @@ for build manifests and config keys, `can://<app>/@external/…` for library sym
 `can://<app>` is a prefix of every node the application emits, which is what the destructive
 statements scope on. (`:Package` is the exception: it is keyed on a `pkg:` purl, sits under no
 application, and no wipe reaches it.) `:JApplication` is keyed on that id, not on the free-text
-`--app-name`, so the root is addressable by the same id its
-descendants are prefixed with. The id is derived from `--app-name` (`can://<app-name>`), so it does
+`--app-name`, so the root is addressable by the same id its descendants are prefixed with. The id
+is derived from `--app-name` (`can://<app-name>`), so it does
 **not** disambiguate two services analyzed under the same name — those still merge onto one root.
 Give each service its own `--app-name` if they share a database.
 
