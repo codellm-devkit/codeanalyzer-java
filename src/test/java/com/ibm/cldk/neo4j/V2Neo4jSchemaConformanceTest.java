@@ -222,6 +222,15 @@ public class V2Neo4jSchemaConformanceTest {
                 "the wipe must traverse both generations' unit relationship");
         assertTrue(cypher.contains("MATCH (s:JSymbol) WHERE NOT (s)--() DELETE s"),
                 "the wipe must sweep orphaned symbols (v1 import-materialized type stubs)");
+        // The v1 path is NOT reachable by the can:// prefix sweep -- v1 ids are FQNs and v1 roots
+        // carry no `id` at all -- so replacing the containment traversal with the sweep orphans
+        // every prior v1 graph. That was tried on this branch and reverted; both must be present.
+        assertTrue(cypher.contains("OPTIONAL MATCH (a)-[:J_HAS_UNIT|J_HAS_MODULE]->(c)")
+                        && cypher.contains("OPTIONAL MATCH (c)-" + CypherWriter.DESCENDANTS + "->(x)")
+                        && cypher.contains("DETACH DELETE x, c, a;"),
+                "the v1-reaching containment traversal must survive alongside the prefix sweep: " + cypher);
+        assertTrue(cypher.contains("a.id IS NULL AND a.name = '" + APP_NAME + "'"),
+                "a legacy v1 root has no id and is reachable only by the guarded name branch: " + cypher);
         for (String rel : new String[] {"J_HAS_CALLSITE", "J_HAS_COMMENT", "J_HAS_PARAMETER",
                 "J_DECLARES", "J_HAS_METHOD", "J_HAS_BODY_NODE"}) {
             assertTrue(CypherWriter.DESCENDANTS.contains(rel),
@@ -387,26 +396,65 @@ public class V2Neo4jSchemaConformanceTest {
     }
 
     @Test
-    void wipeStaysOffTheCrossLanguageArtifactPackageSubgraph() {
-        // The negative counterpart to wipeCoversBothGenerationsSoV2ReplacesAPriorV1Graph above,
-        // which asserts what the wipe DOES reach; nothing asserted what it must NOT, which is
-        // exactly how a well-intentioned widening (fold Artifact/ConfigKey into the same wipe that
-        // already unifies v1/v2) shipped and had to be reverted. :Artifact, :ConfigKey and :Package
-        // are un-prefixed cross-language merge targets (CanId.artifactId's own javadoc: the
-        // `artifact` id segment exists so a sibling-language analyzer over the same repository
-        // lands on the same node, not a duplicate). A wipe reaching any of them would DETACH DELETE
-        // that other analyzer's own edges on every Java re-push of the same app -- silent
-        // corruption in a tool this one cannot see or repair. Read CypherWriter.DESCENDANTS'
-        // javadoc before ever widening either pattern checked below.
-        assertTrue(CypherWriter.renderCypher(rows, APP_NAME)
-                        .contains("OPTIONAL MATCH (a)-[:J_HAS_UNIT|J_HAS_MODULE]->(c)"),
-                "the wipe's app-anchor hop must stay exactly J_HAS_UNIT|J_HAS_MODULE -- widening it "
-                        + "to HAS_ARTIFACT lets a Java re-push delete another analyzer's edges on "
-                        + "the shared :Artifact merge target");
+    void theWipeReachesThisAppsArtifactsAndConfigKeysButNeverAPackage() {
+        // The deliberate widening (#244), mirroring codeanalyzer-python: :Artifact/:ConfigKey are
+        // under `can://<app>/` now that the app is the outermost id segment, so the snapshot's
+        // prefix sweep rebuilds them instead of letting stale ones accumulate forever with nothing
+        // ever cleaning them up. The accepted cost is one behavioural widening: a sibling-language
+        // analyzer's edge into a shared :Artifact is dropped by a Java snapshot and restored on that
+        // analyzer's next push. :Package (a `pkg:` purl) sits under no application, so it stays out
+        // by construction -- assert that, because it is the only thing left holding the line.
+        String cypher = CypherWriter.renderCypher(rows, APP_NAME);
+        String prefix = "can://" + APP_NAME + "/";
+
+        assertTrue(cypher.contains("MATCH (x:" + RowBuilder.CAN_NODE + ") WHERE x.id = 'can://" + APP_NAME
+                        + "' OR x.id STARTS WITH '" + prefix + "'"),
+                "the wipe must sweep the whole app prefix, rooted on the label-anchored index: " + cypher);
+        assertTrue(cypher.contains("CALL { WITH x DETACH DELETE x } IN TRANSACTIONS OF 1000 ROWS;"),
+                "the prefix sweep must batch, or a large app's wipe is one unbounded transaction: " + cypher);
+
+        // Not "an id that looks like an artifact id" -- the actual rows the projector emitted.
+        int artifacts = 0;
+        int configKeys = 0;
+        int packages = 0;
+        for (NodeRow n : rows.nodes) {
+            if (n.labels.contains("Artifact")) {
+                artifacts++;
+                assertTrue(n.value.startsWith(prefix),
+                        "an :Artifact must be under the app prefix the wipe sweeps, got: " + n.value);
+                assertTrue(n.labels.contains(RowBuilder.CAN_NODE),
+                        ":Artifact needs the index anchor or the prefix sweep cannot seek it: " + n.value);
+            }
+            if (n.labels.contains("ConfigKey")) {
+                configKeys++;
+                assertTrue(n.value.startsWith(prefix),
+                        "a :ConfigKey must be under the app prefix the wipe sweeps, got: " + n.value);
+                assertTrue(n.labels.contains(RowBuilder.CAN_NODE),
+                        ":ConfigKey needs the index anchor or the prefix sweep cannot seek it: " + n.value);
+            }
+            if (n.labels.contains("Package")) {
+                packages++;
+                assertFalse(n.value.startsWith(prefix),
+                        ":Package is a pkg: purl under no application -- the wipe must not reach it: " + n.value);
+                assertFalse(n.labels.contains(RowBuilder.CAN_NODE),
+                        ":Package must not carry the can:// index anchor: " + n.value);
+            }
+        }
+        assertTrue(artifacts > 0, "fixture emitted no :Artifact -- this test would pass vacuously");
+        assertTrue(configKeys > 0, "fixture emitted no :ConfigKey -- this test would pass vacuously");
+        assertTrue(packages > 0, "fixture emitted no :Package -- this test would pass vacuously");
+        assertFalse(CanId.purlMaven("org.example", "widget").startsWith(prefix),
+                "a maven purl must never fall under an application prefix");
+
+        // DESCENDANTS still excludes the artifact/package edges, for a reason that did NOT change:
+        // BoltWriter.PRUNE_VANISHED_UNITS_V2 shares this constant, and its unit of deletion is one
+        // vanished compilation unit. An app-level :Artifact is not a descendant of any one unit and
+        // must not die with one -- the widening above is snapshot-only, because only the snapshot
+        // writes the full truth back.
         for (String rel : new String[] {"HAS_ARTIFACT", "DEFINES_CONFIG", "DECLARES_DEPENDENCY", "LOCKS"}) {
             assertFalse(CypherWriter.DESCENDANTS.contains(rel),
-                    "wipe/prune descendant traversal must never include " + rel + " -- "
-                            + "Artifact/Package/ConfigKey are cross-language merge targets a wipe must not touch");
+                    "the unit-scoped descendant traversal must never include " + rel + " -- it is shared "
+                            + "with BoltWriter's per-unit prune, where an app-level artifact is out of scope");
         }
     }
 

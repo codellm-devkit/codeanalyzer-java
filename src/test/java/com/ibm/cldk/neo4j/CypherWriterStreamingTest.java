@@ -2,6 +2,7 @@ package com.ibm.cldk.neo4j;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.ibm.cldk.neo4j.GraphRows.NodeRef;
@@ -158,5 +159,21 @@ class CypherWriterStreamingTest {
                         + "any v2 root carrying this display name, not just this app's, got: " + out);
         assertFalse(out.contains("JApplication {name:"),
                 "the wipe must not property-match :JApplication by its no-longer-unique name: " + out);
+    }
+
+    @Test
+    void anEmptyApplicationNameIsRefusedRatherThanEmittingAnUnscopedWipe() {
+        // `STARTS WITH ''` matches every node in the database, so an empty --app-name would turn
+        // the prefix sweep into "delete every can:// node any analyzer ever wrote". There is no
+        // sane statement to emit here, so refuse to emit one at all (same call as
+        // codeanalyzer-python's application_prefix). Blank is empty with extra steps.
+        for (String name : new String[] {"", "   ", null}) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> CypherWriter.renderCypher(new RowBuilder().finish(), name),
+                    "an unscoped destructive statement must never be rendered, app name: " + name);
+        }
+        // ... and the guard lives on the prefix itself, so every future caller inherits it.
+        assertEquals("can://app/", CypherWriter.applicationPrefix("app"),
+                "the swept prefix must end in the separator, or `can://appX` is in scope too");
     }
 }

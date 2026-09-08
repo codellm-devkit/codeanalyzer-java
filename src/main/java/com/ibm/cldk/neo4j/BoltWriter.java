@@ -263,6 +263,15 @@ public final class BoltWriter implements BoltSink {
                 // along those edges, and DESCENDANTS deliberately excludes HAS_ARTIFACT, so no
                 // cross-language :Artifact/:ConfigKey and no shared :JPackage/:JAnnotation can be
                 // reached. Do not add a non-containment type to DESCENDANTS without re-checking that.
+                //
+                // The snapshot path (CypherWriter.wipe) deliberately went the other way and now
+                // deletes this app's :Artifact/:ConfigKey via a `can://<app>/` prefix sweep, so a
+                // full snapshot rebuilds them instead of letting them accumulate. That widening is
+                // NOT mirrored here, on purpose: this writer is incremental. Its unit of
+                // replacement is one module (descendantPrefix(moduleId)) or one vanished unit, and
+                // an app-level artifact belongs to neither -- an app-wide artifact sweep would
+                // delete artifacts a targeted `--target-files` run never re-pushes. The snapshot can
+                // afford the widening only because it always writes the full truth back.
                 try (Session s = session()) {
                     long pruned = s.run(PRUNE_VANISHED_UNITS_V2,
                             Values.parameters("present", present, "appId", appId, "appName", appName))

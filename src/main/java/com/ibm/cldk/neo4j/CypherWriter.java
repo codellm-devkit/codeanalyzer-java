@@ -37,19 +37,25 @@ public final class CypherWriter {
     /**
      * Every containment relationship either graph generation emits — v1 (unit-rooted) and v2
      * (module-rooted) together, so a v2 push wipes/prunes a prior v1 graph of the same app and vice
-     * versa (spec: one app name = one graph, latest push wins). {@code :Package}, {@code :Artifact}
-     * and {@code :ConfigKey} are all deliberately unreachable from this wipe, same as
-     * {@code :JPackage}/{@code :JAnnotation} below: all three are un-prefixed cross-language merge
-     * targets ({@code CanId.artifactId}'s own javadoc: the {@code artifact} id segment exists so a
-     * sibling-language analyzer scanning the same repository lands on the same node rather than a
-     * duplicate). That other analyzer's own edges may be attached to the very node this wipe would
-     * {@code DETACH DELETE}, destroying data this tool cannot see and did not write — corruption
-     * neither detectable nor repairable from here. A stale {@code :Artifact}/{@code :ConfigKey}
-     * left behind after a file is removed from the analyzed repo is the accepted tradeoff instead:
-     * recoverable with a full re-push or a separate sweep, unlike another tool's silently deleted
-     * edges. (Tried once, reverted: see git history — widening this to reach {@code :Artifact}/
-     * {@code :ConfigKey} was implemented and shipped before this exact hazard was caught in
-     * review.)
+     * versa (spec: one app name = one graph, latest push wins).
+     *
+     * <p>This traversal is the <b>only</b> thing that reaches a v1 graph, and that is why
+     * {@link #wipe}'s {@code can://} prefix sweep cannot replace it: v1 ids are fully-qualified
+     * names carrying no application segment, and {@code GraphProjector.java} keys
+     * {@code :JApplication} on {@code name}, so no prefix predicate sees a single v1 node. Folding
+     * the two into one prefix sweep was tried on this branch and reverted; it orphans every v1
+     * graph.
+     *
+     * <p>{@code HAS_ARTIFACT} (and the {@code :Package} edges {@code DECLARES_DEPENDENCY} /
+     * {@code LOCKS}) stay out of this list — but no longer because the artifact subtree is
+     * untouchable. {@link #wipe}'s prefix sweep now <i>does</i> reach this application's
+     * {@code :Artifact}/{@code :ConfigKey} nodes, deliberately; see its javadoc. They stay out of
+     * {@code DESCENDANTS} because this constant is shared with
+     * {@link BoltWriter#PRUNE_VANISHED_UNITS_V2}, whose unit of deletion is one vanished
+     * compilation unit, not the application: an app-level {@code :Artifact} is not a descendant of
+     * any one unit and must not die with one. {@code :Package} ({@code pkg:} purls) is outside both
+     * — it is not under the app prefix either — as are the shared {@code :JPackage}/
+     * {@code :JAnnotation} merge targets.
      */
     static final String DESCENDANTS = "[:J_DECLARES_TYPE|J_HAS_NESTED_TYPE|J_HAS_CALLABLE|J_HAS_FIELD|J_HAS_PARAMETER"
             + "|J_HAS_CALLSITE|J_DECLARES_VAR|J_HAS_ENUM_CONSTANT|J_HAS_RECORD_COMPONENT|J_HAS_INIT_BLOCK"
@@ -106,7 +112,8 @@ public final class CypherWriter {
         }
 
         s.add("");
-        s.add("// ── wipe this project's prior subgraph (packages/annotations/artifacts/config keys are shared) ──");
+        s.add("// ── wipe this project's prior subgraph (packages/annotations are shared and survive; "
+                + "artifacts/config keys are inside the app prefix and get rebuilt) ──");
         s.add(wipe(appName));
 
         s.add("");
@@ -143,29 +150,68 @@ public final class CypherWriter {
         }
     }
 
+    /**
+     * {@code can://<app>/} — the scope of the prefix sweep. Refuses an empty application name:
+     * {@code STARTS WITH ''} matches every node in the database, so the statement would stop being
+     * scoped at all. Mirrors {@code codeanalyzer-python}'s {@code application_prefix}.
+     */
+    static String applicationPrefix(String appName) {
+        if (appName == null || appName.trim().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "neo4j: refusing a destructive statement without an application id");
+        }
+        // The trailing separator is not cosmetic: a bare `STARTS WITH 'can://app'` would also match
+        // `can://appX`, a different application.
+        return CanId.applicationId(appName) + "/";
+    }
+
+    /**
+     * The application root by equality plus everything under {@code can://<app>/}, then the same
+     * application's prior <b>v1</b> graph by containment, then the orphan sweep.
+     *
+     * <p><b>Statement 1, the prefix sweep.</b> Scoped by id, so it is one application by
+     * construction: a second java app sharing a source path, and a sibling analyzer's own
+     * {@code can://} graph under a different app, are outside it. {@code :Package} nodes
+     * ({@code pkg:} purls) stay outside too — they are not under the app prefix. Two things moved
+     * with the app-outermost grammar: the root is matched by its {@code can://<app>} id rather than
+     * by the free-text {@code --app-name}, so the id the graph is actually keyed on is the id the
+     * wipe uses; and this application's {@code :Artifact}/{@code :ConfigKey} nodes are now
+     * <i>inside</i> the prefix, so the snapshot rebuilds them instead of leaving them to accumulate
+     * forever with nothing ever cleaning them up. That is deliberate, and it is the one behavioural
+     * widening here: a cross-language edge into a shared {@code :Artifact} is dropped by a java
+     * snapshot and restored on that analyzer's next push.
+     *
+     * <p><b>Statement 2, the containment traversal.</b> Not redundant with the sweep above and not
+     * foldable into it — see {@link #DESCENDANTS}. v1 ids are fully-qualified names, so the prefix
+     * predicate cannot reach a v1 node; this hop is what makes "one app name = one graph, latest
+     * push wins" hold across generations. The unit hop is unlabeled and lists both generations' rel
+     * types (v1 {@code J_HAS_UNIT} → {@code :JCompilationUnit}, v2 {@code J_HAS_MODULE} →
+     * {@code :JModule}) so either generation's push replaces whichever the DB currently holds. The
+     * root is matched by id when it is v2 (exact, unique-constrained) OR by name when it is a legacy
+     * v1 root — identifiable because v1 never writes {@code id}. An id-only match would orphan a
+     * prior v1 graph instead of replacing it, breaking the very cross-generation guarantee this
+     * exists for. The {@code a.id IS NULL} guard confines the name branch to those legacy roots; an
+     * ungated {@code a.name =} disjunct would additionally reach every v2 root carrying this display
+     * name, including roots this analyzer never minted, so do not widen it.
+     *
+     * <p><b>Statement 3, the orphan sweep.</b> Fully-isolated {@code :JSymbol} nodes the containment
+     * traversal cannot reach — v1's import-materialized bodyless {@code :JType} stubs hang off units
+     * via {@code J_IMPORTS} only, so the deletes above orphan them. Degree-0 symbols are
+     * unreferencable junk in any generation, and a symbol another application still uses keeps its
+     * edges and survives.
+     *
+     * <p>What none of this does — and must not be documented as doing — is separate two distinct
+     * applications sharing an {@code --app-name}. {@code CanId.applicationId} is
+     * {@code "can://" + appName}, so they share an id byte-for-byte and are ONE node; there is
+     * nothing here to tell apart. Distinct services need distinct {@code --app-name} values, not a
+     * wider predicate.
+     */
     private static String wipe(String appName) {
-        // The unit hop is unlabeled and lists both generations' rel types (v1 J_HAS_UNIT →
-        // :JCompilationUnit, v2 J_HAS_MODULE → :JModule) so either generation's push replaces
-        // whichever generation the DB currently holds for this app. Deliberately does NOT include
-        // HAS_ARTIFACT → :Artifact: see DESCENDANTS' javadoc for why the whole artifact/config-key
-        // subtree stays outside every wipe this class runs. The second statement sweeps
-        // fully-isolated :JSymbol nodes the containment traversal cannot reach — v1's
-        // import-materialized bodyless :JType stubs hang off units via J_IMPORTS only, so the
-        // DETACH DELETE above orphans them; degree-0 symbols are unreferencable junk in any
-        // generation, and a symbol another application still uses keeps its edges and survives.
-        // Matched by id when the root is v2 (exact, unique-constrained) OR by name when it is a
-        // legacy v1 root (identifiable because v1 never writes `id`) -- v1 keys :JApplication on
-        // name alone (GraphProjector.java), so an id-only match would orphan a prior v1 graph
-        // instead of replacing it, breaking the very cross-generation guarantee this wipe exists
-        // for. The `a.id IS NULL` guard confines the name branch to those legacy roots; an ungated
-        // `a.name =` disjunct would additionally reach every v2 root carrying this display name,
-        // including roots this analyzer never minted, so do not widen it.
-        //
-        // What this does NOT do -- and must not be documented as doing -- is separate two distinct
-        // applications sharing an --app-name. `CanId.applicationId` is `"can://" + appName`, so
-        // they share an id byte-for-byte and are ONE node; there is nothing here to tell apart.
-        // Distinct services need distinct `--app-name` values, not a wider predicate.
-        return "MATCH (a:JApplication) WHERE a.id = " + cypherValue(CanId.applicationId(appName))
+        String appId = cypherValue(CanId.applicationId(appName));
+        return "MATCH (x:" + RowBuilder.CAN_NODE + ") WHERE x.id = " + appId
+                + " OR x.id STARTS WITH " + cypherValue(applicationPrefix(appName)) + "\n"
+                + "CALL { WITH x DETACH DELETE x } IN TRANSACTIONS OF 1000 ROWS;\n"
+                + "MATCH (a:JApplication) WHERE a.id = " + appId
                 + " OR (a.id IS NULL AND a.name = " + cypherValue(appName) + ")\n"
                 + "OPTIONAL MATCH (a)-[:J_HAS_UNIT|J_HAS_MODULE]->(c)\n"
                 + "OPTIONAL MATCH (c)-" + DESCENDANTS + "->(x)\n"

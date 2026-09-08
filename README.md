@@ -241,8 +241,10 @@ build manifest or a configuration key is not a Java concept — a sibling-langua
 the same repository lands on the same nodes instead of a per-language duplicate.
 `SCHEMA_VERSION` is stamped onto the `:JApplication` node of every emitted graph.
 
-Every node id is `can://<app>/java/…`, so `can://<app>` is a prefix of every node the
-application emits — which is what the destructive statements scope on. `:JApplication` is keyed on
+Every node id starts with `can://<app>/` — `can://<app>/java/…` for code, `can://<app>/artifact/…`
+for build manifests and config keys — so `can://<app>` is a prefix of every node the application
+emits, which is what the destructive statements scope on. (`:Package` is the exception: it is keyed
+on a `pkg:` purl, sits under no application, and no wipe reaches it.) `:JApplication` is keyed on
 that id, not on the free-text `--app-name`, so the root is addressable by the same id its
 descendants are prefixed with. The id is derived from `--app-name` (`can://<app-name>`), so it does
 **not** disambiguate two services analyzed under the same name — those still merge onto one root.
@@ -272,7 +274,13 @@ cypher-shell -u neo4j -p <password> < ./out/graph.cypher
 ```
 
 The snapshot is **not** incremental: it constraints, scopes-wipes this application's prior subgraph,
-then `UNWIND … MERGE`-loads the full truth.
+then `UNWIND … MERGE`-loads the full truth. The wipe is everything under `can://<app>/`, plus a
+containment traversal that also replaces a prior v1 (pre-`3.0.0`) graph of the same application.
+That scope **includes** this application's `:Artifact` and `:ConfigKey` nodes — the snapshot rebuilds
+them, rather than leaving stale ones to accumulate with nothing ever cleaning them up. The one
+consequence: a sibling-language analyzer's edge into a shared `:Artifact` is dropped by a Java
+snapshot and restored on that analyzer's next push. The Bolt writer does **not** do this — its
+deletions are scoped per module, not per application.
 
 ### 4.2. Live incremental push over Bolt
 
