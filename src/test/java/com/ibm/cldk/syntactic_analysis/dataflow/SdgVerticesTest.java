@@ -82,9 +82,11 @@ class SdgVerticesTest {
         JIdEdge in = r.paramIn.get(0);
         assertEquals(CanId.ordinalId(A_ID, "3:16/actual_in:0"), in.getSrc());
         assertEquals(CanId.ordinalId(B_ID, "formal_in:0"), in.getDst());
+        assertEquals("y", in.getVar(), "param_in names the callee formal it binds (#195)");
         assertEquals(1, r.paramOut.size());
         assertEquals(CanId.ordinalId(B_ID, "formal_out"), r.paramOut.get(0).getSrc());
         assertEquals(CanId.ordinalId(A_ID, "3:16/actual_out"), r.paramOut.get(0).getDst());
+        assertEquals("$ret", r.paramOut.get(0).getVar(), "param_out names the return port");
     }
 
     @Test

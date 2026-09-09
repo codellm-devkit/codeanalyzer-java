@@ -40,6 +40,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -162,6 +163,30 @@ public class V2Neo4jSchemaConformanceTest {
             for (String key : node.props.keySet()) {
                 assertTrue(decl.properties.containsKey(key), "undeclared property '" + specific + "." + key + "'");
             }
+        }
+    }
+
+    /**
+     * codeanalyzer-python#195, same defect here: the catalog declared {@code var} on
+     * J_PARAM_IN/J_PARAM_OUT and the projection wrote no properties, so a predicate on
+     * {@code r.var} went three-valued across every call boundary. Every emitted edge of those
+     * types carries every declared property — on all of them, not some.
+     */
+    @Test
+    public void paramEdgesCarryEveryDeclaredProperty() {
+        for (String rel : Arrays.asList("J_PARAM_IN", "J_PARAM_OUT")) {
+            int seen = 0;
+            for (EdgeRow e : rows.edges) {
+                if (!e.type.equals(rel)) {
+                    continue;
+                }
+                seen++;
+                for (String key : REL_BY_TYPE.get(rel).properties.keySet()) {
+                    assertTrue(e.props.containsKey(key) && e.props.get(key) != null,
+                            rel + " " + e.from.value + " -> " + e.to.value + " lacks " + key);
+                }
+            }
+            assertTrue(seen > 0, "precondition: the L4 fixture must emit " + rel);
         }
     }
 
