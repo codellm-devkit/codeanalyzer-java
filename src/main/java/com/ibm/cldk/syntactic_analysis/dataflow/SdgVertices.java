@@ -118,13 +118,14 @@ public final class SdgVertices {
                 for (int i = 0; i < nArgs; i++) {
                     int formalIndex = Math.min(i, calleeParams - 1);
                     paramIn.add(edge(
-                            global(c, local + "/actual_in:" + i), global(callee, "@formal_in:" + formalIndex)));
+                            global(c, local + "/actual_in:" + i), global(callee, "@formal_in:" + formalIndex),
+                            callee.getParameters().get(formalIndex).getName()));
                 }
             }
             // Recomputed rather than read off callee.getBody(): traversal order is not call order, so
             // the callee's own addFormals may not have run yet when the caller's site is processed.
             if (hasActualOut && returnsValue(callee)) {
-                paramOut.add(edge(global(callee, "@formal_out"), global(c, local + "/actual_out")));
+                paramOut.add(edge(global(callee, "@formal_out"), global(c, local + "/actual_out"), "$ret"));
             }
         }
     }
@@ -141,6 +142,13 @@ public final class SdgVertices {
         n.setOf(of);
         n.setParent(parent);
         return n;
+    }
+
+    /** A param edge names the callee-side formal it binds: the parameter, or {@code $ret}. */
+    private static JIdEdge edge(String src, String dst, String var) {
+        JIdEdge e = edge(src, dst);
+        e.setVar(var);
+        return e;
     }
 
     private static JIdEdge edge(String src, String dst) {

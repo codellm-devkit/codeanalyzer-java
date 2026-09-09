@@ -147,14 +147,14 @@ public final class V2GraphProjector {
             for (JIdEdge e : analysis.getApplication().getParamIn()) {
                 b.edgeIfBothResolved("J_PARAM_IN",
                         new NodeRef("JBodyNode", "id", e.getSrc()),
-                        new NodeRef("JBodyNode", "id", e.getDst()), RowBuilder.props());
+                        new NodeRef("JBodyNode", "id", e.getDst()), paramEdgeProps(e));
             }
         }
         if (analysis.getApplication().getParamOut() != null) {
             for (JIdEdge e : analysis.getApplication().getParamOut()) {
                 b.edgeIfBothResolved("J_PARAM_OUT",
                         new NodeRef("JBodyNode", "id", e.getSrc()),
-                        new NodeRef("JBodyNode", "id", e.getDst()), RowBuilder.props());
+                        new NodeRef("JBodyNode", "id", e.getDst()), paramEdgeProps(e));
             }
         }
 
@@ -730,5 +730,15 @@ public final class V2GraphProjector {
         Map<String, Object> m = RowBuilder.props();
         m.put(k, v);
         return m;
+    }
+
+    /**
+     * {@code var} on a param edge: the callee-side formal's variable, which the catalog declares
+     * and every {@code param_in}/{@code param_out} edge carries (codeanalyzer-python#195).
+     */
+    private static Map<String, Object> paramEdgeProps(JIdEdge e) {
+        Map<String, Object> p = RowBuilder.props();
+        p.put("var", e.getVar());
+        return RowBuilder.prune(p);
     }
 }
