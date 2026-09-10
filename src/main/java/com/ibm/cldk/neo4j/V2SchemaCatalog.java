@@ -88,8 +88,19 @@ public final class V2SchemaCatalog {
         }
     }
 
+    /**
+     * The flattened {@code span} every located node carries. Mirrors {@code analysis.json}'s
+     * {@code span} in full: both ends as line, column and UTF-8 byte offset. {@code start_byte} /
+     * {@code end_byte} are what make a span resolvable to text — the JSON schema defines them as
+     * "[from, to) UTF-8 offsets into module.source, so node text is an O(1) slice" — and they are
+     * only useful because {@code :JModule} now carries {@code source}. codeanalyzer-python and
+     * codeanalyzer-typescript both flatten to the line pair alone today; these four property names
+     * are the ones they must adopt.
+     */
     private static Map<String, String> lines(P p) {
-        return p.put("start_line", "integer").put("end_line", "integer").done();
+        return p.put("start_line", "integer").put("start_column", "integer")
+                .put("end_line", "integer").put("end_column", "integer")
+                .put("start_byte", "integer").put("end_byte", "integer").done();
     }
 
     public static final List<NodeLabel> NODE_LABELS = buildNodeLabels();
@@ -113,9 +124,13 @@ public final class V2SchemaCatalog {
                         .put("entrypoint_frameworks", "string[]")
                         .put("entrypoint_report_json", "string").done()));
 
+        // `source` is the whole file, matching `analysis.json`'s required `module.source`. It is the
+        // primary text under canonical decision D1 (per-callable `code` was dropped from the JSON on
+        // the grounds that the SDK slices `module.source[span.bytes]`), so the graph must carry it or
+        // no span narrower than a callable can be resolved to text at all.
         n.add(node("JModule", "JModule", "id",
                 new P().put("id", "string").put("file_key", "string").put("package", "string")
-                        .put("content_hash", "string").done()));
+                        .put("content_hash", "string").put("source", "string").done()));
 
         n.add(node("JType", "JSymbol", "id",
                 lines(new P().put("id", "string").put("name", "string").put("kind", "string")
