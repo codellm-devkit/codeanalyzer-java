@@ -77,6 +77,7 @@ public class V2Neo4jSchemaConformanceTest {
     static Path ARTIFACT_TMP;
 
     private static GraphRows rows;
+    private static Analysis analysis;
 
     private static final Map<String, NodeLabel> BY_LABEL = new HashMap<>();
     private static final Map<String, String> MERGE_OF = new HashMap<>();
@@ -121,10 +122,11 @@ public class V2Neo4jSchemaConformanceTest {
             }
         }
 
-        Analysis analysis = V2Emitter.emit(
+        Analysis emitted = V2Emitter.emit(
                 APP_NAME, 3, modules, "test", l2.callGraph(), l2.externalSymbols(),
                 sdg.paramIn, sdg.paramOut, artifacts, dependencies);
-        rows = V2GraphProjector.project(analysis, APP_NAME);
+        rows = V2GraphProjector.project(emitted, APP_NAME);
+        analysis = emitted;
     }
 
     private static String specificLabel(List<String> labels) {
@@ -281,6 +283,33 @@ public class V2Neo4jSchemaConformanceTest {
     // ------------------------------------------------------------------------------------------
     // Repository-artifact layer (Task 7): Artifact/Package/ConfigKey.
     // ------------------------------------------------------------------------------------------
+
+    /**
+     * Every {@code :JModule} carries the same whole-file {@code source} that {@code analysis.json}
+     * carries, because canonical decision D1 makes {@code module.source} the primary text and every
+     * narrower node's text a byte-slice of it. The graph once held only the one derivation it caches
+     * ({@code JCallable.code}) and dropped the primary, which left a body node, field or parameter
+     * span with nothing to resolve against. Asserted per module rather than by presence so the
+     * inversion cannot come back as a truncated or placeholder value.
+     */
+    @Test
+    void everyModuleCarriesTheSameSourceAnalysisJsonCarries() {
+        Map<String, JModule> jsonModules = analysis.getApplication().getSymbolTable();
+        assertFalse(jsonModules.isEmpty(), "fixture projected no modules");
+
+        int checked = 0;
+        for (JModule m : jsonModules.values()) {
+            NodeRow row = findNode("JModule", m.getId());
+            assertNotNull(row, "no :JModule row for " + m.getId());
+            Object projected = row.props.get("source");
+            assertNotNull(projected, "no `source` on :JModule " + m.getId()
+                    + " -- analysis.json requires module.source, so the graph must carry it too");
+            assertEquals(m.getSource(), projected,
+                    "graph `source` differs from analysis.json module.source for " + m.getId());
+            checked++;
+        }
+        assertEquals(jsonModules.size(), checked);
+    }
 
     @Test
     void artifactLayerNodesAreEmitted() {

@@ -28,7 +28,8 @@
         "id": "string",
         "file_key": "string",
         "package": "string",
-        "content_hash": "string"
+        "content_hash": "string",
+        "source": "string"
       }
     },
     {
@@ -46,7 +47,11 @@
         "is_entrypoint": "boolean",
         "entrypoint_frameworks": "string[]",
         "start_line": "integer",
-        "end_line": "integer"
+        "start_column": "integer",
+        "end_line": "integer",
+        "end_column": "integer",
+        "start_byte": "integer",
+        "end_byte": "integer"
       }
     },
     {
@@ -72,7 +77,11 @@
         "is_entrypoint": "boolean",
         "entrypoint_frameworks": "string[]",
         "start_line": "integer",
-        "end_line": "integer"
+        "start_column": "integer",
+        "end_line": "integer",
+        "end_column": "integer",
+        "start_byte": "integer",
+        "end_byte": "integer"
       }
     },
     {
@@ -98,7 +107,11 @@
         "modifiers": "string[]",
         "docstring": "string",
         "start_line": "integer",
-        "end_line": "integer"
+        "start_column": "integer",
+        "end_line": "integer",
+        "end_column": "integer",
+        "start_byte": "integer",
+        "end_byte": "integer"
       }
     },
     {
@@ -111,7 +124,11 @@
         "type": "string",
         "initializer": "string",
         "start_line": "integer",
-        "end_line": "integer"
+        "start_column": "integer",
+        "end_line": "integer",
+        "end_column": "integer",
+        "start_byte": "integer",
+        "end_byte": "integer"
       }
     },
     {
@@ -157,7 +174,11 @@
         "var": "string",
         "call_node": "string",
         "start_line": "integer",
-        "end_line": "integer"
+        "start_column": "integer",
+        "end_line": "integer",
+        "end_column": "integer",
+        "start_byte": "integer",
+        "end_byte": "integer"
       }
     },
     {
@@ -214,7 +235,11 @@
         "value": "string",
         "references": "string[]",
         "start_line": "integer",
-        "end_line": "integer"
+        "start_column": "integer",
+        "end_line": "integer",
+        "end_column": "integer",
+        "start_byte": "integer",
+        "end_byte": "integer"
       }
     }
   ],

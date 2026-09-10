@@ -118,6 +118,13 @@ public final class V2GraphProjector {
             mp.put("file_key", fileKey);
             mp.put("package", module.getPackageName());
             mp.put("content_hash", module.getContentHash());
+            // The whole file, as `analysis.json` carries it. Canonical decision D1 makes
+            // `module.source` the primary text and every narrower node's text a byte-slice of it, so
+            // dropping it here left the graph holding only the ONE derivation it happens to cache
+            // (`JCallable.code`) and nothing to slice for a body node, field, parameter or the module
+            // itself. Never null: `analysis.json` requires `source`, and `prune` would silently drop
+            // a null, so the two projections would disagree on whether the property exists.
+            mp.put("source", module.getSource() == null ? "" : module.getSource());
             mp.put("_module", fileKey);
             NodeRef mod = b.node(Arrays.asList("JModule"), "id", module.getId(), RowBuilder.prune(mp));
             b.edge("J_HAS_MODULE", app, mod);
@@ -717,12 +724,33 @@ public final class V2GraphProjector {
         return new String(bytes, start, end - start, StandardCharsets.UTF_8);
     }
 
+    /**
+     * Flatten a {@code span} the way {@code analysis.json} carries it: line, column and UTF-8 byte
+     * offset for both ends. The byte offsets are the load-bearing pair — the JSON schema defines them
+     * as "[from, to) UTF-8 offsets into module.source, so node text is an O(1) slice", which is only
+     * true on the graph now that {@code :JModule} carries {@code source}. Emitting the line pair
+     * alone left every span resolvable to a line range and to no text, and left a column-precise
+     * position (two nodes on one line) unrepresentable.
+     */
     private static void putLines(Map<String, Object> p, Span span) {
-        if (span != null && span.getStart() != null && span.getStart().length > 0) {
-            p.put("start_line", span.getStart()[0]);
+        if (span == null) {
+            return;
         }
-        if (span != null && span.getEnd() != null && span.getEnd().length > 0) {
+        if (span.getStart() != null && span.getStart().length > 0) {
+            p.put("start_line", span.getStart()[0]);
+            if (span.getStart().length > 1) {
+                p.put("start_column", span.getStart()[1]);
+            }
+        }
+        if (span.getEnd() != null && span.getEnd().length > 0) {
             p.put("end_line", span.getEnd()[0]);
+            if (span.getEnd().length > 1) {
+                p.put("end_column", span.getEnd()[1]);
+            }
+        }
+        if (span.getBytes() != null && span.getBytes().length > 1) {
+            p.put("start_byte", span.getBytes()[0]);
+            p.put("end_byte", span.getBytes()[1]);
         }
     }
 
