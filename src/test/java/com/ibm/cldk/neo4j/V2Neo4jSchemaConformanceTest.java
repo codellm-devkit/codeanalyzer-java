@@ -29,9 +29,18 @@ import com.ibm.cldk.neo4j.SchemaCatalog.RelType;
 import com.ibm.cldk.schema.Analysis;
 import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JArtifact;
+import com.ibm.cldk.schema.JBodyNode;
+import com.ibm.cldk.schema.JCallable;
+import com.ibm.cldk.schema.JDecorator;
 import com.ibm.cldk.schema.JDependency;
+import com.ibm.cldk.schema.JEnumConstant;
 import com.ibm.cldk.schema.JModule;
+import com.ibm.cldk.schema.JRecordComponent;
+import com.ibm.cldk.schema.JType;
+import com.ibm.cldk.schema.JTypeParameter;
+import com.ibm.cldk.schema.Span;
 import com.ibm.cldk.schema.V2Emitter;
+import com.ibm.cldk.schema.V2Json;
 import com.ibm.cldk.syntactic_analysis.L1Extractor;
 import com.ibm.cldk.syntactic_analysis.L2CallGraph;
 import com.ibm.cldk.syntactic_analysis.dataflow.SdgVertices;
@@ -40,7 +49,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -597,8 +608,277 @@ public class V2Neo4jSchemaConformanceTest {
         }
     }
 
+    // ------------------------------------------------------------------------------------------
+    // #256: the analysis.json facts the projection carried in the payload and dropped in the graph.
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * {@code body_span} reaches the graph under a {@code body_} prefix and resolves to the block it
+     * claims. {@code span} covers the whole declaration, so without this the graph cannot tell a
+     * signature from the body it encloses — and a body-less declaration (abstract, interface) reads
+     * the same as one whose body was simply not recorded. Absence is asserted too, because that is
+     * the distinction: zeroed offsets would read as a body at the top of the file.
+     */
+    @Test
+    void everyCallableBodySpanReachesTheGraphAndSlicesToItsBlock() {
+        int withBody = 0;
+        for (JModule m : analysis.getApplication().getSymbolTable().values()) {
+            for (JType t : typesOf(m)) {
+                for (JCallable c : t.getCallables().values()) {
+                    NodeRow row = findNode("JSymbol", c.getId());
+                    assertNotNull(row, "no :JCallable row for " + c.getId());
+                    if (c.getBodySpan() == null) {
+                        assertNull(row.props.get("body_start_line"),
+                                c.getId() + " has no body_span in analysis.json, so the graph must "
+                                        + "carry no body_ offsets either");
+                        continue;
+                    }
+                    withBody++;
+                    assertSpan(row.props, "body_", c.getBodySpan(), "body_span of " + c.getId());
+                    String block = sliceUtf8(m.getSource(), c.getBodySpan());
+                    assertTrue(block.startsWith("{") && block.endsWith("}"),
+                            "the body_ byte offsets of " + c.getId() + " must slice module.source to "
+                                    + "the block itself, got: " + block);
+                }
+            }
+        }
+        assertTrue(withBody > 0, "precondition: the fixture must declare callables with bodies");
+    }
+
+    /**
+     * A call body node's {@code callee_signature} and {@code arguments}. The signature is what the
+     * call resolves to; {@code arguments} is the canonical per-argument id list, and it must arrive
+     * position for position, since {@code argument_expr} and {@code argument_types} are indexed by the
+     * same positions. The ids stay body-local: an argument is a body node only when it is itself a
+     * call site, so owner-qualifying them would produce {@code :JBodyNode} ids that mostly resolve to
+     * nothing (which is how this assertion first failed).
+     */
+    @Test
+    void callBodyNodesCarryCalleeSignatureAndArgumentIds() {
+        int signatures = 0;
+        int argumentLists = 0;
+        for (JModule m : analysis.getApplication().getSymbolTable().values()) {
+            for (JType t : typesOf(m)) {
+                for (JCallable c : t.getCallables().values()) {
+                    for (Map.Entry<String, JBodyNode> e : c.getBody().entrySet()) {
+                        String id = ordinal(c.getId(), e.getKey());
+                        NodeRow row = findNode("JBodyNode", id);
+                        assertNotNull(row, "no :JBodyNode row for " + id);
+                        JBodyNode n = e.getValue();
+                        if (n.getCalleeSignature() != null) {
+                            signatures++;
+                            assertEquals(n.getCalleeSignature(), row.props.get("callee_signature"),
+                                    "callee_signature differs from analysis.json for " + id);
+                        }
+                        if (n.getArguments().isEmpty()) {
+                            assertNull(row.props.get("arguments"),
+                                    id + " takes no arguments, so it must carry no `arguments`");
+                            continue;
+                        }
+                        argumentLists++;
+                        assertEquals(n.getArguments(), row.props.get("arguments"),
+                                "`arguments` of " + id + " must be the same ids analysis.json gives, "
+                                        + "in the same order -- argument_expr and argument_types are "
+                                        + "indexed by the same positions");
+                    }
+                }
+            }
+        }
+        assertTrue(signatures > 0, "precondition: the fixture must contain resolved calls");
+        assertTrue(argumentLists > 0, "precondition: the fixture must contain calls with arguments");
+    }
+
+    /**
+     * Enum constants and record components carry their own spans, and their annotations reach the
+     * graph as keyed J_ANNOTATED_BY edges. Projected from a second fixture because the L4 one
+     * declares no enum, no record and no annotation at all — the reason these three drops survived
+     * every existing assertion.
+     */
+    @Test
+    void enumConstantsAndRecordComponentsCarryTheirSpansAndAnnotations() throws Exception {
+        Projection p = projectFixture("enum-record-bodies-test");
+        int constants = 0;
+        int components = 0;
+        int annotations = 0;
+        for (JModule m : p.analysis.getApplication().getSymbolTable().values()) {
+            for (JType t : typesOf(m)) {
+                for (JEnumConstant ec : t.getEnumConstants()) {
+                    String id = t.getId() + "#enum#" + ec.getName();
+                    NodeRow row = findNode(p.rows, "JEnumConstant", id);
+                    assertNotNull(row, "no :JEnumConstant row for " + id);
+                    assertNotNull(ec.getSpan(), "precondition: L1 records the constant's span");
+                    assertSpan(row.props, "", ec.getSpan(), "span of " + id);
+                    constants++;
+                    annotations += assertAnnotationEdges(p.rows, id, ec.getDecorators());
+                }
+                for (JRecordComponent rc : t.getRecordComponents()) {
+                    String id = t.getId() + "#rec#" + rc.getName();
+                    NodeRow row = findNode(p.rows, "JRecordComponent", id);
+                    assertNotNull(row, "no :JRecordComponent row for " + id);
+                    assertNotNull(rc.getSpan(), "precondition: L1 records the component's span");
+                    assertSpan(row.props, "", rc.getSpan(), "span of " + id);
+                    components++;
+                    annotations += assertAnnotationEdges(p.rows, id, rc.getDecorators());
+                }
+            }
+        }
+        assertEquals(3, constants, "precondition: Op declares PLUS, MINUS and NOOP");
+        assertEquals(2, components, "precondition: Money declares tags and cents");
+        assertTrue(annotations > 0,
+                "precondition: the fixture must annotate a leaf declaration (@Deprecated on NOOP)");
+    }
+
+    /**
+     * A generic declaration's {@code type_parameters}, serialized whole as
+     * {@code type_parameters_json} — same treatment as {@code parameters_json}, because a parameter
+     * carries a name, resolved bounds, a span and its own annotations and so does not flatten to a
+     * scalar. Round-tripped rather than string-compared, and absence asserted on the non-generic
+     * declarations in the same fixture.
+     */
+    @Test
+    void genericDeclarationsCarryTheirTypeParameters() throws Exception {
+        Projection p = projectFixture("generics-varargs-duplicate-signature-test");
+        int generic = 0;
+        for (JModule m : p.analysis.getApplication().getSymbolTable().values()) {
+            for (JType t : typesOf(m)) {
+                generic += assertTypeParameters(
+                        findNode(p.rows, "JSymbol", t.getId()), t.getTypeParameters(), t.getId());
+                for (JCallable c : t.getCallables().values()) {
+                    generic += assertTypeParameters(
+                            findNode(p.rows, "JSymbol", c.getId()), c.getTypeParameters(), c.getId());
+                }
+            }
+        }
+        assertTrue(generic > 0, "precondition: the fixture must declare generic callables");
+    }
+
+    /** Every type in a module, nested types included. */
+    private static List<JType> typesOf(JModule module) {
+        List<JType> out = new ArrayList<>();
+        collectTypes(module.getTypes().values(), out);
+        return out;
+    }
+
+    private static void collectTypes(Collection<JType> types, List<JType> out) {
+        for (JType t : types) {
+            out.add(t);
+            collectTypes(t.getTypes().values(), out);
+        }
+    }
+
+    /**
+     * A projected span property by property against the one {@code analysis.json} carries, rather
+     * than by presence: a span that arrives with the wrong end, or with the line pair and no byte
+     * pair, is unusable in the same way the drop was.
+     */
+    private static void assertSpan(Map<String, Object> props, String prefix, Span span, String what) {
+        assertEquals(span.getStart()[0], props.get(prefix + "start_line"), what + " start_line");
+        assertEquals(span.getStart()[1], props.get(prefix + "start_column"), what + " start_column");
+        assertEquals(span.getEnd()[0], props.get(prefix + "end_line"), what + " end_line");
+        assertEquals(span.getEnd()[1], props.get(prefix + "end_column"), what + " end_column");
+        assertEquals(span.getBytes()[0], props.get(prefix + "start_byte"), what + " start_byte");
+        assertEquals(span.getBytes()[1], props.get(prefix + "end_byte"), what + " end_byte");
+    }
+
+    /**
+     * The J_ANNOTATED_BY edges out of one declaration: one per application site, each keyed on that
+     * site and carrying its own span. Java annotations are repeatable, so a plain MERGE on the
+     * endpoint pair collapses {@code @Foo @Foo} onto one relationship and keeps only the last span.
+     */
+    private static int assertAnnotationEdges(GraphRows in, String owner, List<JDecorator> decorators) {
+        for (JDecorator d : decorators) {
+            String key = spanKey(d.getSpan());
+            EdgeRow found = null;
+            for (EdgeRow e : in.edges) {
+                if (e.type.equals("J_ANNOTATED_BY") && e.from.value.equals(owner)
+                        && key.equals(e.key)) {
+                    found = e;
+                    break;
+                }
+            }
+            assertNotNull(found, "no J_ANNOTATED_BY edge out of " + owner
+                    + " keyed on its application site " + key);
+            if (d.getSpan() != null) {
+                assertSpan(found.props, "", d.getSpan(), "span of @" + d.getName() + " on " + owner);
+            }
+        }
+        return decorators.size();
+    }
+
+    /** Mirrors {@code V2GraphProjector.spanKey}: the byte pair, else the line/column pair. */
+    private static String spanKey(Span span) {
+        if (span == null) {
+            return "";
+        }
+        if (span.getBytes() != null && span.getBytes().length > 1) {
+            return span.getBytes()[0] + ":" + span.getBytes()[1];
+        }
+        if (span.getStart() != null && span.getStart().length > 1) {
+            return "L" + span.getStart()[0] + ":" + span.getStart()[1];
+        }
+        return "";
+    }
+
+    private static int assertTypeParameters(NodeRow row, List<JTypeParameter> declared, String id) {
+        assertNotNull(row, "no row for " + id);
+        Object projected = row.props.get("type_parameters_json");
+        if (declared.isEmpty()) {
+            assertNull(projected, id + " declares no type parameters, so it must carry no "
+                    + "type_parameters_json");
+            return 0;
+        }
+        assertNotNull(projected, "no type_parameters_json on " + id + ", which analysis.json gives "
+                + declared.size() + " type parameter(s)");
+        JTypeParameter[] parsed =
+                V2Json.compact().fromJson((String) projected, JTypeParameter[].class);
+        assertEquals(declared.size(), parsed.length, "type_parameters_json of " + id
+                + " must hold one entry per declared parameter, in declaration order");
+        for (int i = 0; i < parsed.length; i++) {
+            assertEquals(declared.get(i).getName(), parsed[i].getName(),
+                    "type parameter " + i + " of " + id);
+            assertEquals(declared.get(i).getBounds(), parsed[i].getBounds(),
+                    "bounds of type parameter " + declared.get(i).getName() + " of " + id);
+        }
+        return parsed.length;
+    }
+
+    /** Mirrors {@code V2GraphProjector.globalOrdinal}: {@code @tag} keys concatenate, others get an {@code @}. */
+    private static String ordinal(String callableId, String localKey) {
+        return localKey.startsWith("@") ? callableId + localKey : callableId + "@" + localKey;
+    }
+
+    /** The projector's own UTF-8 byte slice of {@code module.source}. */
+    private static String sliceUtf8(String source, Span span) {
+        byte[] bytes = source.getBytes(StandardCharsets.UTF_8);
+        return new String(bytes, span.getBytes()[0], span.getBytes()[1] - span.getBytes()[0],
+                StandardCharsets.UTF_8);
+    }
+
+    /** One fixture's payload and the graph projected from it, kept together. */
+    private static final class Projection {
+        final Analysis analysis;
+        final GraphRows rows;
+
+        Projection(Analysis analysis, GraphRows rows) {
+            this.analysis = analysis;
+            this.rows = rows;
+        }
+    }
+
+    /** L1 over one of the small fixtures, emitted and projected. */
+    private static Projection projectFixture(String app) throws Exception {
+        Map<String, JModule> modules =
+                L1Extractor.extractAll(Paths.get("src/test/resources/test-applications/" + app), app);
+        Analysis emitted = V2Emitter.emit(app, 1, modules, "test");
+        return new Projection(emitted, V2GraphProjector.project(emitted, app));
+    }
+
     private static NodeRow findNode(String mergeLabel, String value) {
-        for (NodeRow node : rows.nodes) {
+        return findNode(rows, mergeLabel, value);
+    }
+
+    private static NodeRow findNode(GraphRows in, String mergeLabel, String value) {
+        for (NodeRow node : in.nodes) {
             if (node.labels.get(0).equals(mergeLabel) && node.value.equals(value)) {
                 return node;
             }
