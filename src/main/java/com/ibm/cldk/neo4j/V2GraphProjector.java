@@ -38,6 +38,7 @@ import com.ibm.cldk.schema.JImport;
 import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.schema.JRecordComponent;
 import com.ibm.cldk.schema.JType;
+import com.ibm.cldk.schema.JTypeParameter;
 import com.ibm.cldk.schema.JVariableDeclaration;
 import com.ibm.cldk.schema.Span;
 import com.ibm.cldk.schema.V2Json;
@@ -218,6 +219,7 @@ public final class V2GraphProjector {
         p.put("base_types", type.getBaseTypes());
         p.put("interfaces", type.getInterfaces());
         p.put("docstring", docstringOf(type.getComments()));
+        putTypeParameters(p, type.getTypeParameters());
         putLines(p, type.getSpan());
         if (type.isEntrypointClass()) {
             p.put("is_entrypoint", true);
@@ -252,9 +254,11 @@ public final class V2GraphProjector {
             ep.put("name", ec.getName());
             ep.put("arguments", ec.getArguments());
             ep.put("docstring", docstringOf(ec.getComments()));
+            putLines(ep, ec.getSpan());
             ep.put("_module", fileKey);
             NodeRef er = b.node(Arrays.asList("JEnumConstant"), "id", id, RowBuilder.prune(ep));
             b.edge("J_HAS_ENUM_CONSTANT", ref, er);
+            annotate(b, er, ec.getDecorators());
         }
         for (JRecordComponent rc : type.getRecordComponents()) {
             Map<String, Object> rp = RowBuilder.props();
@@ -267,9 +271,11 @@ public final class V2GraphProjector {
                 rp.put("is_variadic", true);
             }
             rp.put("docstring", docstringOf(rc.getComments()));
+            putLines(rp, rc.getSpan());
             rp.put("_module", fileKey);
             NodeRef rr = b.node(Arrays.asList("JRecordComponent"), "id", id, RowBuilder.prune(rp));
             b.edge("J_HAS_RECORD_COMPONENT", ref, rr);
+            annotate(b, rr, rc.getDecorators());
         }
         for (Map.Entry<String, JCallable> c : type.getCallables().entrySet()) {
             projectCallable(b, ref, c.getKey(), c.getValue(), module, fileKey, typeIdByFqn);
@@ -332,7 +338,13 @@ public final class V2GraphProjector {
             p.put("is_entrypoint", true);
             p.put("entrypoint_frameworks", c.getEntrypointFrameworks());
         }
+        putTypeParameters(p, c.getTypeParameters());
         putLines(p, c.getSpan());
+        // The body block's own offsets, under a `body_` prefix. `span` covers the whole declaration,
+        // so without this the graph cannot tell the signature from the body it encloses -- and an
+        // abstract or interface method, which has no body at all, reads the same as one whose body
+        // was simply not recorded. Absent (not zeroed) when there is no body.
+        putLines(p, c.getBodySpan(), "body_");
         p.put("_module", fileKey);
         NodeRef ref = b.node(labels, "id", c.getId(), RowBuilder.prune(p));
         b.edge("J_HAS_METHOD", owner, ref);
@@ -369,6 +381,15 @@ public final class V2GraphProjector {
             np.put("is_static_call", n.getIsStaticCall());
             np.put("argument_types", n.getArgumentTypes());
             np.put("argument_expr", n.getArgumentExpr());
+            np.put("callee_signature", n.getCalleeSignature());
+            // The canonical `arguments`: one body-local `line:col` id per argument, positionally
+            // aligned with `argument_expr` and `argument_types`. Kept local, NOT mapped to global
+            // body-node ids the way `call_node` below is: an argument is a body node only when it is
+            // itself a call site (`f(g(x))`), so qualifying every entry with the owning callable
+            // would hand out `:JBodyNode` ids that mostly resolve to nothing. A consumer that wants
+            // the node for a nested call builds it the same way this projection does -- the owner id,
+            // an `@`, then the local id.
+            np.put("arguments", n.getArguments());
             putLines(np, n.getSpan());
             np.put("_module", fileKey);
             // L4 SDG synthetic-vertex payload: absent on every non-synthetic node (prune drops nulls).
@@ -427,6 +448,36 @@ public final class V2GraphProjector {
     /** {@code @entry}-style synthetic keys concatenate; real {@code line:col} keys get an {@code @}. */
     private static String globalOrdinal(String callableId, String localKey) {
         return localKey.startsWith("@") ? callableId + localKey : callableId + "@" + localKey;
+    }
+
+    /**
+     * A span as a MERGE discriminant. Byte offsets when the span has them, the line/column pair
+     * otherwise, and {@code ""} for no span -- two annotations without spans collapse, which is the
+     * pre-existing behaviour and no worse than it.
+     */
+    private static String spanKey(Span span) {
+        if (span == null) {
+            return "";
+        }
+        if (span.getBytes() != null && span.getBytes().length > 1) {
+            return span.getBytes()[0] + ":" + span.getBytes()[1];
+        }
+        if (span.getStart() != null && span.getStart().length > 1) {
+            return "L" + span.getStart()[0] + ":" + span.getStart()[1];
+        }
+        return "";
+    }
+
+    /**
+     * The declared type parameters, serialized whole. Each carries a name, its resolved bounds, its
+     * own span and its own annotations, so it does not flatten to a scalar -- same call as
+     * {@code parameters_json}, and for the same reason. Absent when the declaration is not generic.
+     */
+    private static void putTypeParameters(Map<String, Object> p, List<JTypeParameter> params) {
+        if (params == null || params.isEmpty()) {
+            return;
+        }
+        p.put("type_parameters_json", V2Json.compact().toJson(params));
     }
 
     // ------------------------------------------------------------------------------------------
@@ -601,7 +652,12 @@ public final class V2GraphProjector {
                     RowBuilder.prune(mapOf("name", d.getName())));
             Map<String, Object> p = RowBuilder.props();
             p.put("arguments", d.getArgs());
-            b.edge("J_ANNOTATED_BY", owner, ann, RowBuilder.prune(p));
+            putLines(p, d.getSpan());
+            // `_k` = the application site. Annotations are repeatable in Java (`@Foo @Foo`), so the
+            // same (owner, annotation) endpoint pair can occur more than once on one declaration;
+            // without the discriminant a plain MERGE collapses them onto one relationship and keeps
+            // only the last span and argument list SET.
+            b.keyedEdge("J_ANNOTATED_BY", owner, ann, RowBuilder.prune(p), spanKey(d.getSpan()));
         }
     }
 
@@ -733,24 +789,34 @@ public final class V2GraphProjector {
      * position (two nodes on one line) unrepresentable.
      */
     private static void putLines(Map<String, Object> p, Span span) {
+        putLines(p, span, "");
+    }
+
+    /**
+     * As above, under a property-name prefix, for a node carrying a second span beside its own —
+     * {@code JCallable} carries the declaration's span unprefixed and the body block's under
+     * {@code body_}. A prefix rather than a second node because a body block is not a thing with an
+     * identity; it is a second pair of offsets into the same file.
+     */
+    private static void putLines(Map<String, Object> p, Span span, String prefix) {
         if (span == null) {
             return;
         }
         if (span.getStart() != null && span.getStart().length > 0) {
-            p.put("start_line", span.getStart()[0]);
+            p.put(prefix + "start_line", span.getStart()[0]);
             if (span.getStart().length > 1) {
-                p.put("start_column", span.getStart()[1]);
+                p.put(prefix + "start_column", span.getStart()[1]);
             }
         }
         if (span.getEnd() != null && span.getEnd().length > 0) {
-            p.put("end_line", span.getEnd()[0]);
+            p.put(prefix + "end_line", span.getEnd()[0]);
             if (span.getEnd().length > 1) {
-                p.put("end_column", span.getEnd()[1]);
+                p.put(prefix + "end_column", span.getEnd()[1]);
             }
         }
         if (span.getBytes() != null && span.getBytes().length > 1) {
-            p.put("start_byte", span.getBytes()[0]);
-            p.put("end_byte", span.getBytes()[1]);
+            p.put(prefix + "start_byte", span.getBytes()[0]);
+            p.put(prefix + "end_byte", span.getBytes()[1]);
         }
     }
 

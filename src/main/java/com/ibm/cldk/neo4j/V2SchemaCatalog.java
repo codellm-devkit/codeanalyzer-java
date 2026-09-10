@@ -98,9 +98,19 @@ public final class V2SchemaCatalog {
      * are the ones they must adopt.
      */
     private static Map<String, String> lines(P p) {
-        return p.put("start_line", "integer").put("start_column", "integer")
-                .put("end_line", "integer").put("end_column", "integer")
-                .put("start_byte", "integer").put("end_byte", "integer").done();
+        return span(p, "").done();
+    }
+
+    /**
+     * The same six properties under a name prefix, for a node carrying a second span beside its own.
+     * {@code JCallable} is the only one: {@code body_*} is the body block, where the unprefixed span
+     * is the whole declaration. Absent entirely on an abstract or interface method, which has no
+     * body -- distinguishable from a body that was not recorded, which the line pair alone was not.
+     */
+    private static P span(P p, String prefix) {
+        return p.put(prefix + "start_line", "integer").put(prefix + "start_column", "integer")
+                .put(prefix + "end_line", "integer").put(prefix + "end_column", "integer")
+                .put(prefix + "start_byte", "integer").put(prefix + "end_byte", "integer");
     }
 
     public static final List<NodeLabel> NODE_LABELS = buildNodeLabels();
@@ -136,10 +146,11 @@ public final class V2SchemaCatalog {
                 lines(new P().put("id", "string").put("name", "string").put("kind", "string")
                         .put("modifiers", "string[]").put("base_types", "string[]")
                         .put("interfaces", "string[]").put("docstring", "string")
+                        .put("type_parameters_json", "string")
                         .put("is_entrypoint", "boolean").put("entrypoint_frameworks", "string[]"))));
 
         n.add(node("JCallable", "JSymbol", "id",
-                lines(new P().put("id", "string").put("name", "string").put("signature", "string")
+                span(span(new P().put("id", "string").put("name", "string").put("signature", "string")
                         .put("kind", "string").put("declaration", "string").put("return_type", "string")
                         .put("parameters_json", "string").put("modifiers", "string[]")
                         .put("error_channel", "string[]").put("code", "string").put("docstring", "string")
@@ -147,7 +158,7 @@ public final class V2SchemaCatalog {
                         .put("referenced_types", "string[]").put("accessed_fields", "string[]")
                         .put("is_implicit", "boolean").put("is_entrypoint", "boolean")
                         .put("entrypoint_frameworks", "string[]")
-                        )));
+                        .put("type_parameters_json", "string"), ""), "body_").done()));
 
         n.add(node("JExternal", "JSymbol", "id",
                 new P().put("id", "string").put("kind", "string").put("signature", "string")
@@ -163,13 +174,13 @@ public final class V2SchemaCatalog {
                         .put("initializer", "string"))));
 
         n.add(node("JEnumConstant", "JEnumConstant", "id",
-                new P().put("id", "string").put("name", "string").put("arguments", "string[]")
-                        .put("docstring", "string").done()));
+                lines(new P().put("id", "string").put("name", "string").put("arguments", "string[]")
+                        .put("docstring", "string"))));
 
         n.add(node("JRecordComponent", "JRecordComponent", "id",
-                new P().put("id", "string").put("name", "string").put("type", "string")
+                lines(new P().put("id", "string").put("name", "string").put("type", "string")
                         .put("modifiers", "string[]").put("is_variadic", "boolean")
-                        .put("docstring", "string").done()));
+                        .put("docstring", "string"))));
 
         n.add(node("JBodyNode", "JBodyNode", "id",
                 lines(new P().put("id", "string").put("kind", "string").put("method_name", "string")
@@ -177,6 +188,7 @@ public final class V2SchemaCatalog {
                         .put("return_type", "string").put("accessibility", "string")
                         .put("is_constructor_call", "boolean").put("is_static_call", "boolean")
                         .put("argument_types", "string[]").put("argument_expr", "string[]")
+                        .put("callee_signature", "string").put("arguments", "string[]")
                         // L4 SDG synthetic-vertex payload.
                         .put("var", "string").put("call_node", "string"))));
 
@@ -238,8 +250,14 @@ public final class V2SchemaCatalog {
         r.add(rel("J_IMPORTS", Arrays.asList("JModule"), Arrays.asList("JModule", "JPackage"),
                 new P().put("spellings", "string[]").put("is_static", "boolean")
                         .put("is_wildcard", "boolean").done()));
-        r.add(rel("J_ANNOTATED_BY", Arrays.asList("JType", "JCallable", "JField"),
-                Arrays.asList("JAnnotation"), new P().put("arguments", "string[]").done()));
+        // `_k` = the application site's span. Java annotations are repeatable (`@Foo @Foo`), so one
+        // (owner, annotation) endpoint pair legitimately occurs twice on one declaration; without the
+        // discriminant a plain MERGE collapses the two applications onto one relationship and keeps
+        // only the last span and argument list SET.
+        r.add(rel("J_ANNOTATED_BY",
+                Arrays.asList("JType", "JCallable", "JField", "JEnumConstant", "JRecordComponent"),
+                Arrays.asList("JAnnotation"),
+                lines(new P().put("arguments", "string[]").put("_k", "string"))));
         // L3 CPG overlay. `_k` is the MERGE discriminant (internal, underscore-prefixed): J_CFG_NEXT
         // merges per `kind` (a conditional's true/false pair), J_DDG per `(var, prov)`.
         r.add(rel("J_CFG_NEXT", body, body, new P().put("kind", "string").put("_k", "string").done()));
