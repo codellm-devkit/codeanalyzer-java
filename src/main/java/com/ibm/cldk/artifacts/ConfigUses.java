@@ -8,22 +8,17 @@ import com.ibm.cldk.schema.JCallable;
 import com.ibm.cldk.schema.JConfigKey;
 import com.ibm.cldk.schema.JConfigRead;
 import com.ibm.cldk.schema.JConfigUseEdge;
-import com.ibm.cldk.schema.JDdgEdge;
 import com.ibm.cldk.schema.JDecorator;
 import com.ibm.cldk.schema.JField;
 import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.schema.JParameter;
 import com.ibm.cldk.schema.JType;
-import com.ibm.cldk.schema.Span;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -169,17 +164,6 @@ public final class ConfigUses {
         }
     }
 
-    /** A callable plus the module source its spans slice, for the dataflow tiers. */
-    private static final class Owner {
-        final JCallable callable;
-        final String source;
-
-        Owner(JCallable callable, String source) {
-            this.callable = callable;
-            this.source = source;
-        }
-    }
-
     /**
      * Detect config reads across the L1 tree and resolve them against the declared keys.
      *
@@ -207,7 +191,7 @@ public final class ConfigUses {
         Map<String, List<JConfigKey>> keysByNamespace = keysByNamespace(artifacts);
 
         List<Read> reads = new ArrayList<>();
-        Map<String, Owner> owners = new LinkedHashMap<>();
+        Map<String, DataflowTiers.Owner> owners = new LinkedHashMap<>();
         if (modules != null) {
             for (JModule module : modules.values()) {
                 collectTypes(appName, module.getTypes(), module.getSource(), reads, owners);
@@ -221,7 +205,7 @@ public final class ConfigUses {
     // ----------------------------------------------------------------------------------------
 
     private static void collectTypes(String appName, Map<String, JType> types, String source,
-            List<Read> reads, Map<String, Owner> owners) {
+            List<Read> reads, Map<String, DataflowTiers.Owner> owners) {
         if (types == null) {
             return;
         }
@@ -231,7 +215,7 @@ public final class ConfigUses {
     }
 
     private static void collectType(String appName, JType type, String source, List<Read> reads,
-            Map<String, Owner> owners) {
+            Map<String, DataflowTiers.Owner> owners) {
         for (JDecorator d : type.getDecorators()) {
             if (isAnnotation(d, CONFIGURATION_PROPERTIES_ANNOTATION)) {
                 String prefix = annotationMember(d, "prefix", "value");
@@ -252,8 +236,8 @@ public final class ConfigUses {
     }
 
     private static void collectCallable(String appName, JCallable callable, String source,
-            List<Read> reads, Map<String, Owner> owners) {
-        owners.put(callable.getId(), new Owner(callable, source));
+            List<Read> reads, Map<String, DataflowTiers.Owner> owners) {
+        owners.put(callable.getId(), new DataflowTiers.Owner(callable, source));
         collectValueAnnotations(appName, callable.getDecorators(), callable.getId(), reads);
         for (JParameter p : callable.getParameters()) {
             // A parameter is not an addressable node in the v2 tree, so an injected parameter's read
@@ -318,7 +302,7 @@ public final class ConfigUses {
     // ----------------------------------------------------------------------------------------
 
     private static Result resolve(List<Read> reads, Map<String, List<JConfigKey>> keysByNamespace,
-            Map<String, Owner> owners, int analysisLevel, List<JCallEdge> callGraph) {
+            Map<String, DataflowTiers.Owner> owners, int analysisLevel, List<JCallEdge> callGraph) {
         List<JConfigUseEdge> uses = new ArrayList<>();
         List<JConfigRead> unresolved = new ArrayList<>();
 
@@ -334,11 +318,13 @@ public final class ConfigUses {
             (read.literal != null ? closed : pending).add(read);
         }
         if (analysisLevel >= 3) {
-            pending = runTier(pending, closed, read -> IntraTier.close(read, owners));
+            pending = runTier(pending, closed,
+                    read -> DataflowTiers.intra(owners.get(read.callableId), read.localId, read.keyName));
         }
         if (analysisLevel >= 4) {
-            CallSiteIndex sites = new CallSiteIndex(owners, callGraph);
-            pending = runTier(pending, closed, read -> InterprocTier.close(read, owners, sites));
+            DataflowTiers.CallSiteIndex sites = new DataflowTiers.CallSiteIndex(owners, callGraph);
+            pending = runTier(pending, closed,
+                    read -> DataflowTiers.interproc(owners.get(read.callableId), read.keyName, sites, owners));
         }
 
         for (Read read : closed) {
@@ -497,290 +483,6 @@ public final class ConfigUses {
             }
         }
         return args.size() == 1 && args.get(0).indexOf('=') < 0 ? Literals.stringLiteral(args.get(0)) : null;
-    }
-
-    // ----------------------------------------------------------------------------------------
-    // L3 intra tier: close a bare name over its own callable's DDG
-    // ----------------------------------------------------------------------------------------
-
-    /**
-     * Closes {@code env.getProperty(key)} when every DDG-reaching definition of {@code key} at the
-     * call site is one and the same string literal.
-     */
-    private static final class IntraTier {
-
-        private IntraTier() {}
-
-        static String close(Read read, Map<String, Owner> owners) {
-            Owner owner = owners.get(read.callableId);
-            if (owner == null || owner.callable.getDdg() == null || owner.source == null) {
-                return null;
-            }
-            return reachingLiteral(owner.callable, owner.source, read.localId, read.keyName);
-        }
-
-        /**
-         * The one string literal every reaching definition of {@code var} closes on at
-         * {@code useLocalId} — {@code null} if nothing reaches, if any reaching def is not a literal
-         * assignment, or if two reaching defs disagree.
-         *
-         * <p><b>Only {@code ssa} edges are consulted, and that is load-bearing.</b> At {@code -a 4}
-         * the ddg also carries {@code points-to} edges, which may-alias this variable's use to an
-         * unrelated write that is not a {@code name = "literal"} shape. Since any non-closing
-         * reaching def kills resolution, letting an alias edge in would REMOVE an edge the ssa-only
-         * L3 set resolved cleanly — a widening that breaks {@code -a 3 ⊆ -a 4}, which is exactly what
-         * the additive contract forbids. A bare local can only be rebound by its own name, so
-         * widening past {@code ssa} here adds no soundness, only noise.
-         *
-         * <p><b>Span containment, not id equality.</b> The CFG/DDG is statement-level while a
-         * {@code call} body node is keyed by its own narrower span, so a def's recorded <em>use</em>
-         * site is the enclosing statement — which coincides with the call's own id only when the call
-         * is a bare expression statement. Containment covers that and the common
-         * {@code return env.getProperty(key);} nesting without special-casing either.
-         */
-        private static String reachingLiteral(JCallable c, String source, String useLocalId,
-                String var) {
-            JBodyNode use = c.getBody().get(useLocalId);
-            int[] useBytes = bytesOf(use);
-            if (useBytes == null) {
-                return null;
-            }
-            Set<String> literals = new LinkedHashSet<>();
-            boolean reached = false;
-            for (JDdgEdge edge : c.getDdg()) {
-                if (!var.equals(edge.getVar()) || !edge.getProv().contains("ssa")) {
-                    continue;
-                }
-                int[] dstBytes = bytesOf(c.getBody().get(edge.getDst()));
-                if (dstBytes == null
-                        || !(dstBytes[0] <= useBytes[0] && useBytes[1] <= dstBytes[1])) {
-                    continue; // some other reference to `var`, not this call's
-                }
-                reached = true;
-                String literal = assignLiteral(source, c.getBody().get(edge.getSrc()));
-                if (literal == null) {
-                    // Any non-closing reaching def kills the resolution rather than being skipped:
-                    // two paths assigning different things means the read is genuinely ambiguous, and
-                    // picking one would be a confident wrong answer.
-                    return null;
-                }
-                literals.add(literal);
-            }
-            return reached && literals.size() == 1 ? literals.iterator().next() : null;
-        }
-
-        /**
-         * The string constant a single definition closes on. Accepts only a single-target
-         * {@code <name> = "literal"} — a declarator with one variable, or a plain assignment. A
-         * compound assignment, a multi-declarator statement, or a formal-parameter binding (no span)
-         * correctly never closes.
-         */
-        private static String assignLiteral(String source, JBodyNode def) {
-            String text = slice(source, def);
-            if (text == null) {
-                return null;
-            }
-            com.github.javaparser.ast.stmt.Statement stmt;
-            try {
-                stmt = com.github.javaparser.StaticJavaParser.parseStatement(
-                        text.endsWith(";") ? text : text + ";");
-            } catch (RuntimeException e) {
-                return null;
-            }
-            if (!stmt.isExpressionStmt()) {
-                return null;
-            }
-            com.github.javaparser.ast.expr.Expression expr = stmt.asExpressionStmt().getExpression();
-            if (expr.isVariableDeclarationExpr()) {
-                com.github.javaparser.ast.expr.VariableDeclarationExpr decl =
-                        expr.asVariableDeclarationExpr();
-                if (decl.getVariables().size() != 1) {
-                    return null;
-                }
-                return Literals.literalOf(decl.getVariable(0).getInitializer().orElse(null));
-            }
-            if (expr.isAssignExpr()) {
-                com.github.javaparser.ast.expr.AssignExpr assign = expr.asAssignExpr();
-                if (assign.getOperator() != com.github.javaparser.ast.expr.AssignExpr.Operator.ASSIGN
-                        || !assign.getTarget().isNameExpr()) {
-                    return null;
-                }
-                return Literals.literalOf(assign.getValue());
-            }
-            return null;
-        }
-    }
-
-    // ----------------------------------------------------------------------------------------
-    // L4 interprocedural tier: close a parameter over the call graph
-    // ----------------------------------------------------------------------------------------
-
-    /** Every in-project {@code call} body node, indexed by the callee it resolved to. */
-    private static final class CallSiteIndex {
-        /** callee id → the call sites targeting it, each with its owning callable. */
-        final Map<String, List<Site>> byCallee = new LinkedHashMap<>();
-        /** Simple names of calls whose callee never resolved — the completeness spoilers. */
-        final Set<String> unresolvedNames = new LinkedHashSet<>();
-
-        static final class Site {
-            final JCallable caller;
-            final String source;
-            final String localId;
-            final JBodyNode node;
-
-            Site(JCallable caller, String source, String localId, JBodyNode node) {
-                this.caller = caller;
-                this.source = source;
-                this.localId = localId;
-                this.node = node;
-            }
-        }
-
-        CallSiteIndex(Map<String, Owner> owners, List<JCallEdge> callGraph) {
-            for (Owner owner : owners.values()) {
-                for (Map.Entry<String, JBodyNode> e : owner.callable.getBody().entrySet()) {
-                    JBodyNode node = e.getValue();
-                    if (!"call".equals(node.getKind())) {
-                        continue;
-                    }
-                    if (node.getCallee() == null) {
-                        if (node.getMethodName() != null) {
-                            unresolvedNames.add(node.getMethodName());
-                        }
-                        continue;
-                    }
-                    byCallee.computeIfAbsent(node.getCallee(), k -> new ArrayList<>())
-                            .add(new Site(owner.callable, owner.source, e.getKey(), node));
-                }
-            }
-        }
-    }
-
-    /**
-     * Closes {@code String read(String name) { return System.getenv(name); }} when {@code name} is a
-     * parameter that the callable never rebinds and <em>every</em> call site targeting it supplies
-     * the same literal.
-     *
-     * <p><b>Every</b> is the word doing the work. A callee whose call-site set is incomplete must not
-     * close: a caller the analyzer could not see may supply a different key, and answering from the
-     * callers it did see would be a confident wrong answer. Known ceiling, stated rather than
-     * papered over: a {@code public} method can be called from outside the analyzed project
-     * entirely, which no in-project call graph can rule out — the same whole-application assumption
-     * codeanalyzer-python's tier makes.
-     */
-    private static final class InterprocTier {
-
-        private InterprocTier() {}
-
-        static String close(Read read, Map<String, Owner> owners, CallSiteIndex sites) {
-            Owner owner = owners.get(read.callableId);
-            if (owner == null) {
-                return null;
-            }
-            JCallable c = owner.callable;
-            int paramIndex = -1;
-            for (int i = 0; i < c.getParameters().size(); i++) {
-                if (read.keyName.equals(c.getParameters().get(i).getName())) {
-                    paramIndex = i;
-                    break;
-                }
-            }
-            if (paramIndex < 0 || locallyRedefined(c, read.keyName)) {
-                return null;
-            }
-            // A framework, not an in-project caller, supplies an entrypoint's arguments, so its
-            // call-site set is complete only by accident.
-            if (c.isEntrypoint()) {
-                return null;
-            }
-            List<CallSiteIndex.Site> targeting = sites.byCallee.get(c.getId());
-            if (targeting == null || targeting.isEmpty()
-                    || sites.unresolvedNames.contains(simpleName(c))) {
-                return null;
-            }
-            Set<String> literals = new LinkedHashSet<>();
-            for (CallSiteIndex.Site site : targeting) {
-                String literal = siteLiteral(site, paramIndex, owners);
-                if (literal == null) {
-                    return null;
-                }
-                literals.add(literal);
-            }
-            return literals.size() == 1 ? literals.iterator().next() : null;
-        }
-
-        /** The literal a call site passes at {@code paramIndex}, directly or via one caller-side hop. */
-        private static String siteLiteral(CallSiteIndex.Site site, int paramIndex,
-                Map<String, Owner> owners) {
-            List<String> args = site.node.getArgumentExpr();
-            if (args == null || args.size() <= paramIndex) {
-                return null;
-            }
-            String arg = args.get(paramIndex);
-            String direct = Literals.stringLiteral(arg);
-            if (direct != null) {
-                return direct;
-            }
-            // ONE hop only, and deliberately not recursive: a chain of forwarding callers is a
-            // fixpoint, not a lookup, and this tier is a lookup.
-            if (!IDENTIFIER.matcher(arg).matches() || site.source == null
-                    || site.caller.getDdg() == null) {
-                return null;
-            }
-            return IntraTier.reachingLiteral(site.caller, site.source, site.localId, arg);
-        }
-
-        /**
-         * Whether {@code var} is rebound anywhere in the body. A parameter's only definition should be
-         * the synthetic formal binding, which carries no span; a def with a real span means a caller's
-         * argument is not provably what the read sees.
-         */
-        private static boolean locallyRedefined(JCallable c, String var) {
-            if (c.getDdg() == null) {
-                return false;
-            }
-            for (JDdgEdge edge : c.getDdg()) {
-                if (var.equals(edge.getVar()) && bytesOf(c.getBody().get(edge.getSrc())) != null) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        private static String simpleName(JCallable c) {
-            String signature = c.getSignature();
-            if (signature == null) {
-                return "";
-            }
-            int paren = signature.indexOf('(');
-            return paren < 0 ? signature : signature.substring(0, paren);
-        }
-    }
-
-    // ----------------------------------------------------------------------------------------
-    // Span slicing shared by both tiers
-    // ----------------------------------------------------------------------------------------
-
-    private static int[] bytesOf(JBodyNode node) {
-        if (node == null) {
-            return null;
-        }
-        Span span = node.getSpan();
-        int[] bytes = span == null ? null : span.getBytes();
-        return bytes != null && bytes.length >= 2 ? bytes : null;
-    }
-
-    /** UTF-8 byte slice of the module source for a node's span; {@code null} when it has none. */
-    private static String slice(String source, JBodyNode node) {
-        int[] bytes = bytesOf(node);
-        if (source == null || bytes == null) {
-            return null;
-        }
-        byte[] raw = source.getBytes(StandardCharsets.UTF_8);
-        if (bytes[0] < 0 || bytes[1] > raw.length || bytes[0] >= bytes[1]) {
-            return null;
-        }
-        return new String(raw, bytes[0], bytes[1] - bytes[0], StandardCharsets.UTF_8);
     }
 
     private static String ghost(String appName, String annotationType) {

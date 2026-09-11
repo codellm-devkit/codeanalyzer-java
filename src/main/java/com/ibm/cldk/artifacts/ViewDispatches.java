@@ -14,6 +14,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * The view-dispatch pass (#259, spec 2026-09-11): joins the body nodes that hand a request to a view
@@ -31,7 +32,10 @@ public final class ViewDispatches {
 
     private ViewDispatches() {}
 
+    /** Provenance vocabulary, shared with {@link ConfigUses}: exactly {@code literal|dataflow}. */
     private static final List<String> LITERAL = List.of("literal");
+    private static final List<String> DATAFLOW = List.of("dataflow");
+    private static final List<String> LITERAL_AND_DATAFLOW = List.of("literal", "dataflow");
 
     private static final Set<String> DISPATCHER_TYPES = Set.of(
             "javax.servlet.RequestDispatcher", "jakarta.servlet.RequestDispatcher");
@@ -55,12 +59,39 @@ public final class ViewDispatches {
         final String via;
         /** The target expression's source text; {@code null} when the site has none to read. */
         final String targetExpr;
+        // Dataflow anchors, for a target that is a bare name — the only shape a tier can trace.
+        final String callableId;
+        final String localId;
+        /** The literal the target closed on, by the call site itself or by a tier; else null. */
+        final String literal;
+        final boolean closedByDataflow;
 
-        Site(String id, String callee, String via, String targetExpr) {
+        Site(String id, String callee, String via, String targetExpr, String callableId,
+                String localId) {
+            this(id, callee, via, targetExpr, callableId, localId,
+                    Literals.stringLiteral(targetExpr), false);
+        }
+
+        private Site(String id, String callee, String via, String targetExpr, String callableId,
+                String localId, String literal, boolean closedByDataflow) {
             this.id = id;
             this.callee = callee;
             this.via = via;
             this.targetExpr = targetExpr;
+            this.callableId = callableId;
+            this.localId = localId;
+            this.literal = literal;
+            this.closedByDataflow = closedByDataflow;
+        }
+
+        /** The bare identifier a tier can trace, or null for a literal or a compound expression. */
+        String varName() {
+            return literal == null && targetExpr != null
+                    && Literals.IDENTIFIER.matcher(targetExpr).matches() ? targetExpr : null;
+        }
+
+        Site closedTo(String traced) {
+            return new Site(id, callee, via, targetExpr, callableId, localId, traced, true);
         }
     }
 
@@ -77,7 +108,7 @@ public final class ViewDispatches {
                 collectTypes(appName, module.getTypes(), sites);
             }
         }
-        return resolve(sites, artifacts);
+        return resolve(sites, artifacts, modules, analysisLevel, callGraph);
     }
 
     // ----------------------------------------------------------------------------------------
@@ -123,7 +154,7 @@ public final class ViewDispatches {
         }
         String signature = node.getCalleeSignature() != null ? node.getCalleeSignature() : method;
         return new Site(CanId.ordinalId(callableId, localId),
-                CanId.externalId(appName, receiver, signature), via, target);
+                CanId.externalId(appName, receiver, signature), via, target, callableId, localId);
     }
 
     /**
@@ -152,27 +183,50 @@ public final class ViewDispatches {
     // Resolution
     // ----------------------------------------------------------------------------------------
 
-    private static Result resolve(List<Site> sites, Map<String, JArtifact> artifacts) {
+    /**
+     * Tiers run over what the previous one could not close, in increasing cost, exactly as in
+     * {@link ConfigUses}: a site closed at a lower tier is never recomputed, so
+     * {@code view_dispatches(-a 1) ⊆ view_dispatches(-a 3) ⊆ view_dispatches(-a 4)}.
+     */
+    private static Result resolve(List<Site> sites, Map<String, JArtifact> artifacts,
+            Map<String, JModule> modules, int analysisLevel, List<JCallEdge> callGraph) {
         List<JViewDispatchEdge> dispatches = new ArrayList<>();
         List<JViewDispatchUnresolved> unresolved = new ArrayList<>();
+        List<String> attempted = analysisLevel >= 3 ? LITERAL_AND_DATAFLOW : LITERAL;
+
+        List<Site> closed = new ArrayList<>();
+        List<Site> pending = new ArrayList<>();
         for (Site site : sites) {
-            String literal = Literals.stringLiteral(site.targetExpr);
-            if (literal == null) {
-                unresolved.add(unresolved(site, null, "non-literal"));
-                continue;
+            (site.literal != null ? closed : pending).add(site);
+        }
+        if (analysisLevel >= 3 && !pending.isEmpty()) {
+            Map<String, DataflowTiers.Owner> owners = DataflowTiers.owners(modules);
+            pending = runTier(pending, closed,
+                    s -> DataflowTiers.intra(owners.get(s.callableId), s.localId, s.varName()));
+            if (analysisLevel >= 4) {
+                DataflowTiers.CallSiteIndex index = new DataflowTiers.CallSiteIndex(owners, callGraph);
+                pending = runTier(pending, closed,
+                        s -> DataflowTiers.interproc(owners.get(s.callableId), s.varName(), index, owners));
             }
-            List<JArtifact> matched = matchPath(literal, artifacts);
+        }
+
+        for (Site site : closed) {
+            List<JArtifact> matched = matchPath(site.literal, artifacts);
             if (matched.size() == 1) {
                 JViewDispatchEdge edge = new JViewDispatchEdge();
                 edge.setSrc(site.id);
                 edge.setDst(matched.get(0).getId());
                 edge.setVia(site.via);
-                edge.setProv(new ArrayList<>(LITERAL));
+                // The tier that CLOSED this site, not every tier attempted (same rule as config_uses).
+                edge.setProv(new ArrayList<>(site.closedByDataflow ? DATAFLOW : LITERAL));
                 dispatches.add(edge);
             } else {
-                unresolved.add(unresolved(site, literal,
-                        matched.isEmpty() ? "no-such-artifact" : "ambiguous"));
+                unresolved.add(unresolved(site, site.literal,
+                        matched.isEmpty() ? "no-such-artifact" : "ambiguous", attempted));
             }
+        }
+        for (Site site : pending) {
+            unresolved.add(unresolved(site, null, "non-literal", attempted));
         }
         dispatches.sort(Comparator.comparing(JViewDispatchEdge::getSrc)
                 .thenComparing(JViewDispatchEdge::getDst));
@@ -213,14 +267,29 @@ public final class ViewDispatches {
         return out;
     }
 
-    private static JViewDispatchUnresolved unresolved(Site site, String target, String reason) {
+    private static List<Site> runTier(List<Site> pending, List<Site> closed,
+            Function<Site, String> tier) {
+        List<Site> still = new ArrayList<>();
+        for (Site site : pending) {
+            String traced = site.varName() == null ? null : tier.apply(site);
+            if (traced == null) {
+                still.add(site);
+            } else {
+                closed.add(site.closedTo(traced));
+            }
+        }
+        return still;
+    }
+
+    private static JViewDispatchUnresolved unresolved(Site site, String target, String reason,
+            List<String> attempted) {
         JViewDispatchUnresolved u = new JViewDispatchUnresolved();
         u.setSite(site.id);
         u.setCallee(site.callee);
         u.setTarget(target);
         u.setVia(site.via);
         u.setReason(reason);
-        u.setProv(new ArrayList<>(LITERAL));
+        u.setProv(new ArrayList<>(attempted));
         return u;
     }
 }

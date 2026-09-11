@@ -12,8 +12,6 @@ import com.ibm.cldk.schema.JType;
 import com.ibm.cldk.schema.JViewDispatchEdge;
 import com.ibm.cldk.schema.JViewDispatchUnresolved;
 import com.ibm.cldk.syntactic_analysis.L1Extractor;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -44,35 +42,12 @@ class ViewDispatchesTest {
     private static Map<String, JModule> modules;
 
     static void write(String rel, String text) throws Exception {
-        Path f = root.resolve(rel);
-        Files.createDirectories(f.getParent());
-        Files.writeString(f, text, StandardCharsets.UTF_8);
+        ServletApiStubs.write(root, rel, text);
     }
 
     @BeforeAll
     static void analyze() throws Exception {
-        write("src/main/java/javax/servlet/RequestDispatcher.java",
-                "package javax.servlet;\npublic interface RequestDispatcher {\n"
-                        + "  void forward(ServletRequest q, ServletResponse s);\n"
-                        + "  void include(ServletRequest q, ServletResponse s);\n}\n");
-        write("src/main/java/javax/servlet/ServletRequest.java",
-                "package javax.servlet;\npublic interface ServletRequest {\n"
-                        + "  RequestDispatcher getRequestDispatcher(String path);\n}\n");
-        write("src/main/java/javax/servlet/ServletResponse.java",
-                "package javax.servlet;\npublic interface ServletResponse {}\n");
-        write("src/main/java/javax/servlet/ServletContext.java",
-                "package javax.servlet;\npublic interface ServletContext {\n"
-                        + "  RequestDispatcher getRequestDispatcher(String path);\n}\n");
-        write("src/main/java/javax/servlet/http/HttpServletRequest.java",
-                "package javax.servlet.http;\n"
-                        + "public interface HttpServletRequest extends javax.servlet.ServletRequest {}\n");
-        write("src/main/java/javax/servlet/http/HttpServletResponse.java",
-                "package javax.servlet.http;\n"
-                        + "public interface HttpServletResponse extends javax.servlet.ServletResponse {\n"
-                        + "  void sendRedirect(String location);\n}\n");
-        write("src/main/java/javax/servlet/http/HttpServlet.java",
-                "package javax.servlet.http;\npublic abstract class HttpServlet {\n"
-                        + "  public javax.servlet.ServletContext getServletContext() { return null; }\n}\n");
+        ServletApiStubs.write(root);
 
         write("src/main/webapp/pages/x.jsp", "<%= 1 %>");
         write("src/main/webapp/y.jsp", "<%= 2 %>");
