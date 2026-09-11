@@ -33,10 +33,9 @@ public final class ViewDispatches {
 
     private ViewDispatches() {}
 
-    /** Provenance vocabulary, shared with {@link ConfigUses}: exactly {@code literal|dataflow}. */
+    /** Provenance vocabulary: {@code literal | table | dataflow} — {@code table} is this pass's own (§ 4.5). */
     private static final List<String> LITERAL = List.of("literal");
     private static final List<String> DATAFLOW = List.of("dataflow");
-    private static final List<String> LITERAL_AND_DATAFLOW = List.of("literal", "dataflow");
 
     private static final Set<String> DISPATCHER_TYPES = Set.of(
             "javax.servlet.RequestDispatcher", "jakarta.servlet.RequestDispatcher");
@@ -69,36 +68,38 @@ public final class ViewDispatches {
         // Dataflow anchors, for a target that is a bare name — the only shape a tier can trace.
         final String callableId;
         final String localId;
-        /** The literal the target closed on, by the call site itself or by a tier; else null. */
-        final String literal;
-        final boolean closedByDataflow;
+        /** What the target closed on — one literal, or a table's entries — and the tier that did it. */
+        final List<String> targets;
+        final String closedBy;
 
         Site(String id, String callee, String via, String targetExpr, String callableId,
                 String localId) {
             this(id, callee, via, targetExpr, callableId, localId,
-                    Literals.stringLiteral(targetExpr), false);
+                    Literals.stringLiteral(targetExpr) == null ? null
+                            : List.of(Literals.stringLiteral(targetExpr)),
+                    "literal");
         }
 
         private Site(String id, String callee, String via, String targetExpr, String callableId,
-                String localId, String literal, boolean closedByDataflow) {
+                String localId, List<String> targets, String closedBy) {
             this.id = id;
             this.callee = callee;
             this.via = via;
             this.targetExpr = targetExpr;
             this.callableId = callableId;
             this.localId = localId;
-            this.literal = literal;
-            this.closedByDataflow = closedByDataflow;
+            this.targets = targets;
+            this.closedBy = closedBy;
         }
 
         /** The bare identifier a tier can trace, or null for a literal or a compound expression. */
         String varName() {
-            return literal == null && targetExpr != null
+            return targets == null && targetExpr != null
                     && Literals.IDENTIFIER.matcher(targetExpr).matches() ? targetExpr : null;
         }
 
-        Site closedTo(String traced) {
-            return new Site(id, callee, via, targetExpr, callableId, localId, traced, true);
+        Site closedTo(List<String> traced, String tier) {
+            return new Site(id, callee, via, targetExpr, callableId, localId, traced, tier);
         }
     }
 
@@ -221,60 +222,83 @@ public final class ViewDispatches {
     /**
      * Tiers run over what the previous one could not close, in increasing cost, exactly as in
      * {@link ConfigUses}: a site closed at a lower tier is never recomputed, so
-     * {@code view_dispatches(-a 1) ⊆ view_dispatches(-a 3) ⊆ view_dispatches(-a 4)}.
+     * {@code view_dispatches(-a 1) ⊆ view_dispatches(-a 3) ⊆ view_dispatches(-a 4)}. The table
+     * tier (§ 4.5) sits between literal and dataflow: level-independent, and the only tier whose
+     * answer is a set.
      */
     private static Result resolve(List<Site> sites, Map<String, JArtifact> artifacts,
             Map<String, JModule> modules, int analysisLevel, List<JCallEdge> callGraph) {
         List<JViewDispatchEdge> dispatches = new ArrayList<>();
         List<JViewDispatchUnresolved> unresolved = new ArrayList<>();
-        List<String> attempted = analysisLevel >= 3 ? LITERAL_AND_DATAFLOW : LITERAL;
 
         List<Site> closed = new ArrayList<>();
         List<Site> pending = new ArrayList<>();
         for (Site site : sites) {
-            (site.literal != null ? closed : pending).add(site);
+            (site.targets != null ? closed : pending).add(site);
         }
+        StringTables tables = new StringTables(modules);
+        pending = runTier(pending, closed, s -> tables.close(s.targetExpr), "table");
         if (analysisLevel >= 3 && !pending.isEmpty()) {
             Map<String, DataflowTiers.Owner> owners = DataflowTiers.owners(modules);
-            pending = runTier(pending, closed,
-                    s -> DataflowTiers.intra(owners.get(s.callableId), s.localId, s.varName()));
+            pending = runTier(pending, closed, s -> one(
+                    DataflowTiers.intra(owners.get(s.callableId), s.localId, s.varName())), "dataflow");
             if (analysisLevel >= 4) {
                 DataflowTiers.CallSiteIndex index = new DataflowTiers.CallSiteIndex(owners, callGraph);
-                pending = runTier(pending, closed,
-                        s -> DataflowTiers.interproc(owners.get(s.callableId), s.varName(), index, owners));
+                List<Site> still = new ArrayList<>();
+                for (Site s : pending) {
+                    DataflowTiers.Closure c = s.varName() == null ? null
+                            : DataflowTiers.interprocAll(owners.get(s.callableId), s.varName(), index,
+                                    owners, tables::close);
+                    // A `dataflow` edge still means exactly one target: literal callers that
+                    // disagree refuse, as before. Only a table makes a many-valued closure legal.
+                    if (c == null || (!c.viaExtra && c.targets.size() > 1)) {
+                        still.add(s);
+                    } else {
+                        closed.add(s.closedTo(c.targets, c.viaExtra ? "table" : "dataflow"));
+                    }
+                }
+                pending = still;
             }
         }
 
         List<String[]> resolvers = viewResolvers(artifacts);
         for (Site site : closed) {
+            Map<String, JArtifact> matched = new java.util.LinkedHashMap<>();
             String via = site.via;
-            String literal = site.literal;
-            List<JArtifact> matched;
-            if (!"view-name".equals(via)) {
-                matched = matchPath(literal, artifacts);
-            } else if (literal.startsWith("redirect:") || literal.startsWith("forward:")) {
-                // Spring's special view-name prefixes re-dispatch as path targets (spec D4.1).
-                via = literal.startsWith("redirect:") ? "redirect" : "forward";
-                literal = literal.substring(literal.indexOf(':') + 1);
-                matched = matchPath(literal, artifacts);
-            } else {
-                matched = matchViewName(literal, resolvers, artifacts);
+            for (String literal : site.targets) {
+                List<JArtifact> hits;
+                if (!"view-name".equals(site.via)) {
+                    hits = matchPath(literal, artifacts);
+                } else if (literal.startsWith("redirect:") || literal.startsWith("forward:")) {
+                    // Spring's special view-name prefixes re-dispatch as path targets (spec D4.1).
+                    via = literal.startsWith("redirect:") ? "redirect" : "forward";
+                    hits = matchPath(literal.substring(literal.indexOf(':') + 1), artifacts);
+                } else {
+                    hits = matchViewName(literal, resolvers, artifacts);
+                }
+                for (JArtifact a : hits) {
+                    matched.putIfAbsent(a.getId(), a);
+                }
             }
-            if (matched.size() == 1) {
+            // One literal must name exactly one artifact; a table is a may-dispatch and names many.
+            boolean table = "table".equals(site.closedBy);
+            if (matched.isEmpty() || (!table && matched.size() > 1)) {
+                unresolved.add(unresolved(site, table ? null : site.targets.get(0),
+                        matched.isEmpty() ? "no-such-artifact" : "ambiguous", attempted(site, analysisLevel)));
+                continue;
+            }
+            for (JArtifact a : matched.values()) {
                 JViewDispatchEdge edge = new JViewDispatchEdge();
                 edge.setSrc(site.id);
-                edge.setDst(matched.get(0).getId());
+                edge.setDst(a.getId());
                 edge.setVia(via);
                 // The tier that CLOSED this site, not every tier attempted (same rule as config_uses).
-                edge.setProv(new ArrayList<>(site.closedByDataflow ? DATAFLOW : LITERAL));
+                edge.setProv(new ArrayList<>(List.of(site.closedBy)));
                 dispatches.add(edge);
-            } else {
-                unresolved.add(unresolved(site, site.literal,
-                        matched.isEmpty() ? "no-such-artifact" : "ambiguous", attempted));
             }
         }
         for (Site site : pending) {
-            unresolved.add(unresolved(site, null, "non-literal", attempted));
+            unresolved.add(unresolved(site, null, "non-literal", attempted(site, analysisLevel)));
         }
         dispatches.sort(Comparator.comparing(JViewDispatchEdge::getSrc)
                 .thenComparing(JViewDispatchEdge::getDst));
@@ -282,6 +306,26 @@ public final class ViewDispatches {
                 .thenComparing(JViewDispatchUnresolved::getReason)
                 .thenComparing(u -> u.getTarget() == null ? "" : u.getTarget()));
         return new Result(dispatches, unresolved);
+    }
+
+    private static List<String> one(String literal) {
+        return literal == null ? null : List.of(literal);
+    }
+
+    /**
+     * Every tier that could have been ATTEMPTED on this site: {@code literal} always, {@code table}
+     * only for a call-shaped target (the tier is not applicable to a name or a literal), and
+     * {@code dataflow} from L3 — so an unresolved record says how hard the pass tried.
+     */
+    private static List<String> attempted(Site site, int analysisLevel) {
+        List<String> out = new ArrayList<>(LITERAL);
+        if (StringTables.isCall(site.targetExpr)) {
+            out.add("table");
+        }
+        if (analysisLevel >= 3) {
+            out.addAll(DATAFLOW);
+        }
+        return out;
     }
 
     /**
@@ -361,14 +405,14 @@ public final class ViewDispatches {
     }
 
     private static List<Site> runTier(List<Site> pending, List<Site> closed,
-            Function<Site, String> tier) {
+            Function<Site, List<String>> tier, String name) {
         List<Site> still = new ArrayList<>();
         for (Site site : pending) {
-            String traced = site.varName() == null ? null : tier.apply(site);
-            if (traced == null) {
+            List<String> traced = site.targetExpr == null ? null : tier.apply(site);
+            if (traced == null || traced.isEmpty()) {
                 still.add(site);
             } else {
-                closed.add(site.closedTo(traced));
+                closed.add(site.closedTo(traced, name));
             }
         }
         return still;

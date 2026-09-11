@@ -278,7 +278,10 @@ controller's `return "home"` — and `via` names the mechanism (`forward`, `incl
 `view-name`). View names expand through `spring.mvc.view.*` / `spring.thymeleaf.*` when declared and
 Thymeleaf's defaults otherwise. A target that is a variable, a servlet URL, or a name matching two
 templates is kept in `analysis.json` as `view_dispatches_unresolved` with its reason rather than
-guessed; like config reads, `-a 3` and `-a 4` widen the literal tier over the dataflow graph.
+guessed; like config reads, `-a 3` and `-a 4` widen the literal tier over the dataflow graph. One
+deliberate over-approximation: a target that is a lookup into a static string table (DayTrader's
+`TradeConfig.getPage(N)`) yields one edge per table entry with `prov: ["table"]` — a may-dispatch —
+while `literal` and `dataflow` edges always mean exactly one target.
 
 **Entrypoint coverage.** `:JApplication` carries `entrypoint_frameworks` and
 `entrypoint_report_json`, and every entrypoint node carries `entrypoint_frameworks` naming the
