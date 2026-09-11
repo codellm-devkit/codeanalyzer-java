@@ -25,6 +25,7 @@ import com.ibm.cldk.artifacts.ArtifactDiscovery;
 import com.ibm.cldk.artifacts.ConfigKeys;
 import com.ibm.cldk.artifacts.ConfigUses;
 import com.ibm.cldk.artifacts.DependencyView;
+import com.ibm.cldk.artifacts.ViewDispatches;
 import com.ibm.cldk.entities.JavaCompilationUnit;
 import com.ibm.cldk.javaee.EntrypointScan;
 import com.ibm.cldk.neo4j.BoltConfig;
@@ -635,6 +636,17 @@ public class CodeAnalyzer implements Runnable {
         }
         if (!configReads.unresolved.isEmpty()) {
             analysis.getApplication().setConfigReadsUnresolved(configReads.unresolved);
+        }
+
+        // View dispatches (#259) join dispatch sites to the artifact layer's view templates -- the
+        // same shape as config reads, at every level, with the dataflow tiers widening from -a 3.
+        ViewDispatches.Result views = ViewDispatches.detect(application, modules, artifacts,
+                analysisLevel, analysis.getApplication().getCallGraph());
+        if (!views.dispatches.isEmpty()) {
+            analysis.getApplication().setViewDispatches(views.dispatches);
+        }
+        if (!views.unresolved.isEmpty()) {
+            analysis.getApplication().setViewDispatchesUnresolved(views.unresolved);
         }
 
         if ("neo4j".equalsIgnoreCase(emit)) {

@@ -138,6 +138,10 @@
         "config_reads_unresolved": {
           "type": "array", "items": { "$ref": "#/$defs/configRead" }
         },
+        "view_dispatches": { "type": "array", "items": { "$ref": "#/$defs/viewDispatchEdge" } },
+        "view_dispatches_unresolved": {
+          "type": "array", "items": { "$ref": "#/$defs/viewDispatchUnresolved" }
+        },
         "entrypoint_report": { "$ref": "#/$defs/entrypointReport" }
       }
     },
@@ -152,6 +156,32 @@
           "description": "A body-node ordinal id, field id, callable id, or type id. Wider than codeanalyzer-python's body-node-only source: Java's dominant config idiom is an annotation, which has no call site to anchor on."
         },
         "dst": { "$ref": "#/$defs/artifactCanId" },
+        "prov": { "$ref": "#/$defs/stringList" }
+      }
+    },
+
+    "viewDispatchEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["src", "dst", "via", "prov"],
+      "properties": {
+        "src": { "type": "string", "description": "The dispatching body node's ordinal id: a forward/include/sendRedirect call, a ModelAndView construction or setViewName, or a controller's return." },
+        "dst": { "$ref": "#/$defs/artifactCanId" },
+        "via": { "enum": ["forward", "include", "redirect", "view-name", "navigation"] },
+        "prov": { "$ref": "#/$defs/stringList" }
+      }
+    },
+
+    "viewDispatchUnresolved": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["site", "callee", "via", "reason", "prov"],
+      "properties": {
+        "site": { "type": "string" },
+        "callee": { "type": "string", "description": "The @external can-id of the dispatching callee, or the enclosing callable's id for a return site." },
+        "target": { "type": "string" },
+        "via": { "enum": ["forward", "include", "redirect", "view-name", "navigation"] },
+        "reason": { "enum": ["non-literal", "no-such-artifact", "ambiguous"] },
         "prov": { "$ref": "#/$defs/stringList" }
       }
     },

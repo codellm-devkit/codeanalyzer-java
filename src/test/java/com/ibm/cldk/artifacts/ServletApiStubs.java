@@ -8,11 +8,11 @@ import java.nio.file.Path;
  * The slice of the servlet API the view-dispatch tests need, written as fixture source so receiver
  * types resolve without a jar on the classpath.
  */
-final class ServletApiStubs {
+public final class ServletApiStubs {
 
     private ServletApiStubs() {}
 
-    static void write(Path root) throws Exception {
+    public static void write(Path root) throws Exception {
         write(root, "src/main/java/javax/servlet/RequestDispatcher.java",
                 "package javax.servlet;\npublic interface RequestDispatcher {\n"
                         + "  void forward(ServletRequest q, ServletResponse s);\n"
@@ -37,7 +37,7 @@ final class ServletApiStubs {
                         + "  public javax.servlet.ServletContext getServletContext() { return null; }\n}\n");
     }
 
-    static void write(Path root, String rel, String text) throws Exception {
+    public static void write(Path root, String rel, String text) throws Exception {
         Path f = root.resolve(rel);
         Files.createDirectories(f.getParent());
         Files.writeString(f, text, StandardCharsets.UTF_8);

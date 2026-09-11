@@ -2,8 +2,14 @@ package com.ibm.cldk.artifacts;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.ibm.cldk.neo4j.GraphRows;
+import com.ibm.cldk.neo4j.GraphRows.EdgeRow;
+import com.ibm.cldk.neo4j.V2GraphProjector;
+import com.ibm.cldk.schema.Analysis;
 import com.ibm.cldk.schema.CanId;
+import com.ibm.cldk.schema.JApplication;
 import com.ibm.cldk.schema.JArtifact;
 import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.schema.JCallable;
@@ -11,11 +17,14 @@ import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.schema.JType;
 import com.ibm.cldk.schema.JViewDispatchEdge;
 import com.ibm.cldk.schema.JViewDispatchUnresolved;
+import com.ibm.cldk.schema.V2Emitter;
 import com.ibm.cldk.syntactic_analysis.L1Extractor;
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -40,6 +49,7 @@ class ViewDispatchesTest {
 
     private static ViewDispatches.Result result;
     private static Map<String, JModule> modules;
+    private static GraphRows rows;
 
     static void write(String rel, String text) throws Exception {
         ServletApiStubs.write(root, rel, text);
@@ -74,6 +84,13 @@ class ViewDispatchesTest {
         modules = L1Extractor.extractAll(root, APP, null, new LinkedHashMap<>(), 1, 3, "ast");
         Map<String, JArtifact> artifacts = ArtifactDiscovery.discover(root, APP, true, 262144);
         result = ViewDispatches.detect(APP, modules, artifacts);
+
+        Analysis analysis = V2Emitter.emit(APP, 1, modules, "test", null, null, null, null,
+                artifacts, null);
+        JApplication app = analysis.getApplication();
+        app.setViewDispatches(result.dispatches);
+        app.setViewDispatchesUnresolved(result.unresolved);
+        rows = V2GraphProjector.project(analysis, APP);
     }
 
     /** The ordinal id of the {@code n}-th call to {@code method} inside {@code callable}, in source order. */
@@ -153,6 +170,28 @@ class ViewDispatchesTest {
     void nothingElseIsRecorded() {
         assertEquals(3, result.dispatches.size());
         assertEquals(3, result.unresolved.size());
+    }
+
+    // ---- projection ----------------------------------------------------------------------------
+
+    @Test
+    void everyResolvedDispatchIsProjectedWithItsMechanismAndNothingElseIs() {
+        List<EdgeRow> projected = rows.edges.stream()
+                .filter(e -> e.type.equals("J_DISPATCHES_TO")).collect(Collectors.toList());
+        assertEquals(result.dispatches.size(), projected.size(),
+                "every analysis.json view_dispatch must reach the graph, and vice versa");
+        Set<String> nodeIds = rows.nodes.stream().map(n -> n.value).collect(Collectors.toSet());
+        Set<String> expected = result.dispatches.stream()
+                .map(d -> d.getSrc() + " " + d.getVia() + " " + d.getProv() + " " + d.getDst())
+                .collect(Collectors.toSet());
+        Set<String> got = new HashSet<>();
+        for (EdgeRow e : projected) {
+            assertTrue(nodeIds.contains(e.from.value), "dangling src: " + e.from.value);
+            assertTrue(nodeIds.contains(e.to.value), "dangling dst: " + e.to.value);
+            assertEquals("Artifact", e.to.label);
+            got.add(e.from.value + " " + e.props.get("via") + " " + e.props.get("prov") + " " + e.to.value);
+        }
+        assertEquals(expected, got);
     }
 
     private static JViewDispatchUnresolved unresolved(String site) {

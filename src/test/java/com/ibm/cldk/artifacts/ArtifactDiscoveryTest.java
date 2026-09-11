@@ -334,4 +334,29 @@ class ArtifactDiscoveryTest {
         assertEquals("xml", a.getFormat());
         assertEquals(List.of("tool-config"), a.getRoles());
     }
+
+    @Test
+    void discover_viewTemplatesOfPlantsByWebSphereAreExactlyItsJspAndFacelets() throws IOException {
+        Path app = Path.of("src/test/resources/test-applications/plantsbywebsphere");
+        Map<String, JArtifact> artifacts = ArtifactDiscovery.discover(app, "pbw", false, 262144);
+
+        java.util.Set<String> views = new java.util.TreeSet<>();
+        for (JArtifact a : artifacts.values()) {
+            if (a.getRoles().contains("view-template")) {
+                views.add(a.getPath());
+            }
+        }
+        // Hand-listed: `find . -name '*.jsp' -o -name '*.xhtml'`. No .html (its pages are static),
+        // no .java, nothing under resources/.
+        assertEquals(new java.util.TreeSet<>(List.of(
+                "src/main/webapp/WEB-INF/PlantTemplate.xhtml", "src/main/webapp/account.xhtml",
+                "src/main/webapp/backorderadmin.jsp", "src/main/webapp/cart.xhtml",
+                "src/main/webapp/checkout_final.xhtml", "src/main/webapp/error.jsp",
+                "src/main/webapp/help.xhtml", "src/main/webapp/login.xhtml",
+                "src/main/webapp/orderdone.xhtml", "src/main/webapp/orderinfo.xhtml",
+                "src/main/webapp/product.xhtml", "src/main/webapp/promo.xhtml",
+                "src/main/webapp/register.xhtml", "src/main/webapp/shopping.xhtml",
+                "src/main/webapp/supplierconfig.jsp", "src/main/webapp/viewExpired.xhtml")), views);
+        assertEquals(List.of("unknown"), artifacts.get("src/main/webapp/index.html").getRoles());
+    }
 }
