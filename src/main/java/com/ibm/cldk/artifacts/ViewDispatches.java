@@ -5,6 +5,7 @@ import com.ibm.cldk.schema.JArtifact;
 import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.schema.JCallEdge;
 import com.ibm.cldk.schema.JCallable;
+import com.ibm.cldk.schema.JConfigKey;
 import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.schema.JType;
 import com.ibm.cldk.schema.JViewDispatchEdge;
@@ -41,6 +42,12 @@ public final class ViewDispatches {
             "javax.servlet.RequestDispatcher", "jakarta.servlet.RequestDispatcher");
     private static final Set<String> RESPONSE_TYPES = Set.of(
             "javax.servlet.http.HttpServletResponse", "jakarta.servlet.http.HttpServletResponse");
+    private static final String MODEL_AND_VIEW = "org.springframework.web.servlet.ModelAndView";
+    private static final String STRING = "java.lang.String";
+
+    /** Thymeleaf's own defaults, applied when the application declares no resolver keys. */
+    private static final String THYMELEAF_PREFIX = "classpath:/templates/";
+    private static final String THYMELEAF_SUFFIX = ".html";
 
     public static final class Result {
         public final List<JViewDispatchEdge> dispatches;
@@ -120,9 +127,13 @@ public final class ViewDispatches {
             return;
         }
         for (JType type : types.values()) {
+            boolean springType = type.getEntrypointFrameworks().contains("spring");
             for (JCallable callable : type.getCallables().values()) {
+                // The view-name gate (spec D4): only a Spring entrypoint's `return "x"` is a view
+                // name, so `return "home"` in ordinary code never matches a template named home.
+                boolean viewNames = springType || callable.getEntrypointFrameworks().contains("spring");
                 for (Map.Entry<String, JBodyNode> e : callable.getBody().entrySet()) {
-                    Site site = siteOf(appName, callable.getId(), e.getKey(), e.getValue());
+                    Site site = siteOf(appName, callable, e.getKey(), e.getValue(), viewNames);
                     if (site != null) {
                         sites.add(site);
                     }
@@ -133,22 +144,46 @@ public final class ViewDispatches {
         }
     }
 
-    private static Site siteOf(String appName, String callableId, String localId, JBodyNode node) {
-        if (!"call".equals(node.getKind()) || node.getMethodName() == null) {
+    private static Site siteOf(String appName, JCallable callable, String localId, JBodyNode node,
+            boolean viewNames) {
+        String callableId = callable.getId();
+        List<String> args = node.getArgumentExpr();
+        String arg0 = args != null && !args.isEmpty() ? args.get(0) : null;
+        if ("return".equals(node.getKind())) {
+            // A String-returning controller method's return IS the view name. A ModelAndView-returning
+            // one is anchored on the construction / setViewName site instead, which carries the name.
+            if (!viewNames || arg0 == null || !STRING.equals(callable.getReturnType())) {
+                return null;
+            }
+            return new Site(CanId.ordinalId(callableId, localId), callableId, "view-name", arg0,
+                    callableId, localId);
+        }
+        if (!"call".equals(node.getKind())) {
             return null;
         }
-        String method = node.getMethodName();
         String receiver = node.getReceiverType();
+        String method = node.getMethodName();
         String via;
         String target;
-        if (("forward".equals(method) || "include".equals(method))
+        if (node.isConstructorCall() && MODEL_AND_VIEW.equals(receiver)) {
+            if (arg0 == null) {
+                return null; // `new ModelAndView()` names no view; setViewName will
+            }
+            via = "view-name";
+            target = arg0;
+            method = "<init>";
+        } else if (method == null) {
+            return null;
+        } else if ("setViewName".equals(method) && MODEL_AND_VIEW.equals(receiver)) {
+            via = "view-name";
+            target = arg0;
+        } else if (("forward".equals(method) || "include".equals(method))
                 && DISPATCHER_TYPES.contains(receiver)) {
             via = method;
             target = dispatcherArgument(node.getReceiverExpr());
         } else if ("sendRedirect".equals(method) && RESPONSE_TYPES.contains(receiver)) {
             via = "redirect";
-            List<String> args = node.getArgumentExpr();
-            target = args != null && !args.isEmpty() ? args.get(0) : null;
+            target = arg0;
         } else {
             return null;
         }
@@ -210,13 +245,26 @@ public final class ViewDispatches {
             }
         }
 
+        List<String[]> resolvers = viewResolvers(artifacts);
         for (Site site : closed) {
-            List<JArtifact> matched = matchPath(site.literal, artifacts);
+            String via = site.via;
+            String literal = site.literal;
+            List<JArtifact> matched;
+            if (!"view-name".equals(via)) {
+                matched = matchPath(literal, artifacts);
+            } else if (literal.startsWith("redirect:") || literal.startsWith("forward:")) {
+                // Spring's special view-name prefixes re-dispatch as path targets (spec D4.1).
+                via = literal.startsWith("redirect:") ? "redirect" : "forward";
+                literal = literal.substring(literal.indexOf(':') + 1);
+                matched = matchPath(literal, artifacts);
+            } else {
+                matched = matchViewName(literal, resolvers, artifacts);
+            }
             if (matched.size() == 1) {
                 JViewDispatchEdge edge = new JViewDispatchEdge();
                 edge.setSrc(site.id);
                 edge.setDst(matched.get(0).getId());
-                edge.setVia(site.via);
+                edge.setVia(via);
                 // The tier that CLOSED this site, not every tier attempted (same rule as config_uses).
                 edge.setProv(new ArrayList<>(site.closedByDataflow ? DATAFLOW : LITERAL));
                 dispatches.add(edge);
@@ -265,6 +313,51 @@ public final class ViewDispatches {
             }
         }
         return out;
+    }
+
+    /**
+     * The {@code (prefix, suffix)} pairs a view name is expanded through (spec D4.2): the declared
+     * {@code spring.mvc.view.*} pair when either key is a literal, and the {@code spring.thymeleaf.*}
+     * pair — declared, or Thymeleaf's defaults when not. A key whose value is a {@code ${...}}
+     * placeholder is not a literal and contributes nothing; the pass does not guess what it binds to.
+     */
+    private static List<String[]> viewResolvers(Map<String, JArtifact> artifacts) {
+        Map<String, String> keys = new java.util.HashMap<>();
+        if (artifacts != null) {
+            for (JArtifact a : artifacts.values()) {
+                for (JConfigKey k : a.getConfigKeys()) {
+                    if (k.getValue() != null && !k.getValue().contains("${")) {
+                        keys.putIfAbsent(k.getKey(), k.getValue());
+                    }
+                }
+            }
+        }
+        List<String[]> out = new ArrayList<>();
+        if (keys.containsKey("spring.mvc.view.prefix") || keys.containsKey("spring.mvc.view.suffix")) {
+            out.add(new String[] {keys.getOrDefault("spring.mvc.view.prefix", ""),
+                    keys.getOrDefault("spring.mvc.view.suffix", "")});
+        }
+        out.add(new String[] {keys.getOrDefault("spring.thymeleaf.prefix", THYMELEAF_PREFIX),
+                keys.getOrDefault("spring.thymeleaf.suffix", THYMELEAF_SUFFIX)});
+        return out;
+    }
+
+    /** Every artifact any resolver expands {@code name} to; more than one is ambiguous, none is absent. */
+    private static List<JArtifact> matchViewName(String name, List<String[]> resolvers,
+            Map<String, JArtifact> artifacts) {
+        Map<String, JArtifact> out = new java.util.LinkedHashMap<>();
+        for (String[] r : resolvers) {
+            String prefix = r[0];
+            for (String scheme : List.of("classpath:", "file:")) {
+                if (prefix.startsWith(scheme)) {
+                    prefix = prefix.substring(scheme.length());
+                }
+            }
+            for (JArtifact a : matchPath(prefix + name + r[1], artifacts)) {
+                out.putIfAbsent(a.getId(), a);
+            }
+        }
+        return new ArrayList<>(out.values());
     }
 
     private static List<Site> runTier(List<Site> pending, List<Site> closed,
