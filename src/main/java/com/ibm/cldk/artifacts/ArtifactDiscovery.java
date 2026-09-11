@@ -70,8 +70,20 @@ public final class ArtifactDiscovery {
             new Rule("bootstrap*.yml", "yaml", List.of("tool-config")),
             new Rule("logback*.xml", "xml", List.of("tool-config")),
             new Rule("web.xml", "xml", List.of("tool-config")),
+            new Rule("faces-config.xml", "xml", List.of("tool-config")),
             new Rule("persistence.xml", "xml", List.of("tool-config")),
             new Rule("beans.xml", "xml", List.of("tool-config")),
+            // View templates (#259, spec 2026-09-11 D1). A bare *.html anywhere else stays `unknown`:
+            // a static page and a Thymeleaf template are not distinguishable by name, and `*`
+            // crosses '/' here, so `*/templates/*.html` reaches a nested templates/admin/x.html.
+            new Rule("*.jsp", "jsp", List.of("view-template")),
+            new Rule("*.jspx", "jsp", List.of("view-template")),
+            new Rule("*.jspf", "jsp", List.of("view-template")),
+            new Rule("*.tag", "jsp", List.of("view-template")),
+            new Rule("*.tagx", "jsp", List.of("view-template")),
+            new Rule("*.xhtml", "xhtml", List.of("view-template")),
+            new Rule("*/templates/*.html", "html", List.of("view-template")),
+            new Rule("*/WEB-INF/*.html", "html", List.of("view-template")),
             new Rule("*.tf", "text", List.of("iac")),
             new Rule(".github/workflows/*.yml", "yaml", List.of("ci")),
             new Rule(".github/workflows/*.yaml", "yaml", List.of("ci")),

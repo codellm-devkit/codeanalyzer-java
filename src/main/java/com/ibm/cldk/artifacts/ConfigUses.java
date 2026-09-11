@@ -61,7 +61,7 @@ public final class ConfigUses {
     private static final List<String> LITERAL_AND_DATAFLOW = List.of("literal", "dataflow");
 
     /** A bare Java identifier — the only key-argument shape a dataflow tier can trace. */
-    private static final Pattern IDENTIFIER = Pattern.compile("^[A-Za-z_$][A-Za-z0-9_$]*$");
+    private static final Pattern IDENTIFIER = Literals.IDENTIFIER;
 
     /**
      * A call-site detector. {@code namespaces} is a <em>preference order</em>, not a filter: the
@@ -297,7 +297,7 @@ public final class ConfigUses {
             }
             List<String> args = node.getArgumentExpr();
             String arg = args != null && args.size() > rule.keyArg ? args.get(rule.keyArg) : null;
-            String literal = stringLiteral(arg);
+            String literal = Literals.stringLiteral(arg);
             // The bare name a dataflow tier can trace. Only a plain identifier qualifies: a field
             // access or any compound expression has no single local for the DDG to close over.
             String keyName = literal == null && arg != null && IDENTIFIER.matcher(arg).matches()
@@ -492,11 +492,11 @@ public final class ConfigUses {
         for (String name : names) {
             for (String arg : args) {
                 if (arg.startsWith(name + "=")) {
-                    return stringLiteral(arg.substring(name.length() + 1));
+                    return Literals.stringLiteral(arg.substring(name.length() + 1));
                 }
             }
         }
-        return args.size() == 1 && args.get(0).indexOf('=') < 0 ? stringLiteral(args.get(0)) : null;
+        return args.size() == 1 && args.get(0).indexOf('=') < 0 ? Literals.stringLiteral(args.get(0)) : null;
     }
 
     // ----------------------------------------------------------------------------------------
@@ -597,7 +597,7 @@ public final class ConfigUses {
                 if (decl.getVariables().size() != 1) {
                     return null;
                 }
-                return literalOf(decl.getVariable(0).getInitializer().orElse(null));
+                return Literals.literalOf(decl.getVariable(0).getInitializer().orElse(null));
             }
             if (expr.isAssignExpr()) {
                 com.github.javaparser.ast.expr.AssignExpr assign = expr.asAssignExpr();
@@ -605,7 +605,7 @@ public final class ConfigUses {
                         || !assign.getTarget().isNameExpr()) {
                     return null;
                 }
-                return literalOf(assign.getValue());
+                return Literals.literalOf(assign.getValue());
             }
             return null;
         }
@@ -717,7 +717,7 @@ public final class ConfigUses {
                 return null;
             }
             String arg = args.get(paramIndex);
-            String direct = stringLiteral(arg);
+            String direct = Literals.stringLiteral(arg);
             if (direct != null) {
                 return direct;
             }
@@ -783,51 +783,6 @@ public final class ConfigUses {
         return new String(raw, bytes[0], bytes[1] - bytes[0], StandardCharsets.UTF_8);
     }
 
-    private static String literalOf(com.github.javaparser.ast.expr.Expression expr) {
-        return expr != null && expr.isStringLiteralExpr()
-                ? unescape(expr.asStringLiteralExpr().getValue())
-                : null;
-    }
-
-    /** Decode a Java string-literal expression; {@code null} when the expression is not one. */
-    private static String stringLiteral(String expr) {
-        if (expr == null || expr.length() < 2 || expr.charAt(0) != '"'
-                || expr.charAt(expr.length() - 1) != '"') {
-            return null;
-        }
-        return unescape(expr.substring(1, expr.length() - 1), true);
-    }
-
-    /** Decode Java escapes in a literal's body; JavaParser hands back the raw escaped text. */
-    private static String unescape(String body) {
-        return unescape(body, false);
-    }
-
-    private static String unescape(String body, boolean rejectInteriorQuote) {
-        StringBuilder out = new StringBuilder(body.length());
-        for (int i = 0; i < body.length(); i++) {
-            char c = body.charAt(i);
-            if (c == '"' && rejectInteriorQuote) {
-                // An UNESCAPED interior quote means this is not one literal — a concatenation
-                // ("a" + "b") arrives here as a single expression — so it belongs in the
-                // non-literal bucket rather than being silently truncated to its first half.
-                return null;
-            }
-            if (c == '\\' && i + 1 < body.length()) {
-                out.append(body.charAt(++i));
-            } else {
-                out.append(c);
-            }
-        }
-        return out.toString();
-    }
-
-    /**
-     * The {@code @external} ghost for an annotation-driven read. An annotation is not literally a
-     * callee, but {@code @Value} injection <em>is</em> a read and the ghost names what performed it,
-     * so every unresolved read projects the same {@code JApplication → JExternal} shape as
-     * codeanalyzer-python's rather than some reads carrying no endpoint at all.
-     */
     private static String ghost(String appName, String annotationType) {
         return CanId.externalId(appName, annotationType, "value()");
     }

@@ -281,4 +281,57 @@ class ArtifactDiscoveryTest {
         assertNotNull(other);
         assertEquals(List.of("unknown"), other.getRoles(), "a plain *.yml outside k8s/ falls to the generic rule");
     }
+
+    // ---- view templates (#259) --------------------------------------------------------------
+
+    private static JArtifact discoverOne(Path tmp, String relPath, String text) throws IOException {
+        Path f = tmp.resolve(relPath);
+        Files.createDirectories(f.getParent());
+        Files.writeString(f, text, StandardCharsets.UTF_8);
+        return ArtifactDiscovery.discover(tmp, "app", true, 262144).get(relPath);
+    }
+
+    @Test
+    void discover_classifiesJspFamilyAsViewTemplates(@TempDir Path tmp) throws IOException {
+        for (String rel : List.of("src/main/webapp/a.jsp", "src/main/webapp/b.jspx",
+                "src/main/webapp/WEB-INF/c.jspf", "src/main/webapp/WEB-INF/tags/d.tag",
+                "src/main/webapp/WEB-INF/tags/e.tagx")) {
+            JArtifact a = discoverOne(tmp, rel, "<%= 1 %>");
+            assertEquals("jsp", a.getFormat(), rel);
+            assertEquals(List.of("view-template"), a.getRoles(), rel);
+        }
+    }
+
+    @Test
+    void discover_classifiesFaceletsAsViewTemplates(@TempDir Path tmp) throws IOException {
+        JArtifact a = discoverOne(tmp, "src/main/webapp/login.xhtml", "<html/>");
+        assertEquals("xhtml", a.getFormat());
+        assertEquals(List.of("view-template"), a.getRoles());
+    }
+
+    @Test
+    void discover_classifiesHtmlUnderTemplatesOrWebInfAsViewTemplates(@TempDir Path tmp)
+            throws IOException {
+        JArtifact nested = discoverOne(tmp, "src/main/resources/templates/admin/users.html", "<html/>");
+        assertEquals("html", nested.getFormat());
+        assertEquals(List.of("view-template"), nested.getRoles());
+        JArtifact webInf = discoverOne(tmp, "src/main/webapp/WEB-INF/views/home.html", "<html/>");
+        assertEquals("html", webInf.getFormat());
+        assertEquals(List.of("view-template"), webInf.getRoles());
+    }
+
+    @Test
+    void discover_leavesBareHtmlElsewhereUnknown(@TempDir Path tmp) throws IOException {
+        // A static page and a Thymeleaf template are not distinguishable by name (spec D1).
+        JArtifact a = discoverOne(tmp, "src/main/webapp/index.html", "<html/>");
+        assertEquals("text", a.getFormat());
+        assertEquals(List.of("unknown"), a.getRoles());
+    }
+
+    @Test
+    void discover_classifiesFacesConfigAsToolConfig(@TempDir Path tmp) throws IOException {
+        JArtifact a = discoverOne(tmp, "src/main/webapp/WEB-INF/faces-config.xml", "<faces-config/>");
+        assertEquals("xml", a.getFormat());
+        assertEquals(List.of("tool-config"), a.getRoles());
+    }
 }

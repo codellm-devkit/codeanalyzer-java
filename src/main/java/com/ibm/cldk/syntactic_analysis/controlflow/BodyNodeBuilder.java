@@ -14,6 +14,7 @@ import com.github.javaparser.ast.stmt.SwitchStmt;
 import com.github.javaparser.ast.stmt.TryStmt;
 import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.syntactic_analysis.L1BuildContext;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -112,6 +113,11 @@ public final class BodyNodeBuilder {
         }
         if (s.isReturnStmt()) {
             ensure(g, s, "return", ctx);
+            // The returned expression's source (#259): the one fact that lets a literal tier see
+            // `return "home"` in a controller. A bare `return` keeps the empty list.
+            s.asReturnStmt().getExpression().ifPresent(e ->
+                    g.ensureNode(nodeIdFor(s), "return", ctx.spanOf(s))
+                            .setArgumentExpr(List.of(e.toString())));
             return;
         }
         // break, continue, throw, expression statements, empty statements, etc.
