@@ -776,12 +776,19 @@ class CodeAnalyzerV2CliTest {
 
         assertEquals(0, run("-i", root.toString(), "-o", out.toString(), "--emit", "neo4j", "--no-build"));
         String script = Files.readString(out.resolve("graph.cypher"));
-        assertTrue(script.contains("J_DISPATCHES_TO"), "the resolved dispatch must be projected");
-        assertEquals(1, script.split("J_DISPATCHES_TO", -1).length - 1 - countIn(script, "J_DISPATCHES_TO {"),
-                "exactly one J_DISPATCHES_TO statement: the unresolved dispatch is JSON-only");
-    }
-
-    private static int countIn(String s, String needle) {
-        return s.split(java.util.regex.Pattern.quote(needle), -1).length - 1;
+        // Rows are batched: one UNWIND statement per relationship type, one row per edge. Count the
+        // rows of the J_DISPATCHES_TO batch, so the unresolved dispatch being JSON-only is checked
+        // against the graph rather than against the number of statements.
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("UNWIND \\[\\n(.*?)\\n\\] AS row\\n(.*?);", java.util.regex.Pattern.DOTALL)
+                .matcher(script);
+        int rows = -1;
+        while (m.find()) {
+            if (m.group(2).contains("J_DISPATCHES_TO")) {
+                rows = (int) m.group(1).lines().filter(l -> l.trim().startsWith("{")).count();
+            }
+        }
+        assertEquals(1, rows, "one J_DISPATCHES_TO row: the resolved forward, and not the unresolved one");
+        assertTrue(script.contains("via: 'forward'"), "the row carries its mechanism");
     }
 }
