@@ -476,6 +476,21 @@ is one edge type with `via` (`forward | include | redirect | view-name | navigat
 mechanism; `navigation` is reserved for JSF and emits nothing until a JSF finder exists. Unresolved dispatches
 have no target node and stay JSON-only (`view_dispatches_unresolved`).
 
+### D33 — May-dispatch over a static string table: `J_DISPATCHES_TO` with `prov: ["table"]`
+Spec § 4.5 (codeanalyzer-java#261). Released 3.3.0 on DayTrader resolved 3 of 23 dispatches; the rest go
+through `TradeConfig.getPage(N)` = `return webUI[webInterface][pageNumber]`, a static `String[][]` of page
+paths indexed by a runtime-selected interface, which no single-literal tier can or should close. The table
+tier (`StringTables`) closes exactly that shape — a call `T.m(…)` whose every `return` is an array access
+rooted at a static `String[]`/`String[][]` field of `T` with a literal array initializer — on **every**
+literal of the initializer, one edge per matching artifact, `prov: ["table"]`. The same closure applies
+per caller when the interprocedural tier binds a parameter (`DataflowTiers.interprocAll`); the union is the
+candidate set and `prov` is `table` when any table contributed. The invariant that makes this honest:
+`literal` and `dataflow` edges still mean exactly one target (literal callers that disagree still refuse),
+and only a `table` edge is many-per-site. Resolution is by simple type name + method name inside the tree,
+so the tier runs at `-a 1`; same-named types or same-arity overloads make it give up. `prov` on
+`view_dispatches` / `J_DISPATCHES_TO` is therefore `literal | table | dataflow`; `table` is listed as
+attempted only for a call-shaped target.
+
 ### Graph contract version, on both of the above
 `V2SchemaCatalog.SCHEMA_VERSION` does **not** move. Both additions are additive over labels the held
 `2.0.0` baseline already reserves, and a re-baseline is a coordinated cross-analyzer decision

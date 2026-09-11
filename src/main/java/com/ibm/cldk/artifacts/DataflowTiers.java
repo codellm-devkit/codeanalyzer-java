@@ -14,6 +14,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * The two dataflow tiers the config-use and view-dispatch passes share: closing a bare local over
@@ -73,6 +74,59 @@ final class DataflowTiers {
     /** L4: the one literal every call site binds to the parameter named {@code var}. */
     static String interproc(Owner owner, String var, CallSiteIndex sites, Map<String, Owner> owners) {
         return InterprocTier.close(owner, var, sites, owners);
+    }
+
+    /** What {@link #interprocAll} closed on: the union of every caller's targets, and how. */
+    static final class Closure {
+        final List<String> targets;
+        /** True when at least one caller closed through {@code extra} rather than a literal. */
+        final boolean viaExtra;
+
+        Closure(List<String> targets, boolean viaExtra) {
+            this.targets = targets;
+            this.viaExtra = viaExtra;
+        }
+    }
+
+    /**
+     * L4, many-valued: as {@link #interproc}, but every caller's argument may close on a
+     * <em>set</em> — a literal, a local traced to one, or whatever {@code extra} makes of the raw
+     * argument text (the view-dispatch table tier, #261). Closes only when every caller closes; the
+     * result is the union, so a caller the tiers cannot read still refuses the whole binding.
+     */
+    static Closure interprocAll(Owner owner, String var, CallSiteIndex sites,
+            Map<String, Owner> owners, Function<String, List<String>> extra) {
+        if (owner == null) {
+            return null;
+        }
+        JCallable c = owner.callable;
+        int paramIndex = InterprocTier.parameterIndex(c, var);
+        if (paramIndex < 0 || InterprocTier.locallyRedefined(c, var) || c.isEntrypoint()) {
+            return null;
+        }
+        List<CallSiteIndex.Site> targeting = sites.byCallee.get(c.getId());
+        if (targeting == null || targeting.isEmpty()
+                || sites.unresolvedNames.contains(InterprocTier.simpleName(c))) {
+            return null;
+        }
+        Set<String> union = new LinkedHashSet<>();
+        boolean viaExtra = false;
+        for (CallSiteIndex.Site site : targeting) {
+            String one = InterprocTier.siteLiteral(site, paramIndex, owners);
+            if (one != null) {
+                union.add(one);
+                continue;
+            }
+            List<String> args = site.node.getArgumentExpr();
+            List<String> many = args != null && args.size() > paramIndex
+                    ? extra.apply(args.get(paramIndex)) : null;
+            if (many == null || many.isEmpty()) {
+                return null;
+            }
+            union.addAll(many);
+            viaExtra = true;
+        }
+        return new Closure(new ArrayList<>(union), viaExtra);
     }
 
     // ----------------------------------------------------------------------------------------
@@ -241,18 +295,21 @@ final class DataflowTiers {
 
         private InterprocTier() {}
 
+        static int parameterIndex(JCallable c, String var) {
+            for (int i = 0; i < c.getParameters().size(); i++) {
+                if (var.equals(c.getParameters().get(i).getName())) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
         static String close(Owner owner, String var, CallSiteIndex sites, Map<String, Owner> owners) {
             if (owner == null) {
                 return null;
             }
             JCallable c = owner.callable;
-            int paramIndex = -1;
-            for (int i = 0; i < c.getParameters().size(); i++) {
-                if (var.equals(c.getParameters().get(i).getName())) {
-                    paramIndex = i;
-                    break;
-                }
-            }
+            int paramIndex = parameterIndex(c, var);
             if (paramIndex < 0 || locallyRedefined(c, var)) {
                 return null;
             }
@@ -278,7 +335,7 @@ final class DataflowTiers {
         }
 
         /** The literal a call site passes at {@code paramIndex}, directly or via one caller-side hop. */
-        private static String siteLiteral(CallSiteIndex.Site site, int paramIndex,
+        static String siteLiteral(CallSiteIndex.Site site, int paramIndex,
                 Map<String, Owner> owners) {
             List<String> args = site.node.getArgumentExpr();
             if (args == null || args.size() <= paramIndex) {
@@ -303,7 +360,7 @@ final class DataflowTiers {
          * the synthetic formal binding, which carries no span; a def with a real span means a caller's
          * argument is not provably what the read sees.
          */
-        private static boolean locallyRedefined(JCallable c, String var) {
+        static boolean locallyRedefined(JCallable c, String var) {
             if (c.getDdg() == null) {
                 return false;
             }
@@ -315,7 +372,7 @@ final class DataflowTiers {
             return false;
         }
 
-        private static String simpleName(JCallable c) {
+        static String simpleName(JCallable c) {
             String signature = c.getSignature();
             if (signature == null) {
                 return "";
