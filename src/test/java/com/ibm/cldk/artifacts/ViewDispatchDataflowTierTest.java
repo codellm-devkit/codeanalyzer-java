@@ -110,13 +110,13 @@ class ViewDispatchDataflowTierTest {
         assertEquals(List.of("literal", "dataflow"), u.getProv());
     }
 
-    // The helper takes no servlet-typed parameter on purpose: the Jakarta finder marks any method
-    // with an HttpServletRequest parameter as an entrypoint, and the interprocedural tier rightly
-    // refuses to bind an entrypoint's parameter from a call site (the container binds it).
+    // The helper takes servlet-typed parameters like DayTrader's requestDispatch does: since #263
+    // the Jakarta finder marks only lifecycle methods, so the interprocedural tier binds `page`
+    // from the call site instead of refusing it as container-bound.
     private static final String PARAMETER = HEAD
-            + "  void doGet(HttpServletRequest req, HttpServletResponse res) { show(\"/y.jsp\"); }\n"
-            + "  void show(String page) {\n"
-            + "    getServletContext().getRequestDispatcher(page).forward(null, null);\n"
+            + "  void doGet(HttpServletRequest req, HttpServletResponse res) { show(req, res, \"/y.jsp\"); }\n"
+            + "  void show(HttpServletRequest req, HttpServletResponse res, String page) {\n"
+            + "    req.getRequestDispatcher(page).forward(req, res);\n"
             + "  }\n}\n";
 
     @Test
@@ -136,10 +136,10 @@ class ViewDispatchDataflowTierTest {
     @Test
     void twoCallersWithDifferentPagesStayNonLiteral() throws Exception {
         ViewDispatches.Result r = run(HEAD
-                + "  void a() { show(\"/y.jsp\"); }\n"
-                + "  void b() { show(\"/pages/x.jsp\"); }\n"
-                + "  void show(String page) {\n"
-                + "    getServletContext().getRequestDispatcher(page).forward(null, null);\n"
+                + "  void a(HttpServletRequest req, HttpServletResponse res) { show(req, res, \"/y.jsp\"); }\n"
+                + "  void b(HttpServletRequest req, HttpServletResponse res) { show(req, res, \"/pages/x.jsp\"); }\n"
+                + "  void show(HttpServletRequest req, HttpServletResponse res, String page) {\n"
+                + "    req.getRequestDispatcher(page).forward(req, res);\n"
                 + "  }\n}\n", 4);
         assertTrue(r.dispatches.isEmpty());
         assertEquals("non-literal", only(r).getReason());
