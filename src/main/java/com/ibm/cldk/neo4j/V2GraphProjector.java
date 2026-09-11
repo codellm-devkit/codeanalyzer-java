@@ -40,6 +40,7 @@ import com.ibm.cldk.schema.JRecordComponent;
 import com.ibm.cldk.schema.JType;
 import com.ibm.cldk.schema.JTypeParameter;
 import com.ibm.cldk.schema.JVariableDeclaration;
+import com.ibm.cldk.schema.JViewDispatchEdge;
 import com.ibm.cldk.schema.Span;
 import com.ibm.cldk.schema.V2Json;
 import java.nio.charset.StandardCharsets;
@@ -181,6 +182,7 @@ public final class V2GraphProjector {
         projectArtifacts(b, analysis.getApplication(), app);
         // Strictly after projectArtifacts: J_USES_CONFIG addresses ConfigKey nodes that pass mints.
         projectConfigUses(b, analysis.getApplication(), app);
+        projectViewDispatches(b, analysis.getApplication());
 
         return b.finish();
     }
@@ -723,6 +725,28 @@ public final class V2GraphProjector {
                 b.keyedEdge("J_READS_CONFIG_UNRESOLVED", app, ghost, RowBuilder.prune(p),
                         (r.getKey() == null ? "" : r.getKey()) + "|" + r.getReason());
             }
+        }
+    }
+
+    /**
+     * View dispatches (#259): {@code J_DISPATCHES_TO} from the dispatching body node to the
+     * {@code Artifact} it reaches. Unresolved dispatches are not projected — there is no target
+     * node — and stay in {@code analysis.json} (spec 2026-09-11 § 5).
+     */
+    private static void projectViewDispatches(RowBuilder b, JApplication application) {
+        if (application.getViewDispatches() == null) {
+            return;
+        }
+        for (JViewDispatchEdge e : application.getViewDispatches()) {
+            NodeRef src = b.refTo(e.getSrc());
+            NodeRef dst = b.refTo(e.getDst());
+            if (src == null || dst == null) {
+                continue;
+            }
+            Map<String, Object> p = RowBuilder.props();
+            p.put("via", e.getVia());
+            p.put("prov", e.getProv());
+            b.edge("J_DISPATCHES_TO", src, dst, RowBuilder.prune(p));
         }
     }
 

@@ -270,6 +270,16 @@ not assume it is always a body node. A read that matched no declared key is kept
 that resolves. The literal tier runs at every level; `-a 3` and `-a 4` widen it over the dataflow
 graph (`prov: ["dataflow"]`).
 
+**View dispatches.** JSP, Facelets and Thymeleaf templates are `:Artifact` nodes with
+`roles: ["view-template"]`, and `J_DISPATCHES_TO` says which code reaches one: its source is the
+`:JBodyNode` that hands the request over — a `RequestDispatcher.forward` / `include` or
+`HttpServletResponse.sendRedirect` call, a `ModelAndView` construction or `setViewName`, or a Spring
+controller's `return "home"` — and `via` names the mechanism (`forward`, `include`, `redirect`,
+`view-name`). View names expand through `spring.mvc.view.*` / `spring.thymeleaf.*` when declared and
+Thymeleaf's defaults otherwise. A target that is a variable, a servlet URL, or a name matching two
+templates is kept in `analysis.json` as `view_dispatches_unresolved` with its reason rather than
+guessed; like config reads, `-a 3` and `-a 4` widen the literal tier over the dataflow graph.
+
 **Entrypoint coverage.** `:JApplication` carries `entrypoint_frameworks` and
 `entrypoint_report_json`, and every entrypoint node carries `entrypoint_frameworks` naming the
 framework finders that recognised it. The report is present **even when empty**: the detection pass

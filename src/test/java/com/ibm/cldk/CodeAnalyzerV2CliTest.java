@@ -746,4 +746,49 @@ class CodeAnalyzerV2CliTest {
         assertFalse(app.has("dependencies"), "no manifests means no declared dependencies");
     }
 
+    // ---- view dispatches (#259) ----------------------------------------------------------------
+
+    @Test
+    void viewDispatchesReachBothProjections(@TempDir Path root) throws Exception {
+        com.ibm.cldk.artifacts.ServletApiStubs.write(root);
+        com.ibm.cldk.artifacts.ServletApiStubs.write(root, "src/main/webapp/home.jsp", "<%= 1 %>");
+        com.ibm.cldk.artifacts.ServletApiStubs.write(root, "src/main/java/demo/Front.java",
+                "package demo;\nimport javax.servlet.http.*;\n"
+                        + "public class Front extends HttpServlet {\n"
+                        + "  protected void doGet(HttpServletRequest req, HttpServletResponse res) {\n"
+                        + "    req.getRequestDispatcher(\"/home.jsp\").forward(req, res);\n"
+                        + "    req.getRequestDispatcher(\"/servlet/Other\").forward(req, res);\n"
+                        + "  }\n}\n");
+        Path out = root.resolve("out");
+
+        assertEquals(0, run("-i", root.toString(), "-o", out.toString(), "--no-build"));
+        JsonObject app = JsonParser.parseString(Files.readString(out.resolve("analysis.json")))
+                .getAsJsonObject().getAsJsonObject("application");
+        assertEquals(1, app.getAsJsonArray("view_dispatches").size());
+        JsonObject d = app.getAsJsonArray("view_dispatches").get(0).getAsJsonObject();
+        assertEquals("forward", d.get("via").getAsString());
+        assertTrue(d.get("dst").getAsString().endsWith("/artifact/src/main/webapp/home.jsp"));
+        assertEquals(1, app.getAsJsonArray("view_dispatches_unresolved").size());
+        assertEquals("no-such-artifact", app.getAsJsonArray("view_dispatches_unresolved").get(0)
+                .getAsJsonObject().get("reason").getAsString());
+        JsonObject jsp = app.getAsJsonObject("artifacts").getAsJsonObject("src/main/webapp/home.jsp");
+        assertEquals("view-template", jsp.getAsJsonArray("roles").get(0).getAsString());
+
+        assertEquals(0, run("-i", root.toString(), "-o", out.toString(), "--emit", "neo4j", "--no-build"));
+        String script = Files.readString(out.resolve("graph.cypher"));
+        // Rows are batched: one UNWIND statement per relationship type, one row per edge. Count the
+        // rows of the J_DISPATCHES_TO batch, so the unresolved dispatch being JSON-only is checked
+        // against the graph rather than against the number of statements.
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("UNWIND \\[\\n(.*?)\\n\\] AS row\\n(.*?);", java.util.regex.Pattern.DOTALL)
+                .matcher(script);
+        int rows = -1;
+        while (m.find()) {
+            if (m.group(2).contains("J_DISPATCHES_TO")) {
+                rows = (int) m.group(1).lines().filter(l -> l.trim().startsWith("{")).count();
+            }
+        }
+        assertEquals(1, rows, "one J_DISPATCHES_TO row: the resolved forward, and not the unresolved one");
+        assertTrue(script.contains("via: 'forward'"), "the row carries its mechanism");
+    }
 }

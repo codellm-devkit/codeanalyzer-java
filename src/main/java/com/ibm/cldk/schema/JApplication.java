@@ -61,6 +61,20 @@ public class JApplication {
     private List<JConfigRead> configReadsUnresolved;
 
     /**
+     * Resolved view dispatches (#259) — a {@code forward} / {@code include} / {@code sendRedirect}
+     * call or a controller's view name, and the {@link JArtifact} it reaches. Sorted by
+     * {@code (src, dst)}. {@code null} (absent) when nothing was detected.
+     */
+    private List<JViewDispatchEdge> viewDispatches;
+
+    /**
+     * Detected dispatches that closed on no artifact — a variable target, a servlet URL, or a view
+     * name matching two templates. Sorted by {@code (site, reason, target)}. {@code null} (absent)
+     * when there are none.
+     */
+    private List<JViewDispatchUnresolved> viewDispatchesUnresolved;
+
+    /**
      * Coverage and failure record for the entrypoint pass. Unlike every other overlay on this node,
      * it is emitted <b>always, even when empty</b>: the pass under-approximates by design, so an
      * absent report and an empty one must not read the same.

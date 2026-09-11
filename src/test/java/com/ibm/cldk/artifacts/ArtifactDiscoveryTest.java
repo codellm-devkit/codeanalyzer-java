@@ -281,4 +281,82 @@ class ArtifactDiscoveryTest {
         assertNotNull(other);
         assertEquals(List.of("unknown"), other.getRoles(), "a plain *.yml outside k8s/ falls to the generic rule");
     }
+
+    // ---- view templates (#259) --------------------------------------------------------------
+
+    private static JArtifact discoverOne(Path tmp, String relPath, String text) throws IOException {
+        Path f = tmp.resolve(relPath);
+        Files.createDirectories(f.getParent());
+        Files.writeString(f, text, StandardCharsets.UTF_8);
+        return ArtifactDiscovery.discover(tmp, "app", true, 262144).get(relPath);
+    }
+
+    @Test
+    void discover_classifiesJspFamilyAsViewTemplates(@TempDir Path tmp) throws IOException {
+        for (String rel : List.of("src/main/webapp/a.jsp", "src/main/webapp/b.jspx",
+                "src/main/webapp/WEB-INF/c.jspf", "src/main/webapp/WEB-INF/tags/d.tag",
+                "src/main/webapp/WEB-INF/tags/e.tagx")) {
+            JArtifact a = discoverOne(tmp, rel, "<%= 1 %>");
+            assertEquals("jsp", a.getFormat(), rel);
+            assertEquals(List.of("view-template"), a.getRoles(), rel);
+        }
+    }
+
+    @Test
+    void discover_classifiesFaceletsAsViewTemplates(@TempDir Path tmp) throws IOException {
+        JArtifact a = discoverOne(tmp, "src/main/webapp/login.xhtml", "<html/>");
+        assertEquals("xhtml", a.getFormat());
+        assertEquals(List.of("view-template"), a.getRoles());
+    }
+
+    @Test
+    void discover_classifiesHtmlUnderTemplatesOrWebInfAsViewTemplates(@TempDir Path tmp)
+            throws IOException {
+        JArtifact nested = discoverOne(tmp, "src/main/resources/templates/admin/users.html", "<html/>");
+        assertEquals("html", nested.getFormat());
+        assertEquals(List.of("view-template"), nested.getRoles());
+        JArtifact webInf = discoverOne(tmp, "src/main/webapp/WEB-INF/views/home.html", "<html/>");
+        assertEquals("html", webInf.getFormat());
+        assertEquals(List.of("view-template"), webInf.getRoles());
+    }
+
+    @Test
+    void discover_leavesBareHtmlElsewhereUnknown(@TempDir Path tmp) throws IOException {
+        // A static page and a Thymeleaf template are not distinguishable by name (spec D1).
+        JArtifact a = discoverOne(tmp, "src/main/webapp/index.html", "<html/>");
+        assertEquals("text", a.getFormat());
+        assertEquals(List.of("unknown"), a.getRoles());
+    }
+
+    @Test
+    void discover_classifiesFacesConfigAsToolConfig(@TempDir Path tmp) throws IOException {
+        JArtifact a = discoverOne(tmp, "src/main/webapp/WEB-INF/faces-config.xml", "<faces-config/>");
+        assertEquals("xml", a.getFormat());
+        assertEquals(List.of("tool-config"), a.getRoles());
+    }
+
+    @Test
+    void discover_viewTemplatesOfPlantsByWebSphereAreExactlyItsJspAndFacelets() throws IOException {
+        Path app = Path.of("src/test/resources/test-applications/plantsbywebsphere");
+        Map<String, JArtifact> artifacts = ArtifactDiscovery.discover(app, "pbw", false, 262144);
+
+        java.util.Set<String> views = new java.util.TreeSet<>();
+        for (JArtifact a : artifacts.values()) {
+            if (a.getRoles().contains("view-template")) {
+                views.add(a.getPath());
+            }
+        }
+        // Hand-listed: `find . -name '*.jsp' -o -name '*.xhtml'`. No .html (its pages are static),
+        // no .java, nothing under resources/.
+        assertEquals(new java.util.TreeSet<>(List.of(
+                "src/main/webapp/WEB-INF/PlantTemplate.xhtml", "src/main/webapp/account.xhtml",
+                "src/main/webapp/backorderadmin.jsp", "src/main/webapp/cart.xhtml",
+                "src/main/webapp/checkout_final.xhtml", "src/main/webapp/error.jsp",
+                "src/main/webapp/help.xhtml", "src/main/webapp/login.xhtml",
+                "src/main/webapp/orderdone.xhtml", "src/main/webapp/orderinfo.xhtml",
+                "src/main/webapp/product.xhtml", "src/main/webapp/promo.xhtml",
+                "src/main/webapp/register.xhtml", "src/main/webapp/shopping.xhtml",
+                "src/main/webapp/supplierconfig.jsp", "src/main/webapp/viewExpired.xhtml")), views);
+        assertEquals(List.of("unknown"), artifacts.get("src/main/webapp/index.html").getRoles());
+    }
 }

@@ -456,6 +456,26 @@ be the same observation. Before this, `:JApplication` carried only `name`/`schem
 `analyzer_name`/`analyzer_version`, and the 2,604 projected `:JEntrypoint` marks came with no record of
 how the pass that found them behaved.
 
+### D32 — View templates are artifacts with a role; `J_DISPATCHES_TO` reaches them from the dispatching body node
+Spec `codellm-devkit/.github` `docs/design/specs/2026-09-11-java-view-templates-and-dispatch.md` (#259).
+`ArtifactDiscovery` classifies the JSP family (`format: jsp`), Facelets (`xhtml`) and Thymeleaf `.html` under
+`templates/` or `WEB-INF/` (`html`) as `roles: ["view-template"]`; a bare `.html` anywhere else stays `unknown`
+because a static page and a template are not distinguishable by name. `faces-config.xml` is `tool-config`.
+`return` body nodes carry the returned expression in `argument_expr` (empty for a bare `return`) — a population
+change to an existing field, and the one fact that lets the literal tier see `return "home"`. The dispatch pass
+mirrors `ConfigUses`: detection by declared receiver type (`RequestDispatcher.forward/include`,
+`HttpServletResponse.sendRedirect`, `ModelAndView` construction / `setViewName`, and a Spring entrypoint's
+String `return`), the literal tier at every level, `DataflowTiers` (hoisted out of `ConfigUses`) widening at
+`-a 3` / `-a 4`, and a target that closes on exactly one artifact or is recorded unresolved as `non-literal` /
+`no-such-artifact` / `ambiguous`. View names expand through `spring.mvc.view.*` when declared and
+`spring.thymeleaf.*` or Thymeleaf's defaults otherwise; `redirect:` / `forward:` prefixes re-dispatch as paths.
+Two consequences stated rather than left implicit: `return` nodes exist only from L3, so a controller's
+return-based view name is invisible at `-a 1` (its `ModelAndView` sites are not); and the servlet / Spring
+types must resolve for the pass to see anything, the same condition config reads live with. `J_DISPATCHES_TO`
+is one edge type with `via` (`forward | include | redirect | view-name | navigation`) rather than one per
+mechanism; `navigation` is reserved for JSF and emits nothing until a JSF finder exists. Unresolved dispatches
+have no target node and stay JSON-only (`view_dispatches_unresolved`).
+
 ### Graph contract version, on both of the above
 `V2SchemaCatalog.SCHEMA_VERSION` does **not** move. Both additions are additive over labels the held
 `2.0.0` baseline already reserves, and a re-baseline is a coordinated cross-analyzer decision

@@ -305,6 +305,15 @@ public final class V2SchemaCatalog {
                 new P().put("key", "string").put("reason", "string").put("prov", "string[]")
                         .put("_k", "string").done()));
 
+        // View dispatches (#259, spec 2026-09-11 D2): the body node that hands the request to a view
+        // -- a forward/include/sendRedirect call, or a controller's return -- and the Artifact it
+        // reaches. `via` carries the mechanism (forward | include | redirect | view-name |
+        // navigation); one edge type rather than one per mechanism because the consumer question
+        // is "which pages can this code reach", and the mechanism is an attribute of the answer.
+        // Unresolved dispatches have no target node and stay in analysis.json.
+        r.add(rel("J_DISPATCHES_TO", Arrays.asList("JBodyNode"), Arrays.asList("Artifact"),
+                new P().put("via", "string").put("prov", "string[]").done()));
+
         return r;
     }
 
