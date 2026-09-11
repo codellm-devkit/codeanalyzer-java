@@ -200,4 +200,24 @@ class ViewDispatchesTest {
                         + result.unresolved.stream().map(JViewDispatchUnresolved::getSite)
                                 .collect(Collectors.toList())));
     }
+
+    // ---- an unbuilt project (#265) ---------------------------------------------------------------
+
+    @Test
+    void anUnresolvableReceiverIsNotADispatchAndDoesNotCrash(@TempDir Path unbuilt) throws Exception {
+        // No servlet stubs on this tree, so every receiver type here is unresolved. The pass must
+        // simply see no site, not throw: Set.of(...).contains(null) is the NPE 3.3.0-3.3.2 shipped.
+        ServletApiStubs.write(unbuilt, "src/main/java/demo/Front.java",
+                "package demo;\n"
+                        + "import javax.servlet.http.*;\n"
+                        + "public class Front extends HttpServlet {\n"
+                        + "  protected void doGet(HttpServletRequest req, HttpServletResponse res) {\n"
+                        + "    req.getRequestDispatcher(\"/x.jsp\").forward(req, res);\n"
+                        + "    res.sendRedirect(\"/y.jsp\");\n"
+                        + "  }\n}\n");
+        ServletApiStubs.write(unbuilt, "src/main/webapp/x.jsp", "<%= 1 %>");
+        Map<String, JModule> mods = L1Extractor.extractAll(unbuilt, APP, null, new LinkedHashMap<>(), 1, 3, "ast");
+        ViewDispatches.Result r = ViewDispatches.detect(APP, mods, ArtifactDiscovery.discover(unbuilt, APP, true, 262144));
+        assertTrue(r.dispatches.isEmpty() && r.unresolved.isEmpty(), "unresolved receivers are not sites");
+    }
 }

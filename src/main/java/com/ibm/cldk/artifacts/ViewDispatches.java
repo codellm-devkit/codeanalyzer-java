@@ -166,6 +166,11 @@ public final class ViewDispatches {
         String method = node.getMethodName();
         String via;
         String target;
+        // An unresolved receiver (an unbuilt project, a missing jar) is null, and Set.of(...) throws
+        // on contains(null): 3.3.0-3.3.2 crashed every such run at every level (#265). Not a site.
+        if (receiver == null) {
+            return null;
+        }
         if (node.isConstructorCall() && MODEL_AND_VIEW.equals(receiver)) {
             if (arg0 == null) {
                 return null; // `new ModelAndView()` names no view; setViewName will
