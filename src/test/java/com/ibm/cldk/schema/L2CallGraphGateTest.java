@@ -45,14 +45,28 @@ class L2CallGraphGateTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private static final String APP_ID = CanId.applicationId(APP);
+
+    /**
+     * The fixture's declared module coordinate — {@code rootProject.name} in its settings.gradle —
+     * which leads the id path. The {@code symbol_table} key stays the plain relative path, so the
+     * two deliberately differ and neither can be derived from the other.
+     *
+     * <p>Here the coordinate and the app name coincide, so the id reads
+     * {@code can://call-graph-test/java/call-graph-test/...}. That is the documented redundancy for
+     * a single-module project analysed at its own root, not a defect: suppressing the segment when
+     * it matches the app name would make ids take two shapes depending on a name coincidence.
+     */
+    private static final String MODULE = "call-graph-test/";
+
     private static final String USER = CanId.childId(
-            CanId.moduleId(APP_ID, "src/main/java/org/example/User.java"), "User");
+            CanId.moduleId(APP_ID, MODULE + "src/main/java/org/example/User.java"), "User");
     private static final String HELLO = USER + "/helloString()";
     private static final String LOG = USER + "/log()";
     private static final String GETNAME = USER + "/getName()";
     private static final String LOGLOG = USER + "/loglog()";
     private static final String GREETER = CanId.childId(
-            CanId.moduleId(APP_ID, "src/main/java/org/example/greeting/Greeter.java"), "Greeter");
+            CanId.moduleId(APP_ID, MODULE + "src/main/java/org/example/greeting/Greeter.java"),
+            "Greeter");
     private static final String GREET = GREETER + "/greet(java.lang.String)";
     private static final String TRIM = CanId.externalId(APP, "java.lang.String", "trim()");
 

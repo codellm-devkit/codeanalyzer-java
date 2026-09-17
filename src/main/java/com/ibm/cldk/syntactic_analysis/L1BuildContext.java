@@ -30,6 +30,20 @@ public final class L1BuildContext {
 
     private final String applicationId;
     private final String fileKey;
+
+    /**
+     * The path segment the {@code can://} id is built from, which is NOT always {@link #fileKey}.
+     *
+     * <p>The key is the real {@code --input}-relative path, because uniqueness is the key's job and a
+     * path is unique by construction. The id path additionally carries the module's declared
+     * coordinate when {@link ModulePrefixes} resolved an unambiguous one
+     * ({@code <artifactId>/<path within that module>}), so an id names the module a file belongs to
+     * rather than where the tree happened to be checked out. The two coincide whenever no coordinate
+     * applies, which is why every convenience constructor here defaults one to the other — but
+     * nothing downstream may assume the key is the tail of the id.
+     */
+    private final String idPath;
+
     private final String source;
 
     /** The requested analysis level; the L3 dataflow pass runs at parse time when this is {@code >= 3}. */
@@ -78,18 +92,26 @@ public final class L1BuildContext {
 
     public L1BuildContext(String applicationId, String fileKey, String source, int analysisLevel,
             int graphFieldDepth, String l3Engine, JEntrypointReport entrypointReport) {
+        this(applicationId, fileKey, fileKey, source, analysisLevel, graphFieldDepth, l3Engine,
+                entrypointReport);
+    }
+
+    public L1BuildContext(String applicationId, String fileKey, String idPath, String source,
+            int analysisLevel, int graphFieldDepth, String l3Engine,
+            JEntrypointReport entrypointReport) {
         this.entrypointReport = entrypointReport != null ? entrypointReport : new JEntrypointReport();
         this.applicationId = applicationId;
         this.fileKey = fileKey;
+        this.idPath = idPath != null ? idPath : fileKey;
         this.source = source;
         this.analysisLevel = analysisLevel;
         this.graphFieldDepth = graphFieldDepth;
         this.l3Engine = l3Engine != null ? l3Engine.toLowerCase(java.util.Locale.ROOT) : "ast";
     }
 
-    /** The {@code can://<app>/java/<file>} id for this module. */
+    /** The {@code can://<app>/java/<idPath>} id for this module. */
     public String moduleId() {
-        return CanId.moduleId(applicationId, fileKey);
+        return CanId.moduleId(applicationId, idPath);
     }
 
     /**

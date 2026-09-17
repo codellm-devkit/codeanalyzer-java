@@ -31,6 +31,7 @@ import com.ibm.cldk.javaee.EntrypointScan;
 import com.ibm.cldk.neo4j.BoltConfig;
 import com.ibm.cldk.neo4j.Neo4jEmitter;
 import com.ibm.cldk.schema.Analysis;
+import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JArtifact;
 import com.ibm.cldk.schema.JDependency;
 import com.ibm.cldk.schema.JEntrypointReport;
@@ -531,7 +532,8 @@ public class CodeAnalyzer implements Runnable {
             }
             // Apply WALA L3 overlays while the dependency jars are still live (PDG/CFG need class files).
             if (wala != null) {
-                L3WalaOverlays.apply(wala, input, modules, graphFieldDepth);
+                L3WalaOverlays.apply(wala, input, modules, graphFieldDepth,
+                        CanId.applicationId(application));
             }
             // L4: the semantic ddg needs a WALA build regardless of --l3-engine, so build it here (or
             // reuse the instance --l3-engine wala already built above) while the jars are still live.
