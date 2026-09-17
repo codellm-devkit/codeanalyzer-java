@@ -151,36 +151,93 @@ public class BuildProject {
     }
 
     public static boolean gradleBuild(String projectPath) {
+        return gradleBuild(projectPath, GRADLE_CMD);
+    }
+
+    /**
+     * Gradle build against an explicit command, so the missing-Gradle path is reachable from a test.
+     *
+     * <p>{@link #mavenBuild} guards on {@link #isMavenInstalled()} before it touches {@code MAVEN_CMD};
+     * this is the Gradle counterpart, and it was missing. On a machine with neither Gradle on {@code
+     * PATH} nor a wrapper the command resolves to null, and dereferencing it raised a
+     * NullPointerException in place of the real cause. That NPE does not surface as a crash either: the
+     * caller catches it and degrades, so the user is told the RTA call graph is unavailable because a
+     * {@code GRADLE_CMD} field they have never heard of was null, and the run still exits 0.
+     */
+    static boolean gradleBuild(String projectPath, String gradleCmd) {
+        if (gradleCmd == null) {
+            Log.error("Gradle is not installed and no Gradle wrapper was found; cannot build " + projectPath);
+            return false;
+        }
         // Adjust Gradle command as needed
         String[] gradleCommand;
-        if (GRADLE_CMD.equals("gradlew") || GRADLE_CMD.equals("gradlew.bat")) {
-            gradleCommand = new String[]{projectPath + File.separator + GRADLE_CMD, "compileJava", "-p", projectPath};
+        if (gradleCmd.equals("gradlew") || gradleCmd.equals("gradlew.bat")) {
+            gradleCommand = new String[]{projectPath + File.separator + gradleCmd, "compileJava", "-p", projectPath};
         } else {
             if (includeTestClasses) {
                 Log.warn("Hidden flag `--include-test-classes` is turned on. We'll including test classes in WALA analysis");
-                gradleCommand = new String[]{GRADLE_CMD, "compileTestJava", "-p", projectPath};
+                gradleCommand = new String[]{gradleCmd, "compileTestJava", "-p", projectPath};
             }
             else
-                gradleCommand = new String[]{GRADLE_CMD, "compileJava", "-p", projectPath};
+                gradleCommand = new String[]{gradleCmd, "compileJava", "-p", projectPath};
         }
         return buildWithTool(gradleCommand);
     }
 
+    private static boolean hasBuildFile(String directory) {
+        return new File(directory, "pom.xml").exists()
+                || new File(directory, "build.gradle").exists()
+                || new File(directory, "build.gradle.kts").exists();
+    }
+
+    /**
+     * The directory whose build file drives compilation.
+     *
+     * <p>Normally the input path, which is what {@code --input} named. But {@code --project-root-path}
+     * exists precisely for the layout where the two differ -- an input at the repository root over a
+     * module that carries the only {@code pom.xml} -- and it redirected dependency resolution (see
+     * {@link #downloadLibraryDependencies}) without redirecting the build. The compile then ran against
+     * a directory with no build file at all, fell through to Gradle, and the run degraded to declared
+     * edges only while still exiting 0.
+     *
+     * <p>The input is tried first, so a module carrying its own build file keeps building exactly where
+     * it did before and no existing invocation changes behaviour; the root pom is consulted only when
+     * the input has nothing to build. When neither carries a build file the input is returned unchanged,
+     * preserving the previous last-resort path.
+     */
+    static String resolveBuildRoot(String inputPath, String rootPomPath) {
+        String input = Paths.get(inputPath).toAbsolutePath().normalize().toString();
+        if (hasBuildFile(input) || rootPomPath == null) {
+            return input;
+        }
+        String rootPom = Paths.get(rootPomPath).toAbsolutePath().normalize().toString();
+        return hasBuildFile(rootPom) ? rootPom : input;
+    }
+
     private static boolean buildProject(String projectPath, String build) {
-        File pomFile = new File(String.valueOf(Paths.get(projectPath).toAbsolutePath()), "pom.xml");
         if (build == null) {
             return true;
-        } else if (build.equals("auto")) {
+        }
+        String buildRoot = resolveBuildRoot(projectPath, projectRootPom);
+        if (!buildRoot.equals(Paths.get(projectPath).toAbsolutePath().normalize().toString())) {
+            Log.info("The input path carries no build file; building at " + buildRoot
+                    + " instead, as --project-root-path names it.");
+        }
+        File pomFile = new File(buildRoot, "pom.xml");
+        if (build.equals("auto")) {
             if (pomFile.exists()) {
                 Log.info("Found pom.xml in the project directory. Using Maven to build the project.");
-                return mavenBuild(Paths.get(projectPath).toAbsolutePath().toString()); // Use Maven if pom.xml exists
+                return mavenBuild(buildRoot); // Use Maven if pom.xml exists
             } else {
                 Log.info("Did not find a pom.xml in the project directory. Using Gradle to build the project.");
-                return gradleBuild(projectPath); // Otherwise, use Gradle
+                return gradleBuild(buildRoot); // Otherwise, use Gradle
             }
         } else {
-            // Update command with a project path
-            build = build.replace(MAVEN_CMD, MAVEN_CMD + " -f " + projectPath);
+            // Update command with a project path. A null MAVEN_CMD is the same unguarded-command bug
+            // as the Gradle one above: String.replace would throw rather than report the missing tool.
+            if (MAVEN_CMD != null) {
+                build = build.replace(MAVEN_CMD, MAVEN_CMD + " -f " + buildRoot);
+            }
             Log.info("Using custom build command: " + build);
             String[] customBuildCommand = build.split(" ");
             return buildWithTool(customBuildCommand);
