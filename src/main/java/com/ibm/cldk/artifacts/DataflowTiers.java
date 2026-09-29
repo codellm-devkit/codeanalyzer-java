@@ -65,7 +65,8 @@ final class DataflowTiers {
 
     /** L3: the one literal every reaching definition of {@code var} closes on at {@code useLocalId}. */
     static String intra(Owner owner, String useLocalId, String var) {
-        if (owner == null || owner.callable.getDdg() == null || owner.source == null) {
+        if (owner == null || var == null || owner.callable.getDdg() == null
+                || owner.source == null) {
             return null;
         }
         return IntraTier.reachingLiteral(owner.callable, owner.source, useLocalId, var);
