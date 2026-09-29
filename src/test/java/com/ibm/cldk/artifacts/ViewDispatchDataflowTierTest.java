@@ -83,6 +83,21 @@ class ViewDispatchDataflowTierTest {
         assertTrue(r.unresolved.isEmpty());
     }
 
+    // A dispatcher target that is neither a literal nor a bare identifier (a call expression) used
+    // to NPE in the dataflow tier: `Site.varName()` returns null for this shape too, and the tier
+    // dereferenced it unguarded.
+    @Test
+    void aCallExpressionTargetStaysNonLiteralInsteadOfCrashing() throws Exception {
+        ViewDispatches.Result r = run(HEAD
+                + "  void doGet(HttpServletRequest req, HttpServletResponse res) {\n"
+                + "    req.getRequestDispatcher(computePage()).forward(req, res);\n"
+                + "  }\n"
+                + "  String computePage() { return \"/pages/x.jsp\"; }\n"
+                + "}\n", 3);
+        assertTrue(r.dispatches.isEmpty());
+        assertEquals("non-literal", only(r).getReason());
+    }
+
     @Test
     void twoDisagreeingDefinitionsStayNonLiteral() throws Exception {
         ViewDispatches.Result r = run(HEAD

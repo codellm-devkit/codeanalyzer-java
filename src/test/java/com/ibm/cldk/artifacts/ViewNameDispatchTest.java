@@ -35,6 +35,9 @@ class ViewNameDispatchTest {
         ServletApiStubs.write(root, "src/main/java/org/springframework/stereotype/Controller.java",
                 "package org.springframework.stereotype;\npublic @interface Controller {}\n");
         ServletApiStubs.write(root,
+                "src/main/java/org/springframework/web/bind/annotation/RestController.java",
+                "package org.springframework.web.bind.annotation;\npublic @interface RestController {}\n");
+        ServletApiStubs.write(root,
                 "src/main/java/org/springframework/web/bind/annotation/GetMapping.java",
                 "package org.springframework.web.bind.annotation;\n"
                         + "public @interface GetMapping { String value() default \"\"; }\n");
@@ -134,6 +137,29 @@ class ViewNameDispatchTest {
         assertEquals(1, r.unresolved.size());
         assertEquals("no-such-artifact", r.unresolved.get(0).getReason());
         assertEquals("missing", r.unresolved.get(0).getTarget());
+        assertEquals("view-name", r.unresolved.get(0).getVia());
+    }
+
+    // Robot Shop's shipping service: a `@RestController`'s `return String.valueOf(x)` is
+    // still gated into the view-name tier (the entrypoint check does not yet distinguish
+    // `@RestController` from `@Controller`) and the target is neither a literal nor a bare
+    // identifier, so `Site.varName()` is null. That null used to reach `DataflowTiers.intra`
+    // unguarded and NPE in `IntraTier.reachingLiteral`; it must instead just stay unresolved.
+    @Test
+    void aNonIdentifierReturnExpressionStaysNonLiteralInsteadOfCrashing() throws Exception {
+        ViewDispatches.Result r = run(
+                "package demo;\n"
+                        + "import org.springframework.web.bind.annotation.RestController;\n"
+                        + "import org.springframework.web.bind.annotation.GetMapping;\n"
+                        + "@RestController\npublic class Home {\n"
+                        + "  @GetMapping(\"/count\") public String count() {\n"
+                        + "    long n = 10;\n"
+                        + "    return String.valueOf(n);\n"
+                        + "  }\n}\n",
+                null);
+        assertTrue(r.dispatches.isEmpty());
+        assertEquals(1, r.unresolved.size());
+        assertEquals("non-literal", r.unresolved.get(0).getReason());
         assertEquals("view-name", r.unresolved.get(0).getVia());
     }
 }
