@@ -66,19 +66,20 @@ public final class L3WalaOverlays {
      * @param input      the project root directory
      * @param modules    the L1 module map (mutated in place: cfg/cdg/ddg are set on callables)
      * @param fieldDepth the DDG access-path bound k ({@code --graph-field-depth})
+     * @param applicationId the {@code can://<app>} root, passed in rather than reverse-engineered
+     *     from a module id — a module id no longer ends with its {@code symbol_table} key, since the
+     *     id additionally carries the module's declared coordinate (see {@code ModulePrefixes})
      */
     public static void apply(
             WalaAnalysis wala,
             String input,
             Map<String, JModule> modules,
-            int fieldDepth) {
+            int fieldDepth,
+            String applicationId) {
 
         if (modules.isEmpty()) {
             return;
         }
-
-        // Derive the applicationId from any module in the map.
-        String applicationId = deriveApplicationId(modules);
 
         // Build a binary-type-name → (moduleKey, JType) index.
         Map<String, TypeEntry> typeIndex = buildTypeIndex(modules);
@@ -360,28 +361,6 @@ public final class L3WalaOverlays {
             current = next;
         }
         return current;
-    }
-
-    // ----- applicationId derivation -------------------------------------------------------------
-
-    /**
-     * Derives the {@code can://<app>} applicationId from the first entry in {@code modules}.
-     * The module id has the form {@code applicationId/normalizedFileKey}, so strip the suffix.
-     */
-    private static String deriveApplicationId(Map<String, JModule> modules) {
-        Map.Entry<String, JModule> first = modules.entrySet().iterator().next();
-        String moduleId = first.getValue().getId();
-        if (moduleId == null) {
-            return CanId.applicationId("unknown");
-        }
-        String normalizedFileKey = first.getKey().replace("\\", "/").replaceFirst("^[./]+", "");
-        int sep = moduleId.lastIndexOf("/" + normalizedFileKey);
-        if (sep > 0) {
-            return moduleId.substring(0, sep);
-        }
-        // Fallback: trim the last slash-delimited segment matching the key.
-        int last = moduleId.lastIndexOf('/');
-        return last > 0 ? moduleId.substring(0, last) : moduleId;
     }
 
     // ----- inner types --------------------------------------------------------------------------

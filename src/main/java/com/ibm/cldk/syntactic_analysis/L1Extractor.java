@@ -143,6 +143,22 @@ public final class L1Extractor {
         String applicationId = CanId.applicationId(appName);
         JavaParser parser = new JavaParser(config);
         int reused = 0;
+
+        // Resolved over the WHOLE file set before any module is built: the uniqueness rule needs to
+        // see every claimant of a coordinate before it can decide whether to apply it.
+        List<Path> allFiles = new ArrayList<>();
+        for (SourceRoot sourceRoot : sourceRoots) {
+            allFiles.addAll(javaFilesUnder(sourceRoot.getRoot()));
+        }
+        Path analysisRoot = projectRoot;
+        ModulePrefixes prefixes = ModulePrefixes.resolve(analysisRoot, allFiles);
+        prefixes.contested().forEach((coordinate, dirs) -> Log.warn(
+                "Module coordinate '" + coordinate + "' is declared by " + dirs.size()
+                        + " modules (" + dirs.stream().map(d -> analysisRoot.relativize(d).toString())
+                                .collect(java.util.stream.Collectors.joining(", "))
+                        + "); ids for these keep their plain relative path, since a shared coordinate"
+                        + " would collide them"));
+
         for (SourceRoot sourceRoot : sourceRoots) {
             for (Path path : javaFilesUnder(sourceRoot.getRoot())) {
                 String fileKey = fileKey(projectRoot, path);
@@ -150,8 +166,8 @@ public final class L1Extractor {
                 // real file, byte for byte.
                 String source = Files.readString(path, StandardCharsets.UTF_8);
                 L1BuildContext ctx = new L1BuildContext(
-                        applicationId, fileKey, source, analysisLevel, graphFieldDepth, l3Engine,
-                        entrypointReport);
+                        applicationId, fileKey, prefixes.idPath(path), source, analysisLevel,
+                        graphFieldDepth, l3Engine, entrypointReport);
 
                 // Reuse the cached module when the file is byte-for-byte what it was last time. This
                 // skips the parse as well as the build, which is where the cost is.
