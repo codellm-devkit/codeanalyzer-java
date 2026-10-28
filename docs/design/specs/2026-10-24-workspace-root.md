@@ -119,24 +119,37 @@ l <> 'JCanNode')`.
 
 ### Decisions
 
-1. **Release, don't delete.** On a full Bolt run, for every `:Artifact` under
-   `can://<app>/artifact/` that carries `:JCanNode` and is not among this run's artifact ids, and
-   every `:ConfigKey` under that prefix that carries `:JCanNode` and is not among this run's
-   config-key ids: remove `:JCanNode`; if no other `*CanNode` marker remains, `DETACH DELETE`
-   it. A node another analyzer still claims survives with that analyzer's edges intact. An
-   artifact with no marker at all was not written by Java and is left alone.
+1. **Release, don't delete.** On a full Bolt run, Java first drops its own edges, then releases
+   `:JCanNode` from each `:JCanNode` artifact/config key under `can://<app>/artifact/` (and the
+   pre-3.1.1 `can://artifact/<app>/`) that the run no longer emits. Deletion then depends on the
+   node type:
+   - **Artifact:** deleted when no `HAS_ARTIFACT` edge is left. Every analyzer emits `HAS_ARTIFACT`
+     from its own app root for every artifact it inventories, and has since it first wrote
+     artifacts, so a remaining edge means another analyzer still holds it. This works whether or
+     not that analyzer marks the node.
+   - **Config key:** deleted with its artifact, unless another `*CanNode` label still claims the
+     key. A vanished key on a surviving artifact is also deleted when no other `*CanNode` label
+     claims it. A sibling version that does not mark keys loses such a key until its next push.
+
+   A node that never carried `:JCanNode` was not written by Java and is not matched.
 2. **Java-owned artifact edges are rebuilt on every full run.** `sha256` is one property every
    writer `SET`s, so a sibling's push can make a changed manifest look unchanged to Java; a sha
    diff is therefore unsound on shared nodes. Instead, each full run deletes this app's
    Java-owned artifact edges (`HAS_ARTIFACT` from its `:JApplication`;
    `DECLARES_DEPENDENCY`/`LOCKS` from its artifacts to `pkg:maven/` packages) and re-upserts
    them from the run. That also covers `LOCKS` going stale when a manifest changes and the lock
-   file does not. Artifact edges number tens to hundreds, so the cost is negligible.
-3. **Full runs only.** Releasing and rebuilding run only when `fullRun`. v2 is always a full run
+   file does not. Artifact edges number tens to hundreds, so the cost is negligible. Java's
+   code-to-artifact edges (`J_USES_CONFIG`, `J_DISPATCHES_TO`, `J_READS_CONFIG_UNRESOLVED`) are
+   rebuilt the same way, because a config or template change alters them while every module's
+   `content_hash` stays the same.
+3. **Batched.** The release runs as `CALL { … } IN TRANSACTIONS`: a toggle on a large repository
+   releases one node per non-source file, which a single transaction cannot hold. Partial failure
+   is safe, since the next full push finishes the reconciliation.
+4. **Full runs only.** Releasing and rebuilding run only when `fullRun`. v2 is always a full run
    (`--target-files` is rejected), so this covers every v2 push.
-4. **Ordering.** One write transaction runs release → delete → edge purge, then nodes and edges
-   are upserted as today. The ids to keep come from the run's rows, not the DB.
-5. **Non-goals.** `:Package` nodes left with no edges are not deleted (they sit outside the app
+5. **Ordering.** Edge purge, then release/delete, then nodes and edges are upserted as today.
+   The ids to keep come from the run's rows, not the DB.
+6. **Non-goals.** `:Package` nodes left with no edges are not deleted (they sit outside the app
    prefix and are shared across apps). The Cypher snapshot keeps its broader wipe, which
    `DETACH DELETE`s every `:JCanNode` under the app, sibling-shared artifacts included. Aligning
    it with decision 1 is a recorded follow-up.

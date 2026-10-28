@@ -320,8 +320,7 @@ containment traversal that also replaces a prior v1 (pre-`3.0.0`) graph of the s
 That scope **includes** this application's `:Artifact` and `:ConfigKey` nodes — the snapshot rebuilds
 them, rather than leaving stale ones to accumulate with nothing ever cleaning them up. The one
 consequence: a sibling-language analyzer's edge into a shared `:Artifact` is dropped by a Java
-snapshot and restored on that analyzer's next push. The Bolt writer does **not** do this — its
-deletions are scoped per module, not per application.
+snapshot and restored on that analyzer's next push. The Bolt writer is narrower; see §4.2.
 
 ### 4.2. Live incremental push over Bolt
 
@@ -334,6 +333,18 @@ The Bolt writer reads the database's current state and updates **only what chang
 compilation unit's `content_hash`, replaces just the changed units' subgraphs (idempotent
 `MERGE` upserts), and — on a full run — prunes units whose source file vanished. Combine with
 `--target-files` for a targeted, partial re-push (orphan pruning is then skipped).
+
+On a full run it also reconciles the application's artifacts, so a deleted or renamed file, a
+removed dependency, or re-keying under `--workspace-root` leaves nothing stale:
+
+- Java-owned artifact edges are rebuilt from the run: `HAS_ARTIFACT`, `DECLARES_DEPENDENCY`/`LOCKS`
+  to `pkg:maven/…`, and code reads of them (`J_USES_CONFIG`, `J_DISPATCHES_TO`,
+  `J_READS_CONFIG_UNRESOLVED`), so a config-only change updates them too.
+- An `:Artifact`/`:ConfigKey` the run no longer emits loses its `:JCanNode` label. An artifact is
+  then deleted only if no other analyzer's `HAS_ARTIFACT` still points at it; a config key only if
+  no other analyzer's marker (`:PyCanNode`, `:TSCanNode`) still claims it. A sibling's edges are
+  never removed.
+- Artifacts written before 3.1.1 (`can://artifact/<app>/…`) are reconciled the same way.
 
 ### 4.3. Schema contract
 

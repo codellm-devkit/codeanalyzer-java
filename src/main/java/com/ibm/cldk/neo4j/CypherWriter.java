@@ -53,7 +53,8 @@ public final class CypherWriter {
      * {@code DESCENDANTS} because this constant is shared with
      * {@link BoltWriter#PRUNE_VANISHED_UNITS_V2}, whose unit of deletion is one vanished
      * compilation unit, not the application: an app-level {@code :Artifact} is not a descendant of
-     * any one unit and must not die with one. {@code :Package} ({@code pkg:} purls) is outside both
+     * any one unit and must not die with one (Bolt reconciles artifacts separately, see
+     * {@link BoltWriter#RELEASE_VANISHED_ARTIFACTS}). {@code :Package} ({@code pkg:} purls) is outside both
      * — it is not under the app prefix either — as are the shared {@code :JPackage}/
      * {@code :JAnnotation} merge targets.
      */

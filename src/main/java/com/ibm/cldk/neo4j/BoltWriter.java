@@ -44,6 +44,8 @@ import org.neo4j.driver.Values;
  *   <li>on a FULL run only, prune units whose source file vanished.</li>
  * </ol>
  *
+ * <p>A full run also reconciles the app's artifacts; see {@link #RELEASE_VANISHED_ARTIFACTS}.
+ *
  * <p>Nodes are MERGE-upserted, never blindly deleted, so a declaration another (unchanged) unit
  * still references survives and its incoming edges stay valid. {@code :JPackage}/{@code :JAnnotation}
  * are shared (no {@code _module}) and are MERGE-only.
@@ -95,6 +97,52 @@ public final class BoltWriter implements BoltSink {
                     + "AND NOT c.file_key IN $present "
                     + "OPTIONAL MATCH (c)-" + CypherWriter.DESCENDANTS + "->(x) "
                     + "DETACH DELETE x, c RETURN count(c) AS pruned";
+
+    /**
+     * Drop every Java-owned edge on this app's artifacts and config keys so the run rebuilds them:
+     * {@code HAS_ARTIFACT} from a {@code :JApplication}, {@code DECLARES_DEPENDENCY}/{@code LOCKS}
+     * to {@code pkg:maven/}, and incoming {@code J_} edges ({@code J_USES_CONFIG},
+     * {@code J_DISPATCHES_TO}). Not sha-diffed: siblings overwrite the shared {@code sha256}, and a
+     * config change alters code edges while every module's hash stays put.
+     */
+    static final String PURGE_ARTIFACT_EDGES =
+            "UNWIND $pres AS pre "
+                    + "MATCH (t:" + RowBuilder.CAN_NODE + ") WHERE t.id STARTS WITH pre AND (t:Artifact OR t:ConfigKey) "
+                    + "CALL { WITH t "
+                    + "WITH [(t)<-[r]-(s) WHERE (type(r) = 'HAS_ARTIFACT' AND s:JApplication) "
+                    + "OR type(r) STARTS WITH 'J_' | r] "
+                    + "+ [(t)-[d:DECLARES_DEPENDENCY|LOCKS]->(p:Package) WHERE p.id STARTS WITH 'pkg:maven/' | d] AS rs "
+                    + "FOREACH (r IN rs | DELETE r) } IN TRANSACTIONS OF 1000 ROWS";
+
+    /** @see #PURGE_ARTIFACT_EDGES */
+    static final String PURGE_UNRESOLVED_CONFIG_READS =
+            "MATCH (:JApplication {id: $appId})-[r:J_READS_CONFIG_UNRESOLVED]->() "
+                    + "CALL { WITH r DELETE r } IN TRANSACTIONS OF 1000 ROWS";
+
+    /**
+     * Release Java's claim ({@code :JCanNode}) on artifacts/config keys the run no longer emits,
+     * after {@link #PURGE_ARTIFACT_EDGES}. An artifact is deleted once no {@code HAS_ARTIFACT} is
+     * left: every analyzer inventories its artifacts with one, marked or not. A config key is
+     * deleted once no other analyzer's {@code *CanNode} claims it.
+     */
+    static final String RELEASE_VANISHED_ARTIFACTS =
+            "UNWIND $pres AS pre "
+                    + "MATCH (n:" + RowBuilder.CAN_NODE + ") WHERE n.id STARTS WITH pre AND (n:Artifact OR n:ConfigKey) "
+                    + "AND NOT n.id IN $keep "
+                    + "CALL { WITH n REMOVE n:" + RowBuilder.CAN_NODE + " "
+                    + "WITH n WHERE (n:Artifact AND NOT ()-[:HAS_ARTIFACT]->(n)) "
+                    + "OR (n:ConfigKey AND none(l IN labels(n) WHERE l ENDS WITH 'CanNode')) "
+                    + "DETACH DELETE n } IN TRANSACTIONS OF 1000 ROWS "
+                    + "RETURN count(*) AS released";
+
+    /**
+     * Where this app's artifacts live: {@code can://<app>/artifact/}, and {@code
+     * can://artifact/<app>/} for those written before 3.1.1 moved the app outermost. Both are
+     * separator-terminated, so {@code app} never reaches {@code apps}.
+     */
+    static List<String> artifactPrefixes(String appId, String appName) {
+        return List.of(appId + "/artifact/", CanId.SCHEME + "artifact/" + appName + "/");
+    }
 
     /**
      * The prefix that matches a module's declarations but not a sibling module whose path merely
@@ -197,7 +245,10 @@ public final class BoltWriter implements BoltSink {
             Log.info("neo4j(bolt): " + byUnit.size() + " units (" + changed.size() + " changed), "
                     + shared.size() + " shared nodes, " + rows.edges.size() + " edges");
 
-            // 3. shared nodes are always upserted (MERGE-only).
+            // 3. full run: reconcile this app's artifacts, then upsert shared nodes (MERGE-only).
+            if (fullRun) {
+                reconcileArtifacts(rows);
+            }
             upsertNodes(shared);
 
             // 4. per changed unit: purge owned edges + vanished decls, then upsert its nodes.
@@ -236,11 +287,13 @@ public final class BoltWriter implements BoltSink {
                 upsertNodes(nodes);
             }
 
-            // 5. upsert edges owned by a changed unit (owner = source node's unit) or shared.
+            // 5. upsert edges owned by a changed unit (owner = source node's unit) or shared; on a
+            // full run also every edge into an artifact/config key, which step 3 purged.
             List<EdgeRow> edges = new ArrayList<>();
             for (EdgeRow e : rows.edges) {
                 String owner = unitOf.get(e.from.value);
-                if (owner == null || changed.contains(owner)) {
+                boolean intoArtifact = e.to.label.equals("Artifact") || e.to.label.equals("ConfigKey");
+                if (owner == null || changed.contains(owner) || (fullRun && intoArtifact)) {
                     edges.add(e);
                 }
             }
@@ -264,14 +317,7 @@ public final class BoltWriter implements BoltSink {
                 // cross-language :Artifact/:ConfigKey and no shared :JPackage/:JAnnotation can be
                 // reached. Do not add a non-containment type to DESCENDANTS without re-checking that.
                 //
-                // The snapshot path (CypherWriter.wipe) deliberately went the other way and now
-                // deletes this app's :Artifact/:ConfigKey via a `can://<app>/` prefix sweep, so a
-                // full snapshot rebuilds them instead of letting them accumulate. That widening is
-                // NOT mirrored here, on purpose: this writer is incremental. Its unit of
-                // replacement is one module (descendantPrefix(moduleId)) or one vanished unit, and
-                // an app-level artifact belongs to neither -- an app-wide artifact sweep would
-                // delete artifacts a targeted `--target-files` run never re-pushes. The snapshot can
-                // afford the widening only because it always writes the full truth back.
+                // Artifacts belong to no unit; reconcileArtifacts (step 3) handles them.
                 try (Session s = session()) {
                     long pruned = s.run(PRUNE_VANISHED_UNITS_V2,
                             Values.parameters("present", present, "appId", appId, "appName", appName))
@@ -280,6 +326,35 @@ public final class BoltWriter implements BoltSink {
                 }
             } else {
                 Log.info("neo4j(bolt): targeted run — orphan pruning skipped (deleted files not removed)");
+            }
+        }
+
+        /** v2 only: v1 emits no artifacts, so it would release every one. */
+        private void reconcileArtifacts(GraphRows rows) {
+            String appId = null;
+            List<String> keep = new ArrayList<>();
+            for (NodeRow n : rows.nodes) {
+                String label = n.labels.get(0);
+                if (label.equals("JApplication") && RowBuilder.isCanId(n.value)) {
+                    appId = n.value;
+                } else if (label.equals("Artifact") || label.equals("ConfigKey")) {
+                    keep.add(n.value);
+                }
+            }
+            if (appId == null) {
+                return;
+            }
+            Map<String, Object> args = new LinkedHashMap<>();
+            args.put("appId", appId);
+            args.put("pres", artifactPrefixes(appId, appNameOf(rows)));
+            args.put("keep", keep);
+            // Auto-commit, batched: a --workspace-root toggle releases one node per non-source file.
+            // A partial failure is safe; the next full push finishes it.
+            try (Session s = session()) {
+                s.run(PURGE_ARTIFACT_EDGES, args).consume();
+                s.run(PURGE_UNRESOLVED_CONFIG_READS, args).consume();
+                long released = s.run(RELEASE_VANISHED_ARTIFACTS, args).single().get("released").asLong(0);
+                Log.info("neo4j(bolt): released " + released + " vanished artifact/config node(s)");
             }
         }
 
