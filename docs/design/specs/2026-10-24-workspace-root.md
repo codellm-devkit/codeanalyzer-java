@@ -73,3 +73,92 @@ prefix.
 Ships in **codeanalyzer-java 3.4.0** as an opt-in flag; default output is unchanged, so no
 consumer needs to move in lockstep. README documents the flag, the repo-relative keys it produces,
 and the cache miss on toggling it.
+
+## Addendum: Bolt artifact reconciliation (user-approved 2026-10-28)
+
+### Problem
+
+The Bolt writer never deletes an `:Artifact` or `:ConfigKey`. They carry no `_module`, so they
+are treated as shared nodes: MERGE-upserted, never purged. Toggling `--workspace-root` on an app
+that already has a graph changes every artifact id (`can://<app>/artifact/pom.xml` becomes
+`can://<app>/artifact/services/app/pom.xml`), so the old-keyed artifacts survive alongside the
+new ones. Each still hangs off `:JApplication` via `HAS_ARTIFACT` and still declares its
+`:Package`s. The same leak exists without the flag, for any deleted or renamed artifact, and
+for the outgoing edges of an artifact whose content changed (a dependency removed from
+`pom.xml` keeps its `DECLARES_DEPENDENCY` edge; a removed yaml key keeps its `:ConfigKey`).
+The Cypher snapshot does not have this problem, because its `can://<app>/` prefix wipe
+rebuilds artifacts from scratch.
+
+### Triage
+
+| Question | Answer |
+| --- | --- |
+| Changes `analysis.json` / `schema.neo4j.json` shape? | No. Write semantics only. |
+| Changes cross-analyzer graph semantics? | Yes, narrowly: a Java Bolt full run now removes Java's own claim on artifacts and config keys it no longer emits, and deletes a node only when no other analyzer claims it. Sibling-owned nodes and edges are never touched. |
+| Repos touched | `codeanalyzer-java` now. `codeanalyzer-python` (`neo4j/bolt.py`) and `codeanalyzer-typescript` (`build/neo4j/bolt.ts`) have the same gap; tracked, filed when picked up. |
+
+### Ownership: what is Java's
+
+The artifact layer's vocabulary is shared (`:Artifact`, `:ConfigKey`, `:Package`,
+`HAS_ARTIFACT`, `DEFINES_CONFIG`, `DECLARES_DEPENDENCY`, `LOCKS` are unprefixed and identical in
+all three analyzers), but the facts each analyzer writes under it are not: Java parses Maven and
+Gradle manifests and its own set of config formats; Python writes `pkg:pypi` dependencies and
+toml/ini/json config keys; TypeScript writes `pkg:npm`. Ownership is recoverable without a new
+property:
+
+| Fact | Java's when |
+| --- | --- |
+| an `:Artifact` / `:ConfigKey` node | it carries `:JCanNode` (every `can://` node Java writes gets it, `RowBuilder.node`) |
+| `HAS_ARTIFACT` | its source is this app's `:JApplication` |
+| `DECLARES_DEPENDENCY` / `LOCKS` | its target `:Package` id starts with `pkg:maven/` |
+| `DEFINES_CONFIG` | shared fact; kept while any analyzer still claims the key |
+
+A node claimed by another analyzer carries that analyzer's marker (`:PyCanNode`, `:TSCanNode`),
+so "claimed by someone else" is `any(l IN labels(x) WHERE l ENDS WITH 'CanNode' AND
+l <> 'JCanNode')`.
+
+### Decisions
+
+1. **Release, don't delete.** On a full Bolt run, for every `:Artifact` under
+   `can://<app>/artifact/` that carries `:JCanNode` and is not among this run's artifact ids, and
+   every `:ConfigKey` under that prefix that carries `:JCanNode` and is not among this run's
+   config-key ids: remove `:JCanNode`; if no other `*CanNode` marker remains, `DETACH DELETE`
+   it. A node another analyzer still claims survives with that analyzer's edges intact. An
+   artifact with no marker at all was not written by Java and is left alone.
+2. **Java-owned artifact edges are rebuilt on every full run.** `sha256` is one property every
+   writer `SET`s, so a sibling's push can make a changed manifest look unchanged to Java; a sha
+   diff is therefore unsound on shared nodes. Instead, each full run deletes this app's
+   Java-owned artifact edges (`HAS_ARTIFACT` from its `:JApplication`;
+   `DECLARES_DEPENDENCY`/`LOCKS` from its artifacts to `pkg:maven/` packages) and re-upserts
+   them from the run. That also covers `LOCKS` going stale when a manifest changes and the lock
+   file does not. Artifact edges number tens to hundreds, so the cost is negligible.
+3. **Full runs only.** Releasing and rebuilding run only when `fullRun`. v2 is always a full run
+   (`--target-files` is rejected), so this covers every v2 push.
+4. **Ordering.** One write transaction runs release → delete → edge purge, then nodes and edges
+   are upserted as today. The ids to keep come from the run's rows, not the DB.
+5. **Non-goals.** `:Package` nodes left with no edges are not deleted (they sit outside the app
+   prefix and are shared across apps). The Cypher snapshot keeps its broader wipe, which
+   `DETACH DELETE`s every `:JCanNode` under the app, sibling-shared artifacts included. Aligning
+   it with decision 1 is a recorded follow-up.
+
+### Verification
+
+- Bolt (Testcontainers), failing before the fix: push without `--workspace-root`, then push the
+  same project with it; assert every `:Artifact`/`:ConfigKey` under `can://<app>/artifact/`
+  carries the repo-relative id, no old-keyed artifact remains, and `:JApplication` has exactly
+  as many `HAS_ARTIFACT` edges as the run emitted.
+- Bolt: change a manifest (drop a dependency, drop a config key); re-push; assert the dropped
+  `DECLARES_DEPENDENCY` edge and `:ConfigKey` are gone.
+- Bolt, polyglot: seed a sibling-shaped artifact (`:Artifact:PyCanNode`, a `pkg:pypi`
+  `DECLARES_DEPENDENCY`, a `:ConfigKey:PyCanNode`) on an id Java also emits and on one it does
+  not; after Java's re-push both survive with their sibling edges, and the shared one keeps
+  `:PyCanNode`.
+- Bolt: a second application in the same database keeps all its artifacts.
+
+### Docs
+
+README §4.2: the Bolt writer reconciles this app's artifacts on a full run. It releases Java's
+claim on artifacts and config keys it no longer emits, deletes them only when no other analyzer
+claims them, and rebuilds Java-owned artifact edges. §4.1: state that the snapshot's wipe is
+broader. Update the `BoltWriter` / `CypherWriter.DESCENDANTS` comments that say Bolt never
+deletes artifacts. Releases with 3.4.0; no lockstep with siblings.
