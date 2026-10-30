@@ -29,7 +29,7 @@ import org.neo4j.driver.Values;
 import org.testcontainers.containers.Neo4jContainer;
 
 /**
- * {@code --workspace-root} against a live Neo4j: the incremental push's wipe and orphan prune are
+ * Namespace identity against a live Neo4j: the incremental push's wipe and orphan prune are
  * scoped by the app's {@code can://<app>/} prefix and each module's own id, so repo-relative module
  * ids must still be pruned when their file vanishes, and must not reach another application's graph.
  *
@@ -92,11 +92,11 @@ class WorkspaceRootNeo4jPushTest {
     private static int push(Path in, Path repo, String app, Path out) {
         return new picocli.CommandLine(new CodeAnalyzer()).execute(
                 "-i", in.toString(), "-o", out.toString(), "--emit", "neo4j", "--no-build",
-                "--workspace-root", repo.toString(), "--app-name", app,
+                "--namespace", repo.getFileName().toString(), "--app-name", app,
                 "--neo4j-uri", CONTAINER.getBoltUrl(), "--neo4j-user", "neo4j", "--neo4j-password", PASSWORD);
     }
 
-    /** As {@link #push}, without {@code --workspace-root}: keys are relative to {@code in}. */
+    /** As {@link #push}, with the default namespace: keys remain relative to {@code in}. */
     private static int pushUnrooted(Path in, String app, Path out) {
         return new picocli.CommandLine(new CodeAnalyzer()).execute(
                 "-i", in.toString(), "-o", out.toString(), "--emit", "neo4j", "--no-build",
@@ -144,38 +144,27 @@ class WorkspaceRootNeo4jPushTest {
     }
 
     @Test
-    void togglingWorkspaceRootLeavesNoOldKeyedArtifacts(@TempDir Path tmp) throws IOException {
+    void changingNamespacePreservesPreviousApplicationAndUsesInputRelativeKeys(@TempDir Path tmp) throws IOException {
         Path repo = tmp.resolve("repo");
         Path app = repo.resolve("services/app");
         writeClass(app, "Main");
         writeArtifacts(app, "org.example:lib");
         writeConfig(app, "server.port");
-
         assertEquals(0, pushUnrooted(app, "toggle", tmp.resolve("o1")));
         String oldPom = CanId.artifactId("toggle", "pom.xml");
-        assertEquals(1, count("MATCH (a:Artifact {id: $id}) RETURN count(a)", "id", oldPom),
-                "precondition: the unrooted push keys the artifact on its input-relative path");
-        assertTrue(count("MATCH (k:ConfigKey) WHERE k.id STARTS WITH $p RETURN count(k)",
-                "p", oldPom.replace("pom.xml", "src/main/resources/application.properties")) > 0,
-                "precondition: the config file minted a key");
-
+        assertEquals(1, count("MATCH (a:Artifact {id: $id}) RETURN count(a)", "id", oldPom));
         assertEquals(0, push(app, repo, "toggle", tmp.resolve("o2")));
-
-        String rooted = artifactPrefix("toggle") + "services/app/";
-        assertEquals(0, count("MATCH (a:Artifact) WHERE a.id STARTS WITH $p AND NOT a.id STARTS WITH $r "
-                + "RETURN count(a)", "p", artifactPrefix("toggle"), "r", rooted),
-                "no artifact keyed on the old input-relative path survives");
-        assertEquals(0, count("MATCH (k:ConfigKey) WHERE k.id STARTS WITH $p AND NOT k.id STARTS WITH $r "
-                + "RETURN count(k)", "p", artifactPrefix("toggle"), "r", rooted),
-                "no config key keyed on the old input-relative path survives");
-        long artifacts = count("MATCH (a:Artifact) WHERE a.id STARTS WITH $r RETURN count(a)", "r", rooted);
-        assertTrue(artifacts > 0, "the rooted push wrote its artifacts");
-        assertEquals(artifacts, count("MATCH (:JApplication {id: $app})-[r:HAS_ARTIFACT]->() RETURN count(r)",
-                "app", CanId.applicationId("toggle")), "one HAS_ARTIFACT per artifact the run emitted");
-        assertEquals(1, count("MATCH (a:Artifact)-[r:DECLARES_DEPENDENCY]->(:Package {id: $pkg}) "
-                + "WHERE a.id STARTS WITH $p RETURN count(r)",
-                "p", artifactPrefix("toggle"), "pkg", CanId.purlMaven("org.example", "lib")),
-                "the dependency is declared once, by the rooted manifest");
+        assertEquals(1, count("MATCH (a:Artifact {id: $id}) RETURN count(a)", "id", oldPom),
+                "the prior namespace is outside reconciliation scope");
+        String root = CanId.applicationId("toggle", "repo");
+        String pom = CanId.artifactId("toggle", "pom.xml", "repo");
+        assertEquals(1, count("MATCH (:JApplication {id: $app})-[:HAS_ARTIFACT]->(:Artifact {id: $pom}) RETURN count(*)",
+                "app", root, "pom", pom));
+        String module = CanId.moduleId(root, "src/main/java/com/example/Main.java");
+        assertEquals(1, count("MATCH (:JModule {id: $id}) RETURN count(*)", "id", module),
+                "same-file content hashes in another namespace cannot suppress module insertion");
+        assertEquals(1, count("MATCH (:Artifact {id: $id})-[:DECLARES_DEPENDENCY]->(:Package {id: $pkg}) RETURN count(*)",
+                "id", pom, "pkg", CanId.purlMaven("org.example", "lib")));
     }
 
     @Test
@@ -221,7 +210,7 @@ class WorkspaceRootNeo4jPushTest {
         String pyOnly = CanId.artifactId("poly", "pyproject.toml");
         String pyKey = CanId.configKeyId(pyOnly, "tool.name");
         run("MATCH (a:Artifact {id: $pom}) SET a:PyCanNode "
-                + "MERGE (app:PyApplication {id: 'can://poly'}) MERGE (app)-[:HAS_ARTIFACT]->(a) "
+                + "MERGE (app:PyApplication {id: 'can://poly/poly'}) MERGE (app)-[:HAS_ARTIFACT]->(a) "
                 + "MERGE (p:Package {id: 'pkg:pypi/requests'}) MERGE (a)-[:DECLARES_DEPENDENCY {_k: 'main'}]->(p) "
                 + "MERGE (o:Artifact:PyCanNode {id: $py}) MERGE (app)-[:HAS_ARTIFACT]->(o) "
                 + "MERGE (k:ConfigKey:PyCanNode {id: $key}) MERGE (o)-[:DEFINES_CONFIG]->(k) "
@@ -276,7 +265,7 @@ class WorkspaceRootNeo4jPushTest {
         String props = CanId.artifactId("ckshare", "src/main/resources/application.properties");
         String key = CanId.configKeyId(props, "shared.key");
         run("MATCH (k:ConfigKey {id: $key}) SET k:PyCanNode "
-                + "MERGE (b:PyBodyNode {id: 'can://ckshare/python/x.py/f@1:1'}) MERGE (b)-[:PY_USES_CONFIG]->(k)",
+                + "MERGE (b:PyBodyNode {id: 'can://ckshare/ckshare/python/x.py/f@1:1'}) MERGE (b)-[:PY_USES_CONFIG]->(k)",
                 "key", key);
 
         writeConfig(app, "other");
@@ -299,7 +288,7 @@ class WorkspaceRootNeo4jPushTest {
 
         // A pre-1.5.0 codeanalyzer-python: inventories the file via HAS_ARTIFACT, puts no marker on it.
         String pom = CanId.artifactId("oldsib", "pom.xml");
-        run("MATCH (a:Artifact {id: $pom}) MERGE (p:PyApplication {id: 'can://oldsib'}) "
+        run("MATCH (a:Artifact {id: $pom}) MERGE (p:PyApplication {id: 'can://oldsib/oldsib'}) "
                 + "MERGE (p)-[:HAS_ARTIFACT]->(a)", "pom", pom);
 
         Files.delete(app.resolve("pom.xml"));
@@ -321,7 +310,7 @@ class WorkspaceRootNeo4jPushTest {
         String env = CanId.artifactId("cfguse", ".env");
         assertEquals(0, count("MATCH ()-[r:J_USES_CONFIG]->(k) WHERE k.id STARTS WITH $p RETURN count(r)",
                 "p", env), "precondition: PORT is undeclared");
-        assertEquals(1, count("MATCH (:JApplication {id: 'can://cfguse'})-[r:J_READS_CONFIG_UNRESOLVED {key: 'PORT'}]->() "
+        assertEquals(1, count("MATCH (:JApplication {id: 'can://cfguse/cfguse'})-[r:J_READS_CONFIG_UNRESOLVED {key: 'PORT'}]->() "
                 + "RETURN count(r)"), "precondition: the read is unresolved");
 
         // Only the config changes; Main.java's content_hash is identical.
@@ -330,7 +319,7 @@ class WorkspaceRootNeo4jPushTest {
 
         assertEquals(1, count("MATCH ()-[r:J_USES_CONFIG]->(:ConfigKey {id: $k}) RETURN count(r)",
                 "k", CanId.configKeyId(env, "PORT")), "the newly declared key gains its read");
-        assertEquals(0, count("MATCH (:JApplication {id: 'can://cfguse'})-[r:J_READS_CONFIG_UNRESOLVED {key: 'PORT'}]->() "
+        assertEquals(0, count("MATCH (:JApplication {id: 'can://cfguse/cfguse'})-[r:J_READS_CONFIG_UNRESOLVED {key: 'PORT'}]->() "
                 + "RETURN count(r)"), "the stale unresolved read is gone");
 
         Files.writeString(app.resolve(".env"), "OTHER=1\n", StandardCharsets.UTF_8);
@@ -384,7 +373,7 @@ class WorkspaceRootNeo4jPushTest {
     }
 
     @Test
-    void preRekeyArtifactsAreReleasedToo(@TempDir Path tmp) throws IOException {
+    void legacyArtifactsRequireExplicitRetirement(@TempDir Path tmp) throws IOException {
         Path app = tmp.resolve("app");
         writeClass(app, "Main");
         writeArtifacts(app, "org.example:lib");
@@ -397,8 +386,8 @@ class WorkspaceRootNeo4jPushTest {
 
         assertEquals(0, pushUnrooted(app, "legacy", tmp.resolve("o1")));
 
-        assertEquals(0, count("MATCH (n) WHERE n.id STARTS WITH 'can://artifact/legacy/' RETURN count(n)"),
-                "the pre-re-key artifact and its config key are gone");
+        assertEquals(2, count("MATCH (n) WHERE n.id STARTS WITH 'can://artifact/legacy/' RETURN count(n)"),
+                "legacy data is outside the selected canonical application");
         assertEquals(1, count("MATCH (n:Artifact {id: $id}) RETURN count(n)",
                 "id", CanId.artifactId("legacy", "pom.xml")), "the current artifact is written");
     }
@@ -460,15 +449,15 @@ class WorkspaceRootNeo4jPushTest {
         assertEquals(0, push(orders, repo, "orders", tmp.resolve("o1")));
         assertEquals(0, push(billing, repo, "billing", tmp.resolve("o2")));
 
-        String key = "services/orders/src/main/java/com/example/";
-        String gone = CanId.moduleId(CanId.applicationId("orders"), key + "Gone.java");
-        String keep = CanId.moduleId(CanId.applicationId("orders"), key + "Keep.java");
-        String billingGone = CanId.moduleId(CanId.applicationId("billing"),
-                "services/billing/src/main/java/com/example/Gone.java");
+        String key = "src/main/java/com/example/";
+        String gone = CanId.moduleId(CanId.applicationId("orders", "repo"), key + "Gone.java");
+        String keep = CanId.moduleId(CanId.applicationId("orders", "repo"), key + "Keep.java");
+        String billingGone = CanId.moduleId(CanId.applicationId("billing", "repo"),
+                "src/main/java/com/example/Gone.java");
         assertEquals(1, count("MATCH (m:JModule {id: $id}) RETURN count(m)", "id", gone),
                 "precondition: the module is pushed under its repo-relative id");
         long billingNodes = count("MATCH (n) WHERE n.id STARTS WITH $p RETURN count(n)",
-                "p", CanId.applicationId("billing") + "/");
+                "p", CanId.applicationId("billing", "repo") + "/");
         assertTrue(billingNodes > 0, "precondition: the other app is in the same database");
 
         Files.delete(orders.resolve("src/main/java/com/example/Gone.java"));
@@ -481,6 +470,6 @@ class WorkspaceRootNeo4jPushTest {
         assertEquals(1, count("MATCH (m:JModule {id: $id}) RETURN count(m)", "id", billingGone),
                 "a same-named file in another app is a different node and is not touched");
         assertEquals(billingNodes, count("MATCH (n) WHERE n.id STARTS WITH $p RETURN count(n)",
-                "p", CanId.applicationId("billing") + "/"), "the other app's graph is unchanged");
+                "p", CanId.applicationId("billing", "repo") + "/"), "the other app's graph is unchanged");
     }
 }

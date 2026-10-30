@@ -136,20 +136,15 @@ public final class ArtifactDiscovery {
      */
     public static Map<String, JArtifact> discover(
             Path projectDir, String appName, boolean captureText, int textMaxBytes) throws IOException {
-        return discover(projectDir, projectDir, appName, captureText, textMaxBytes);
+        return discover(projectDir, appName, captureText, textMaxBytes, null);
     }
 
-    /**
-     * As above, with each artifact's key, {@code path} and id relative to {@code keyRoot} rather than
-     * {@code projectDir} — {@code --workspace-root}. Ignore rules and classification still see the
-     * {@code projectDir}-relative path, so a rule like {@code gradle/libs.versions.toml} matches the
-     * same files whatever the key root is. {@code projectDir} must be {@code keyRoot} or inside it.
-     */
+    /** Discover application-relative artifacts in the selected identity namespace. */
     public static Map<String, JArtifact> discover(
-            Path projectDir, Path keyRoot, String appName, boolean captureText, int textMaxBytes)
+            Path projectDir, String appName, boolean captureText, int textMaxBytes, String namespace)
             throws IOException {
         Path root = projectDir.toAbsolutePath().normalize();
-        Path keyBase = keyRoot.toAbsolutePath().normalize();
+        Path keyBase = projectDir.toAbsolutePath().normalize();
         List<Path> files;
         try (Stream<Path> walk = Files.walk(root)) {
             files = walk.filter(Files::isRegularFile).sorted().collect(Collectors.toList());
@@ -187,7 +182,7 @@ public final class ArtifactDiscovery {
 
             String keyPosix = keyBase.relativize(file).toString().replace('\\', '/');
             JArtifact artifact = new JArtifact();
-            artifact.setId(CanId.artifactId(appName, keyPosix));
+            artifact.setId(CanId.artifactId(appName, keyPosix, namespace));
             artifact.setPath(keyPosix);
             artifact.setFormat(format);
             artifact.setRoles(roles);

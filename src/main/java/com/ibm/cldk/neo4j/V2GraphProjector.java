@@ -73,6 +73,15 @@ public final class V2GraphProjector {
     private static final List<String> SYMBOL_EXTERNAL = Arrays.asList("JSymbol", "JExternal");
 
     public static GraphRows project(Analysis analysis, String appName) {
+        if (!Integer.valueOf(2).equals(analysis.getIdentityVersion())) {
+            throw new IllegalArgumentException("Unsupported identity_version; regenerate analysis from source");
+        }
+        String rawName = analysis.getApplication().getApplicationName();
+        String namespace = analysis.getApplication().getIdentityNamespace();
+        if (rawName == null || namespace == null
+                || !CanId.applicationId(rawName, namespace).equals(analysis.getApplication().getId())) {
+            throw new IllegalArgumentException("Missing or incompatible application identity; regenerate from source");
+        }
         RowBuilder b = new RowBuilder();
         Map<String, JModule> symbolTable = analysis.getApplication().getSymbolTable();
 
@@ -83,7 +92,10 @@ public final class V2GraphProjector {
                 "application.id is null -- the can:// root id must be stamped by V2Emitter before projection");
         Map<String, Object> appProps = RowBuilder.props();
         appProps.put("id", appId);
-        appProps.put("name", appName);
+        appProps.put("name", rawName);
+        appProps.put("application_name", rawName);
+        appProps.put("identity_namespace", namespace);
+        appProps.put("identity_version", 2);
         appProps.put("schema_version", V2SchemaCatalog.SCHEMA_VERSION);
         if (analysis.getAnalyzer() != null) {
             appProps.put("analyzer_name", analysis.getAnalyzer().getName());

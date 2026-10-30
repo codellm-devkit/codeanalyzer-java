@@ -148,15 +148,9 @@ class CypherWriterStreamingTest {
         // "can://" + appName, so those share an id and are one node regardless.
         String out = CypherWriter.renderCypher(new RowBuilder().finish(), "app");
 
-        assertTrue(out.contains("a.id = 'can://app'"),
+        assertTrue(out.contains("a.id = 'can://app/app'"),
                 "must reach a v2 root of THIS app by its unique id, got: " + out);
-        assertTrue(out.contains("a.id IS NULL AND a.name = 'app'"),
-                "must reach a legacy v1 root (no id) by name, guarded by id IS NULL, got: " + out);
-        // Every `a.name =` in the predicate must be inside the `a.id IS NULL AND ...` guard: an
-        // unguarded one reaches v2 roots this analyzer never minted that carry the same name.
-        assertFalse(out.replace("a.id IS NULL AND a.name = 'app'", "").contains("a.name ="),
-                "a.name must never be matched outside the a.id IS NULL guard -- that would reach "
-                        + "any v2 root carrying this display name, not just this app's, got: " + out);
+        assertFalse(out.contains("a.name ="), "legacy roots require explicit retirement");
         assertFalse(out.contains("JApplication {name:"),
                 "the wipe must not property-match :JApplication by its no-longer-unique name: " + out);
     }
@@ -173,7 +167,7 @@ class CypherWriterStreamingTest {
                     "an unscoped destructive statement must never be rendered, app name: " + name);
         }
         // ... and the guard lives on the prefix itself, so every future caller inherits it.
-        assertEquals("can://app/", CypherWriter.applicationPrefix("app"),
+        assertEquals("can://app/app/", CypherWriter.applicationPrefix("app"),
                 "the swept prefix must end in the separator, or `can://appX` is in scope too");
     }
 }

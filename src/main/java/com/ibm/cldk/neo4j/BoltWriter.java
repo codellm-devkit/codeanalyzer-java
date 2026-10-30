@@ -76,24 +76,13 @@ public final class BoltWriter implements BoltSink {
             "MATCH (x:" + RowBuilder.CAN_NODE + ") WHERE (x.id = $mid OR x.id STARTS WITH $pre) "
                     + "AND NOT x.id IN $keys DETACH DELETE x";
 
-    /**
-     * The orphan prune: matches the application root by its {@code can://} {@code id} when it is a
-     * v2 root (exact, unique-constrained), OR by {@code name} when it is a legacy v1 root --
-     * identifiable because v1 never writes {@code id} (see {@code GraphProjector.java}). An
-     * id-only match would orphan a prior v1 graph instead of pruning it; an ungated
-     * {@code a.name =} disjunct would reach every v2 root carrying that display name -- including
-     * roots this analyzer never minted -- since {@code name} stopped being unique-constrained once
-     * the root was re-keyed. Hence the {@code a.id IS NULL} guard, which confines the name branch
-     * to legacy roots.
-     *
-     * <p>This does <b>not</b> separate two distinct applications sharing an {@code --app-name}:
-     * {@link com.ibm.cldk.schema.CanId#applicationId} is {@code "can://" + appName}, so they share
-     * an id byte-for-byte and are one node. Distinct services need distinct {@code --app-name}
-     * values; no predicate here can recover a distinction the id never encoded.
-     */
+    /** Hashes and orphan pruning are confined to the selected canonical application anchor. */
+    static final String MODULE_HASHES_V2 = "MATCH (a:JApplication {id: $appId})-[:J_HAS_MODULE]->(c:JModule) "
+            + "RETURN c.file_key AS k, c.content_hash AS h";
+
     static final String PRUNE_VANISHED_UNITS_V2 =
             "MATCH (a:JApplication)-[:J_HAS_UNIT|J_HAS_MODULE]->(c) "
-                    + "WHERE (a.id = $appId OR (a.id IS NULL AND a.name = $appName)) "
+                    + "WHERE a.id = $appId "
                     + "AND NOT c.file_key IN $present "
                     + "OPTIONAL MATCH (c)-" + CypherWriter.DESCENDANTS + "->(x) "
                     + "DETACH DELETE x, c RETURN count(c) AS pruned";
@@ -135,13 +124,9 @@ public final class BoltWriter implements BoltSink {
                     + "DETACH DELETE n } IN TRANSACTIONS OF 1000 ROWS "
                     + "RETURN count(*) AS released";
 
-    /**
-     * Where this app's artifacts live: {@code can://<app>/artifact/}, and {@code
-     * can://artifact/<app>/} for those written before 3.1.1 moved the app outermost. Both are
-     * separator-terminated, so {@code app} never reaches {@code apps}.
-     */
+    /** Only the selected application's artifacts; legacy output requires explicit retirement. */
     static List<String> artifactPrefixes(String appId, String appName) {
-        return List.of(appId + "/artifact/", CanId.SCHEME + "artifact/" + appName + "/");
+        return List.of(appId + "/artifact/");
     }
 
     /**
@@ -172,6 +157,21 @@ public final class BoltWriter implements BoltSink {
 
     private static final int BATCH = 1000;
 
+    static void requireCompatibleApplicationIdentity(String id, Map<String, Object> incoming, Map<String, Object> stored) {
+        Object name = incoming.get("application_name");
+        Object namespace = incoming.get("identity_namespace");
+        Object version = incoming.get("identity_version");
+        Object storedVersion = stored.get("identity_version");
+        if (!(name instanceof String) || !(namespace instanceof String)
+                || (!(version instanceof Integer) && !(version instanceof Long)) || ((Number) version).longValue() != 2
+                || !id.equals(CanId.applicationId((String) name, (String) namespace))
+                || (!(storedVersion instanceof Integer) && !(storedVersion instanceof Long)) || ((Number) storedVersion).longValue() != 2
+                || !name.equals(stored.get("application_name"))
+                || !namespace.equals(stored.get("identity_namespace"))) {
+            throw new IllegalArgumentException("Incompatible existing application identity; regenerate graph explicitly");
+        }
+    }
+
     /** Public no-arg constructor: {@link Neo4jEmitter} instantiates this reflectively via {@link BoltSink}. */
     public BoltWriter() {}
 
@@ -198,6 +198,19 @@ public final class BoltWriter implements BoltSink {
         }
 
         void run(GraphRows rows, boolean fullRun) {
+            // Validate the selected canonical anchor before any schema or data mutation.
+            for (NodeRow node : rows.nodes) {
+                if (!node.labels.contains("JApplication") || !RowBuilder.isCanId(node.value)) continue;
+                requireCompatibleApplicationIdentity(node.value, node.props, node.props);
+                try (Session s = session()) {
+                    var records = s.run("MATCH (a:JApplication {id: $id}) RETURN a.identity_version AS identity_version, "
+                                    + "a.application_name AS application_name, a.identity_namespace AS identity_namespace",
+                            Values.parameters("id", node.value)).list();
+                    for (var record : records) {
+                        requireCompatibleApplicationIdentity(node.value, node.props, record.asMap());
+                    }
+                }
+            }
             // 1. schema (DDL runs in its own autocommit transactions). Migrations run FIRST: a
             // constraint an older release created on a property this generation no longer keys on
             // is still live and enforcing, and would fail the very first push (see Schema.MIGRATIONS).
@@ -230,8 +243,9 @@ public final class BoltWriter implements BoltSink {
             // :JCompilationUnit and v2 :JModule.
             Map<String, String> dbHash = new HashMap<>();
             try (Session s = session()) {
-                s.run("MATCH (c) WHERE c:JCompilationUnit OR c:JModule "
-                                + "RETURN c.file_key AS k, c.content_hash AS h").list()
+                boolean v2 = rows.nodes.stream().anyMatch(n -> n.labels.contains("JApplication") && RowBuilder.isCanId(n.value));
+                String query = v2 ? MODULE_HASHES_V2 : "MATCH (c:JCompilationUnit) RETURN c.file_key AS k, c.content_hash AS h";
+                s.run(query, Values.parameters("appId", applicationIdOf(rows))).list()
                         .forEach(rec -> dbHash.put(rec.get("k").asString(null), rec.get("h").asString(null)));
             }
             Set<String> changed = new HashSet<>();
@@ -305,19 +319,9 @@ public final class BoltWriter implements BoltSink {
             if (fullRun) {
                 List<String> present = new ArrayList<>(byUnit.keySet());
                 String appName = appNameOf(rows);
-                String appId = CanId.applicationId(appName);
-                // Checked against the same hazard as the _module purges above (#213) and found
-                // sound, so deliberately left alone: this traversal never leaves java's own graph.
-                // It enters at :JApplication (java-owned, and scoped to this app by its unique
-                // can:// id when the root is v2, or by name when it is a legacy v1 root that never
-                // got an id -- see PRUNE_VANISHED_UNITS_V2's javadoc), hops a java-owned
-                // relationship type, and expands only through DESCENDANTS -- every member of which
-                // is J_-prefixed containment. `c` and `x` are unlabelled but unreachable except
-                // along those edges, and DESCENDANTS deliberately excludes HAS_ARTIFACT, so no
-                // cross-language :Artifact/:ConfigKey and no shared :JPackage/:JAnnotation can be
-                // reached. Do not add a non-containment type to DESCENDANTS without re-checking that.
-                //
-                // Artifacts belong to no unit; reconcileArtifacts (step 3) handles them.
+                String appId = applicationIdOf(rows);
+                // Only Java containment under this exact anchor is traversed. Shared artifacts
+                // are reconciled separately and sibling namespaces are never fallback matches.
                 try (Session s = session()) {
                     long pruned = s.run(PRUNE_VANISHED_UNITS_V2,
                             Values.parameters("present", present, "appId", appId, "appName", appName))
@@ -348,7 +352,7 @@ public final class BoltWriter implements BoltSink {
             args.put("appId", appId);
             args.put("pres", artifactPrefixes(appId, appNameOf(rows)));
             args.put("keep", keep);
-            // Auto-commit, batched: a --workspace-root toggle releases one node per non-source file.
+            // Auto-commit and batched to bound full-run artifact reconciliation.
             // A partial failure is safe; the next full push finishes it.
             try (Session s = session()) {
                 s.run(PURGE_ARTIFACT_EDGES, args).consume();
@@ -437,6 +441,13 @@ public final class BoltWriter implements BoltSink {
          * identically by both generations, so this always yields the true app name to re-derive
          * the id from.
          */
+        private static String applicationIdOf(GraphRows rows) {
+            for (NodeRow n : rows.nodes) {
+                if (n.labels.contains("JApplication") && RowBuilder.isCanId(n.value)) return n.value;
+            }
+            return CanId.applicationId(appNameOf(rows));
+        }
+
         private static String appNameOf(GraphRows rows) {
             for (NodeRow n : rows.nodes) {
                 if (n.labels.get(0).equals("JApplication")) {

@@ -188,6 +188,11 @@ public final class ConfigUses {
      */
     public static Result detect(String appName, Map<String, JModule> modules,
             Map<String, JArtifact> artifacts, int analysisLevel, List<JCallEdge> callGraph) {
+        return detectForApplication(CanId.applicationId(appName), modules, artifacts, analysisLevel, callGraph);
+    }
+
+    public static Result detectForApplication(String appName, Map<String, JModule> modules,
+            Map<String, JArtifact> artifacts, int analysisLevel, List<JCallEdge> callGraph) {
         Map<String, List<JConfigKey>> keysByNamespace = keysByNamespace(artifacts);
 
         List<Read> reads = new ArrayList<>();
@@ -291,7 +296,7 @@ public final class ConfigUses {
                     ? node.getCalleeSignature()
                     : node.getMethodName();
             reads.add(new Read(CanId.ordinalId(callableId, localId),
-                    CanId.externalId(appName, rule.declaringType, signature),
+                    CanId.externalIdForApplication(appName, rule.declaringType, signature),
                     literal, rule.namespaces, false, callableId, localId, keyName));
             return;
         }
@@ -486,6 +491,6 @@ public final class ConfigUses {
     }
 
     private static String ghost(String appName, String annotationType) {
-        return CanId.externalId(appName, annotationType, "value()");
+        return CanId.externalIdForApplication(appName, annotationType, "value()");
     }
 }

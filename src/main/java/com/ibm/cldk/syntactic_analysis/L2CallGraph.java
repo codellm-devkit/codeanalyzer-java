@@ -133,6 +133,10 @@ public final class L2CallGraph {
      */
     public static Result build(
             String appName, Map<String, JModule> modules, List<RtaEndpoint> rtaEdges, boolean includeExternal) {
+        return buildForApplication(CanId.applicationId(appName), modules, rtaEdges, includeExternal);
+    }
+
+    public static Result buildForApplication(String appName, Map<String, JModule> modules, List<RtaEndpoint> rtaEdges, boolean includeExternal) {
         // The type index (named types only) and the set of every callable id in the tree. The latter
         // turns no-dangling, the signature-miss case, and the RTA drop rules into O(1) membership checks.
         Map<String, String> typeIdByBinaryName = new HashMap<>();
@@ -279,7 +283,7 @@ public final class L2CallGraph {
         if (!includeExternal) {
             return null; // case 4 gated off: match v1's application-only graph
         }
-        String externalId = CanId.externalId(appName, hint, signature); // case 4
+        String externalId = CanId.externalIdForApplication(appName, hint, signature); // case 4
         externalSymbols.computeIfAbsent(externalId, k -> externalSymbol(signature, hint, node.isConstructorCall()));
         return externalId;
     }
@@ -314,7 +318,7 @@ public final class L2CallGraph {
             if (!includeExternal) {
                 return; // external target gated off: match v1's application-only graph
             }
-            dst = CanId.externalId(appName, edge.dstType, edge.dstSignature);
+            dst = CanId.externalIdForApplication(appName, edge.dstType, edge.dstSignature);
             externalSymbols.computeIfAbsent(
                     dst, k -> externalSymbol(edge.dstSignature, edge.dstType, edge.dstSignature.startsWith("<init>")));
         }

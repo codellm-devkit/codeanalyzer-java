@@ -55,6 +55,16 @@ class L1CacheTest {
     }
 
     @Test
+    void missingIdentityMarkerCannotReuseOldCache(@TempDir Path cacheDir) throws Exception {
+        L1Cache.save(cacheDir, APP, VERSION, modulesWithHint("hint"));
+        Path path = L1Cache.fileIn(cacheDir);
+        String json = java.nio.file.Files.readString(path).replace("\"identity_version\":2,", "");
+        java.nio.file.Files.writeString(path, json);
+        org.junit.jupiter.api.Assertions.assertTrue(L1Cache.load(cacheDir, APP, VERSION).isEmpty());
+        assertEquals(json, java.nio.file.Files.readString(path), "incompatible persisted input remains read-only");
+    }
+
+    @Test
     void save_thenLoad_preservesTheDeclaringTypeHint(@TempDir Path cacheDir) {
         L1Cache.save(cacheDir, APP, VERSION, modulesWithHint("java.util.Map$Entry"));
         Map<String, JModule> loaded = L1Cache.load(cacheDir, APP, VERSION);

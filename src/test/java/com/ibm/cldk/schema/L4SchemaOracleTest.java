@@ -53,11 +53,13 @@ class L4SchemaOracleTest {
                 + "\"source\":\"\","
                 + "\"types\":{\"Foo\":" + type + "}}";
         return "{"
+                + "\"identity_version\":2,"
                 + "\"schema_version\":\"2.0.0\","
                 + "\"language\":\"java\","
                 + "\"max_level\":4,"
                 + "\"application\":{"
                 + "\"id\":\"" + APP_ID + "\","
+                + "\"application_name\":\"myapp\",\"identity_namespace\":\"myapp\","
                 + "\"kind\":\"application\","
                 + "\"symbol_table\":{\"Foo.java\":" + module + "}}}";
     }

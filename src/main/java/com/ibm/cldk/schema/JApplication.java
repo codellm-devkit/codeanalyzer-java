@@ -9,6 +9,8 @@ import lombok.Data;
 @Data
 public class JApplication {
     private String id;
+    private String applicationName;
+    private String identityNamespace;
     private String kind = "application";
     private Map<String, JModule> symbolTable = new LinkedHashMap<>();
 

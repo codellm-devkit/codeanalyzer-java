@@ -121,17 +121,13 @@ public final class L1Extractor {
             Path projectRoot, String appName, Path dependencyDir, Map<String, JModule> cached,
             int analysisLevel, int graphFieldDepth, String l3Engine, JEntrypointReport entrypointReport)
             throws IOException {
-        return extractAll(projectRoot, projectRoot, appName, dependencyDir, cached, analysisLevel,
+        return extractAllForApplication(projectRoot, CanId.applicationId(appName), dependencyDir, cached, analysisLevel,
                 graphFieldDepth, l3Engine, entrypointReport);
     }
 
-    /**
-     * As above, with file keys (and so every module id below them) relative to {@code keyRoot} rather
-     * than {@code projectRoot} — {@code --workspace-root}. Source discovery still runs over
-     * {@code projectRoot}, which the caller guarantees is {@code keyRoot} or inside it.
-     */
-    public static Map<String, JModule> extractAll(
-            Path projectRoot, Path keyRoot, String appName, Path dependencyDir, Map<String, JModule> cached,
+    /** Extract application-relative modules under an already validated canonical application root. */
+    public static Map<String, JModule> extractAllForApplication(
+            Path projectRoot, String applicationId, Path dependencyDir, Map<String, JModule> cached,
             int analysisLevel, int graphFieldDepth, String l3Engine, JEntrypointReport entrypointReport)
             throws IOException {
         // JavaParser's collection strategy silently finds zero source roots for a path with a `.`
@@ -153,12 +149,11 @@ public final class L1Extractor {
         // Collect into a sorted map first: directory listings are not ordered, and output must not
         // depend on traversal order.
         Map<String, JModule> modules = new TreeMap<>();
-        String applicationId = CanId.applicationId(appName);
         JavaParser parser = new JavaParser(config);
         int reused = 0;
         for (SourceRoot sourceRoot : sourceRoots) {
             for (Path path : javaFilesUnder(sourceRoot.getRoot())) {
-                String fileKey = fileKey(keyRoot, path);
+                String fileKey = fileKey(projectRoot, path);
                 // Read the file's own text rather than printing the AST: `span.bytes` must index the
                 // real file, byte for byte.
                 String source = Files.readString(path, StandardCharsets.UTF_8);

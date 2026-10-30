@@ -26,6 +26,28 @@ import org.junit.jupiter.api.Test;
 class BoltWriterPurgeTest {
 
     @Test
+    void existingAnchorMustHaveExactMarkerAndRawIdentity() {
+        var identity = java.util.Map.<String, Object>of("identity_version", 2,
+                "application_name", "app", "identity_namespace", "team");
+        BoltWriter.requireCompatibleApplicationIdentity("can://team/app", identity, identity);
+        for (var legacy : java.util.List.of(java.util.Map.<String, Object>of(),
+                java.util.Map.<String, Object>of("identity_version", 2.5, "application_name", "app", "identity_namespace", "team"),
+                java.util.Map.<String, Object>of("identity_version", 1, "application_name", "app", "identity_namespace", "team"),
+                java.util.Map.<String, Object>of("identity_version", 2, "application_name", "app", "identity_namespace", "other"))) {
+            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                    () -> BoltWriter.requireCompatibleApplicationIdentity("can://team/app", identity, legacy));
+        }
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> BoltWriter.requireCompatibleApplicationIdentity("can://team/app", java.util.Map.of(), identity));
+    }
+
+    @Test
+    void incrementalHashesAreScopedToSelectedApplication() {
+        assertTrue(BoltWriter.MODULE_HASHES_V2.contains("{id: $appId}"));
+        assertTrue(BoltWriter.MODULE_HASHES_V2.contains("J_HAS_MODULE"));
+    }
+
+    @Test
     void thePurgeIsScopedByCanIdPrefixAndNotByTheRetiredProperty() {
         for (String stmt : new String[] {BoltWriter.PURGE_MODULE_EDGES_V2, BoltWriter.PURGE_VANISHED_NODES_V2}) {
             assertFalse(stmt.contains("_module"),
@@ -63,26 +85,12 @@ class BoltWriterPurgeTest {
     }
 
     @Test
-    void theOrphanPruneMatchesAV2RootByIdAndALegacyV1RootByNameButNotAnotherApplication() {
-        // v2 roots are keyed on `id` -- unique-constrained and exact -- but legacy v1 roots
-        // (GraphProjector.java) never write `id`, only `name`. An id-only match orphans a prior v1
-        // graph instead of pruning it; an ungated `a.name =` disjunct reaches every v2 root
-        // carrying that display name, including roots this analyzer never minted, since `name`
-        // stopped being unique once the id re-key landed. Note this is scoping hygiene, not
-        // disambiguation: CanId.applicationId is "can://" + appName, so two services sharing an
-        // --app-name share an id and are one node either way.
+    void orphanPruneNeverFallsBackToLegacyName() {
         String stmt = BoltWriter.PRUNE_VANISHED_UNITS_V2;
-        assertTrue(stmt.contains("a.id = $appId"),
-                "must reach a v2 root of THIS app by its unique id: " + stmt);
-        assertTrue(stmt.contains("a.id IS NULL AND a.name = $appName"),
-                "must reach a legacy v1 root (no id) by name, guarded by id IS NULL: " + stmt);
-        // Every `a.name =` must sit inside the `a.id IS NULL` guard: an unguarded one reaches v2
-        // roots this analyzer never minted that merely carry the same display name.
-        assertFalse(stmt.replace("a.id IS NULL AND a.name = $appName", "").contains("a.name ="),
-                "a.name must never be matched outside the a.id IS NULL guard -- that would reach "
-                        + "any v2 root carrying this display name, not just this app's: " + stmt);
-        assertFalse(stmt.contains("{name:"),
-                "the prune must not property-match :JApplication by its no-longer-unique name: " + stmt);
+        assertTrue(stmt.contains("a.id = $appId"));
+        assertFalse(stmt.contains("a.name"));
+        org.junit.jupiter.api.Assertions.assertEquals(java.util.List.of("can://team/app/artifact/"),
+                BoltWriter.artifactPrefixes("can://team/app", "app"));
     }
 
     @Test

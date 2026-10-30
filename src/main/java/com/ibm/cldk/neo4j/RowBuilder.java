@@ -67,13 +67,24 @@ public final class RowBuilder {
     }
 
     /**
-     * Upsert a node. Re-seeing the same {@code (labels[0], value)} merges props (last write wins)
-     * and unions labels.
+     * Upsert a node. Canonical ids deduplicate across labels, unioning labels and compatible
+     * properties. Conflicting canonical properties are rejected. Legacy keys retain label scope.
      */
     public NodeRef node(List<String> labels, String keyProp, String value, Map<String, Object> props) {
-        String id = labels.get(0) + " " + value;
+        String id = isCanId(value) ? value : labels.get(0) + " " + value;
         NodeRow existing = nodes.get(id);
         if (existing != null) {
+            if (isCanId(value)) {
+                if (!existing.keyProp.equals(keyProp)) {
+                    throw new IllegalArgumentException("Conflicting canonical entity key: " + value);
+                }
+                for (var entry : props.entrySet()) {
+                    if (existing.props.containsKey(entry.getKey())
+                            && !java.util.Objects.equals(existing.props.get(entry.getKey()), entry.getValue())) {
+                        throw new IllegalArgumentException("Conflicting canonical entity property " + entry.getKey() + ": " + value);
+                    }
+                }
+            }
             existing.props.putAll(props);
             for (String l : labels) {
                 if (!existing.labels.contains(l)) {
@@ -165,6 +176,10 @@ public final class RowBuilder {
         deferred.add(new EdgeRow(type, from, to, props));
     }
 
+    private static String endpointKey(NodeRef ref) {
+        return isCanId(ref.value) ? ref.value : ref.label + ":" + ref.value;
+    }
+
     public GraphRows finish() {
         for (EdgeRow e : deferred) {
             if (keys.contains(e.from.value) && keys.contains(e.to.value)) {
@@ -175,8 +190,8 @@ public final class RowBuilder {
         // (type, source, target[, _k]), last-write-wins on props (mirrors `MERGE (a)-[r]->(b) SET r += p`).
         Map<String, EdgeRow> uniqueEdges = new LinkedHashMap<>();
         for (EdgeRow e : edges) {
-            uniqueEdges.put(e.type + "|" + e.from.label + ":" + e.from.value
-                    + "|" + e.to.label + ":" + e.to.value
+            uniqueEdges.put(e.type + "|" + endpointKey(e.from)
+                    + "|" + endpointKey(e.to)
                     + (e.key == null ? "" : "|" + e.key), e);
         }
 

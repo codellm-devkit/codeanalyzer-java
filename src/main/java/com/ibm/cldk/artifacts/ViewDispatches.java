@@ -110,6 +110,11 @@ public final class ViewDispatches {
 
     public static Result detect(String appName, Map<String, JModule> modules,
             Map<String, JArtifact> artifacts, int analysisLevel, List<JCallEdge> callGraph) {
+        return detectForApplication(CanId.applicationId(appName), modules, artifacts, analysisLevel, callGraph);
+    }
+
+    public static Result detectForApplication(String appName, Map<String, JModule> modules,
+            Map<String, JArtifact> artifacts, int analysisLevel, List<JCallEdge> callGraph) {
         List<Site> sites = new ArrayList<>();
         if (modules != null) {
             for (JModule module : modules.values()) {
@@ -195,7 +200,7 @@ public final class ViewDispatches {
         }
         String signature = node.getCalleeSignature() != null ? node.getCalleeSignature() : method;
         return new Site(CanId.ordinalId(callableId, localId),
-                CanId.externalId(appName, receiver, signature), via, target, callableId, localId);
+                CanId.externalIdForApplication(appName, receiver, signature), via, target, callableId, localId);
     }
 
     /**
