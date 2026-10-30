@@ -26,6 +26,22 @@ import org.junit.jupiter.api.Test;
 class BoltWriterPurgeTest {
 
     @Test
+    void fullRunPruneSelectsActualSchemaFamilyAndProtectsSharedDisplayNames() {
+        var legacy = GraphProjector.project(java.util.Map.of(), null, "shared");
+        String query = BoltWriter.orphanPruneQuery(legacy);
+        assertTrue(query.contains("a.id IS NULL AND a.name = $appName"));
+        assertTrue(query.contains("[:J_HAS_UNIT]"));
+        assertTrue(query.contains("AND NOT c.file_key IN $present"));
+        assertTrue(query.contains("DETACH DELETE x, c"));
+        assertFalse(query.contains("a.id = $appId"));
+        var analysis = com.ibm.cldk.schema.V2Emitter.emit("shared", 1, java.util.Map.of(), null,
+                null, null, null, null, null, null, "team");
+        String canonical = BoltWriter.orphanPruneQuery(V2GraphProjector.project(analysis, "shared"));
+        assertTrue(canonical.contains("a.id = $appId"));
+        assertFalse(canonical.contains("a.name"));
+    }
+
+    @Test
     void existingAnchorMustHaveExactMarkerAndRawIdentity() {
         var identity = java.util.Map.<String, Object>of("identity_version", 2,
                 "application_name", "app", "identity_namespace", "team");

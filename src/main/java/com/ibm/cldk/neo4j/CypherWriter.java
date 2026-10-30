@@ -92,7 +92,8 @@ public final class CypherWriter {
         s.add("");
         s.add("// ── wipe this project's prior subgraph (packages/annotations are shared and survive; "
                 + "artifacts/config keys are inside the app prefix and get rebuilt) ──");
-        s.add(wipe(applicationIdOf(rows, appName)));
+        String legacyName = legacyApplicationName(rows);
+        s.add(legacyName != null ? wipeLegacy(legacyName) : wipe(applicationIdOf(rows, appName)));
 
         s.add("");
         s.add("// ── nodes ──");
@@ -141,6 +142,23 @@ public final class CypherWriter {
         // The trailing separator is not cosmetic: a bare `STARTS WITH 'can://app'` would also match
         // `can://appX`, a different application.
         return CanId.applicationId(appName) + "/";
+    }
+
+    /** Actual name-keyed v1 rows select legacy cleanup; v2 never falls back by display name. */
+    static String legacyApplicationName(GraphRows rows) {
+        for (NodeRow node : rows.nodes) {
+            if (node.labels.contains("JApplication") && "name".equals(node.keyProp)) {
+                return node.value;
+            }
+        }
+        return null;
+    }
+
+    private static String wipeLegacy(String appName) {
+        return "MATCH (a:JApplication) WHERE a.id IS NULL AND a.name = " + cypherValue(appName) + "\n"
+                + "OPTIONAL MATCH (a)-[:J_HAS_UNIT]->(c)\n"
+                + "OPTIONAL MATCH (c)-" + DESCENDANTS + "->(x)\n"
+                + "DETACH DELETE x, c, a;\n";
     }
 
     /** Canonical roots come from projected rows, preserving the selected namespace. */

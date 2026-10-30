@@ -87,6 +87,18 @@ public final class BoltWriter implements BoltSink {
                     + "OPTIONAL MATCH (c)-" + CypherWriter.DESCENDANTS + "->(x) "
                     + "DETACH DELETE x, c RETURN count(c) AS pruned";
 
+    static final String PRUNE_VANISHED_UNITS_V1 =
+            "MATCH (a:JApplication)-[:J_HAS_UNIT]->(c) "
+                    + "WHERE a.id IS NULL AND a.name = $appName "
+                    + "AND NOT c.file_key IN $present "
+                    + "OPTIONAL MATCH (c)-" + CypherWriter.DESCENDANTS + "->(x) "
+                    + "DETACH DELETE x, c RETURN count(c) AS pruned";
+
+    static String orphanPruneQuery(GraphRows rows) {
+        return CypherWriter.legacyApplicationName(rows) != null
+                ? PRUNE_VANISHED_UNITS_V1 : PRUNE_VANISHED_UNITS_V2;
+    }
+
     /**
      * Drop every Java-owned edge on this app's artifacts and config keys so the run rebuilds them:
      * {@code HAS_ARTIFACT} from a {@code :JApplication}, {@code DECLARES_DEPENDENCY}/{@code LOCKS}
@@ -313,9 +325,8 @@ public final class BoltWriter implements BoltSink {
             }
             upsertEdges(edges);
 
-            // 6. orphan prune — only safe on a full run. Reaches both generations' per-file nodes
-            // through the shared application anchor, so a v2 push also prunes a prior v1 graph's
-            // units (and other applications in the database are never touched).
+            // 6. Full-run orphan pruning uses the actual incoming schema family. A v1 request
+            // selects only an id-less legacy anchor; v2 selects only its exact canonical anchor.
             if (fullRun) {
                 List<String> present = new ArrayList<>(byUnit.keySet());
                 String appName = appNameOf(rows);
@@ -323,7 +334,7 @@ public final class BoltWriter implements BoltSink {
                 // Only Java containment under this exact anchor is traversed. Shared artifacts
                 // are reconciled separately and sibling namespaces are never fallback matches.
                 try (Session s = session()) {
-                    long pruned = s.run(PRUNE_VANISHED_UNITS_V2,
+                    long pruned = s.run(orphanPruneQuery(rows),
                             Values.parameters("present", present, "appId", appId, "appName", appName))
                             .single().get("pruned").asLong(0);
                     Log.info("neo4j(bolt): pruned " + pruned + " vanished unit(s)");
