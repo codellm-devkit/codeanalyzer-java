@@ -20,6 +20,15 @@ class CanonicalIdentityRowsTest {
     }
 
     @Test
+    void ordinaryCanonicalDisplayPropertyRefinementIsRejected() {
+        RowBuilder builder = new RowBuilder();
+        String id = "can://team/app/java/Foo.java/Foo";
+        builder.node(List.of("JSymbol"), "id", id, Map.of("name", "Foo"));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> builder.node(List.of("JSymbol"), "id", id, Map.of("name", "refined Foo")));
+    }
+
+    @Test
     void canonicalIdsDeduplicateAcrossLabelsWithoutCollapsingEdgeKindsOrSites() throws Exception {
         var fixture = JsonParser.parseReader(new InputStreamReader(
                 getClass().getResourceAsStream("/identity/namespaces.json"), StandardCharsets.UTF_8))

@@ -28,7 +28,9 @@ import java.util.Set;
  * a target that never materialized are dropped (the "edge-only-when-resolved" rule).
  *
  * <p>This is the in-memory analog of {@code MERGE (n:Label {key}) SET n += props}: re-seeing the
- * same (mergeLabel, value) merges props (last write wins) and unions labels.
+ * same canonical ID merges compatible properties and unions labels. A differing value for any
+ * existing node property, including an ordinary display property, is rejected rather than refined.
+ * Noncanonical rows retain their label/key identity.
  */
 public final class RowBuilder {
 
