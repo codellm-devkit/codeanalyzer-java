@@ -23,7 +23,7 @@ from importlib import resources
 from pathlib import Path
 from typing import List
 
-__version__ = "0.0.0"
+__version__ = "3.4.0"
 
 __all__ = ["jar_path", "java_path", "command", "__version__"]
 
