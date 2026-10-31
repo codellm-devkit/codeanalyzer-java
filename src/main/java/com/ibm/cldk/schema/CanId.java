@@ -4,7 +4,7 @@ package com.ibm.cldk.schema;
  * Canonical {@code can://} id construction for schema v2.
  *
  * <p>Durable ids (&ge; callable) are containment paths
- * {@code can://<app>/java/<file>/<type>/<callable-signature>}; ordinal ids (&lt; callable) are
+ * {@code can://<namespace>/<app>/java/<file>/<type>/<callable-signature>}; ordinal ids (&lt; callable) are
  * {@code <callable-id>@<tag>} where {@code <tag>} is a source position {@code line:col} (real
  * nodes) or a synthetic tag (e.g. {@code entry}). Pure functions; ids are opaque handles (the
  * {@code <file>} segment itself may contain {@code /}).
@@ -19,9 +19,44 @@ public final class CanId {
     /** This analyzer's language segment, which now sits INSIDE the app rather than above it. */
     public static final String LANG = "java";
 
-    /** {@code can://<app>} — the application root, and the prefix every id below it shares. */
+    /** {@code can://<namespace>/<app>} — the application root, and the prefix every id below it shares. */
     public static String applicationId(String appName) {
-        return SCHEME + appName;
+        return applicationId(appName, null);
+    }
+
+    public static String applicationId(String appName, String namespace) {
+        return SCHEME + encodeName(namespace == null ? appName : namespace) + "/" + encodeName(appName);
+    }
+
+    private static String encodeName(String value) {
+        if (value == null || value.isEmpty() || value.equals(".") || value.equals("..")) {
+            throw new IllegalArgumentException("Invalid identity name");
+        }
+        boolean whitespace = true;
+        for (int i = 0; i < value.length();) {
+            int cp = value.codePointAt(i);
+            if (Character.isISOControl(cp) || cp == '/' || cp == '\\'
+                    || cp >= 0xD800 && cp <= 0xDFFF) {
+                throw new IllegalArgumentException("Invalid identity name");
+            }
+            whitespace &= Character.isWhitespace(cp) || Character.isSpaceChar(cp);
+            i += Character.charCount(cp);
+        }
+        if (whitespace) {
+            throw new IllegalArgumentException("Identity name must not be whitespace-only");
+        }
+        StringBuilder out = new StringBuilder();
+        for (byte b : value.getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
+            int c = b & 255;
+            if (c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+                    || c == '-' || c == '.' || c == '_' || c == '~') {
+                out.append((char) c);
+            } else {
+                out.append('%').append("0123456789ABCDEF".charAt(c >>> 4))
+                        .append("0123456789ABCDEF".charAt(c & 15));
+            }
+        }
+        return out.toString();
     }
 
     /** {@code <applicationId>/java/<relative-file-key>} (separators normalized to {@code /}). */
@@ -41,7 +76,7 @@ public final class CanId {
     }
 
     /**
-     * {@code can://<app>/@external/<binary-type>/<signature>} — a callable outside the project. The
+     * {@code can://<namespace>/<app>/@external/<binary-type>/<signature>} — a callable outside the project. The
      * type is a <em>binary</em> name ({@code java.util.Map$Entry}) so the id is unambiguous and joins
      * WALA natively.
      *
@@ -53,23 +88,35 @@ public final class CanId {
      * codeanalyzer-python follows it, and so does this.
      *
      * <p>Consequently an external id does <em>not</em> match the {@code canId} shape
-     * ({@code ^can://[^/]+/java/}): the analysis schema's {@code externalCanId} is a separate
+     * ({@code ^can://[^/]+/[^/]+/java/}): the analysis schema's {@code externalCanId} is a separate
      * definition, and the two sites that hold either — a call edge's {@code dst} and a body node's
      * {@code callee} — {@code $ref} the union, not a widened {@code canId}.
      */
     public static String externalId(String appName, String binaryType, String signature) {
-        return applicationId(appName) + "/@external/" + binaryType + "/" + signature;
+        return externalId(appName, binaryType, signature, null);
+    }
+
+    public static String externalId(String appName, String binaryType, String signature, String namespace) {
+        return externalIdForApplication(applicationId(appName, namespace), binaryType, signature);
+    }
+
+    public static String externalIdForApplication(String applicationId, String binaryType, String signature) {
+        return applicationId + "/@external/" + binaryType + "/" + signature;
     }
 
     /**
-     * {@code can://<app>/artifact/<rel-path>} — a language-neutral artifact id, nested under the app
+     * {@code can://<namespace>/<app>/artifact/<rel-path>} — a language-neutral artifact id, nested under the app
      * rather than under a language. The {@code artifact} segment is deliberately chosen over
      * {@code java} so a sibling-language analyzer scanning the same repository lands on the same
      * node rather than a duplicate. {@code CypherWriter.DESCENDANTS} cites that sharing by name as
      * the reason the artifact/config-key subtree stays outside every wipe.
      */
     public static String artifactId(String appName, String relPath) {
-        return applicationId(appName) + "/artifact/" + relPath;
+        return artifactId(appName, relPath, null);
+    }
+
+    public static String artifactId(String appName, String relPath, String namespace) {
+        return applicationId(appName, namespace) + "/artifact/" + relPath;
     }
 
     /**

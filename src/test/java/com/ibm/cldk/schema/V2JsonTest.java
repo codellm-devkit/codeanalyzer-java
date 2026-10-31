@@ -46,6 +46,19 @@ class V2JsonTest {
         return V2Json.compact().toJsonTree(V2Emitter.emit("myapp", 1, modules)).getAsJsonObject();
     }
 
+    @Test
+    void identityMetadataIsRequiredAndNotDefaultedWhenReadingOldPayloads() {
+        JsonObject json = payload();
+        assertEquals(2, json.get("identity_version").getAsInt());
+        assertEquals("myapp", json.getAsJsonObject("application").get("application_name").getAsString());
+        assertEquals("myapp", json.getAsJsonObject("application").get("identity_namespace").getAsString());
+        json.remove("identity_version");
+        Analysis legacy = V2Json.compact().fromJson(json, Analysis.class);
+        assertNull(legacy.getIdentityVersion());
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> com.ibm.cldk.neo4j.V2GraphProjector.project(legacy, "myapp"));
+    }
+
     private static JsonObject module() {
         return payload().getAsJsonObject("application").getAsJsonObject("symbol_table").getAsJsonObject(FILE_KEY);
     }

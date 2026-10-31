@@ -44,11 +44,13 @@ class L2SchemaOracleTest {
     /** Wrap application-level members in an otherwise-minimal conformant envelope. */
     private static String payload(String applicationMembers) {
         return "{"
+                + "\"identity_version\":2,"
                 + "\"schema_version\":\"2.0.0\","
                 + "\"language\":\"java\","
                 + "\"max_level\":2,"
                 + "\"application\":{"
                 + "\"id\":\"" + APP_ID + "\","
+                + "\"application_name\":\"myapp\",\"identity_namespace\":\"myapp\","
                 + "\"kind\":\"application\","
                 + "\"symbol_table\":{}"
                 + (applicationMembers.isEmpty() ? "" : "," + applicationMembers)

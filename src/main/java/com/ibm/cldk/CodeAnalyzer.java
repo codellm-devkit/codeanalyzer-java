@@ -31,6 +31,7 @@ import com.ibm.cldk.javaee.EntrypointScan;
 import com.ibm.cldk.neo4j.BoltConfig;
 import com.ibm.cldk.neo4j.Neo4jEmitter;
 import com.ibm.cldk.schema.Analysis;
+import com.ibm.cldk.schema.CanId;
 import com.ibm.cldk.schema.JArtifact;
 import com.ibm.cldk.schema.JDependency;
 import com.ibm.cldk.schema.JEntrypointReport;
@@ -146,6 +147,9 @@ public class CodeAnalyzer implements Runnable {
     // values between CommandLine instances in the same JVM. New flags do not add to that.
     private String schema = "v2";
 
+    @Option(names = "--namespace", description = "Identity namespace (defaults to application name)")
+    private String namespace;
+
     @Option(names = {"-c",
             "--cache-dir" }, description = "Directory holding the incremental analysis cache. When set, "
                     + "unchanged files are reused from analysis_cache.json instead of being reparsed.")
@@ -260,6 +264,11 @@ public class CodeAnalyzer implements Runnable {
         if (isV2Schema()) {
             analyzeV2();
             return;
+        }
+        if (namespace != null) {
+            // v1 keys are absolute paths, so there is nothing for a workspace root to relativize.
+            throw new ParameterException(spec.commandLine(),
+                    "error: --namespace is not supported with --schema v1");
         }
 
         JsonObject combinedJsonObject = new JsonObject();
@@ -399,9 +408,11 @@ public class CodeAnalyzer implements Runnable {
      * which {@code --artifact-text}/{@code --artifact-text-max-bytes} may have emptied or truncated —
      * delegates to {@link DependencyView#readFromDisk} rather than re-reading the file itself, so that
      * from-disk logic exists exactly once in this codebase.
+     *
+     * @param keyRoot the directory artifact paths are relative to (the workspace root, else --input)
      */
-    private static String readFully(JArtifact artifact) {
-        return DependencyView.readFromDisk(Paths.get(input), artifact.getPath());
+    private static String readFully(Path keyRoot, JArtifact artifact) {
+        return DependencyView.readFromDisk(keyRoot, artifact.getPath());
     }
 
     /**
@@ -455,10 +466,16 @@ public class CodeAnalyzer implements Runnable {
         if (input == null) {
             throw new ParameterException(spec.commandLine(), "error: --input is required");
         }
-
-        String application = appName != null && !appName.isBlank()
-                ? appName
-                : Paths.get(input).toAbsolutePath().normalize().getFileName().toString();
+        Path inputRoot = Paths.get(input).toAbsolutePath().normalize();
+        Path keyRoot = inputRoot;
+        String application = spec.commandLine().getParseResult().hasMatchedOption("--app-name")
+                ? appName : inputRoot.getFileName().toString();
+        String applicationId;
+        try {
+            applicationId = CanId.applicationId(application, namespace);
+        } catch (IllegalArgumentException e) {
+            throw new ParameterException(spec.commandLine(), "error: invalid --app-name or --namespace: " + e.getMessage());
+        }
 
         // Always attempt library type resolution: without the dependency jars on the solver's path,
         // third-party types degrade to bare spellings (`Model` rather than `org.springframework.ui.Model`)
@@ -485,7 +502,7 @@ public class CodeAnalyzer implements Runnable {
         // L1 artifact that must not carry L3 overlays. So bypass the cache entirely at level >= 3.
         Map<String, JModule> cached = (eager || analysisLevel >= 3)
                 ? new java.util.LinkedHashMap<>()
-                : L1Cache.load(cache, application, version);
+                : L1Cache.load(cache, applicationId, version);
 
         Map<String, JModule> modules;
         List<L2CallGraph.RtaEndpoint> rtaEndpoints = null;
@@ -496,8 +513,8 @@ public class CodeAnalyzer implements Runnable {
         // is what turns them into a non-zero exit for a caller that cannot read stderr.
         List<String> degraded = new ArrayList<>();
         try {
-            modules = L1Extractor.extractAll(
-                    Paths.get(input), application, dependencyDir, cached,
+            modules = L1Extractor.extractAllForApplication(
+                    Paths.get(input), applicationId, dependencyDir, cached,
                     analysisLevel, graphFieldDepth, l3Engine, entrypointReport);
             // The WALA L3 engine needs the RTA build; --no-rta suppresses it, so a level-3 wala run with
             // --no-rta would silently carry no overlays. Warn rather than degrade without a signal.
@@ -559,7 +576,7 @@ public class CodeAnalyzer implements Runnable {
         // (an L2 refinement) must not be persisted into it. At level >= 3 the tree carries L3 overlays,
         // which are not an L1 artifact, so the cache is not written.
         if (analysisLevel < 3) {
-            L1Cache.save(cache, application, version, modules);
+            L1Cache.save(cache, applicationId, version, modules);
         }
 
         // The repository-artifact layer (build manifests, config files, declared dependencies) sits
@@ -567,13 +584,13 @@ public class CodeAnalyzer implements Runnable {
         // -- but unlike them it is L1 data and runs at EVERY analysis level, so it is computed here,
         // ahead of the level gate, rather than inside either branch of it.
         Map<String, JArtifact> artifacts =
-                ArtifactDiscovery.discover(Paths.get(input), application, artifactText, artifactTextMaxBytes);
-        List<JDependency> dependencies = DependencyView.build(Paths.get(input), artifacts);
+                ArtifactDiscovery.discover(inputRoot, application, artifactText, artifactTextMaxBytes, namespace);
+        List<JDependency> dependencies = DependencyView.build(keyRoot, artifacts);
         for (JArtifact a : artifacts.values()) {
             if (ConfigKeys.isEligible(a)) {
                 // Re-read from disk: `source` may be truncated or suppressed, and extraction
                 // must not silently degrade with a capture flag.
-                ConfigKeys.Result r = ConfigKeys.extract(a, readFully(a), artifactText);
+                ConfigKeys.Result r = ConfigKeys.extract(a, readFully(keyRoot, a), artifactText);
                 a.setConfigKeys(r.keys);
                 // A pre-existing "partial" from the dependency pass is never overwritten.
                 if (!r.ok) {
@@ -589,7 +606,7 @@ public class CodeAnalyzer implements Runnable {
         // engine-free, so they run whenever analysisLevel >= 4 regardless of the WALA build's fate.
         Analysis analysis;
         if (analysisLevel >= 2) {
-            L2CallGraph.Result l2 = L2CallGraph.build(application, modules, rtaEndpoints, externalCalls);
+            L2CallGraph.Result l2 = L2CallGraph.buildForApplication(applicationId, modules, rtaEndpoints, externalCalls);
             // SdgVertices needs the callee ids L2CallGraph.build just backfilled onto call body nodes,
             // and no dependency jars, so it runs here rather than inside the try block above.
             SdgVertices.Result sdg = null;
@@ -604,10 +621,10 @@ public class CodeAnalyzer implements Runnable {
             analysis = V2Emitter.emit(application, analysisLevel, modules, version,
                     l2.callGraph(), l2.externalSymbols(),
                     sdg == null ? null : sdg.paramIn, sdg == null ? null : sdg.paramOut,
-                    artifacts, dependencies);
+                    artifacts, dependencies, namespace);
         } else {
             analysis = V2Emitter.emit(application, analysisLevel, modules, version,
-                    null, null, null, null, artifacts, dependencies);
+                    null, null, null, null, artifacts, dependencies, namespace);
         }
 
         // Enforced here, after every overlay pass has had its chance and before anything is written:
@@ -629,7 +646,7 @@ public class CodeAnalyzer implements Runnable {
         // Config reads join the L1 tree to the artifact layer's declared keys, so it runs after both
         // exist and at every analysis level -- the literal tier needs no call graph. Absence means
         // "no fact", so an empty result leaves both keys off the envelope.
-        ConfigUses.Result configReads = ConfigUses.detect(application, modules, artifacts,
+        ConfigUses.Result configReads = ConfigUses.detectForApplication(applicationId, modules, artifacts,
                 analysisLevel, analysis.getApplication().getCallGraph());
         if (!configReads.uses.isEmpty()) {
             analysis.getApplication().setConfigUses(configReads.uses);
@@ -640,7 +657,7 @@ public class CodeAnalyzer implements Runnable {
 
         // View dispatches (#259) join dispatch sites to the artifact layer's view templates -- the
         // same shape as config reads, at every level, with the dataflow tiers widening from -a 3.
-        ViewDispatches.Result views = ViewDispatches.detect(application, modules, artifacts,
+        ViewDispatches.Result views = ViewDispatches.detectForApplication(applicationId, modules, artifacts,
                 analysisLevel, analysis.getApplication().getCallGraph());
         if (!views.dispatches.isEmpty()) {
             analysis.getApplication().setViewDispatches(views.dispatches);

@@ -28,6 +28,6 @@ public class L3WalaOverlaysTest {
 
         String applicationId = invokeDeriveApplicationId(modules);
 
-        assertEquals("can://unknown", applicationId);
+        assertEquals("can://unknown/unknown", applicationId);
     }
 }

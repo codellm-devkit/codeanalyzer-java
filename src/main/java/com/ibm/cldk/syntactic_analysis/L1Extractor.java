@@ -121,6 +121,15 @@ public final class L1Extractor {
             Path projectRoot, String appName, Path dependencyDir, Map<String, JModule> cached,
             int analysisLevel, int graphFieldDepth, String l3Engine, JEntrypointReport entrypointReport)
             throws IOException {
+        return extractAllForApplication(projectRoot, CanId.applicationId(appName), dependencyDir, cached, analysisLevel,
+                graphFieldDepth, l3Engine, entrypointReport);
+    }
+
+    /** Extract application-relative modules under an already validated canonical application root. */
+    public static Map<String, JModule> extractAllForApplication(
+            Path projectRoot, String applicationId, Path dependencyDir, Map<String, JModule> cached,
+            int analysisLevel, int graphFieldDepth, String l3Engine, JEntrypointReport entrypointReport)
+            throws IOException {
         // JavaParser's collection strategy silently finds zero source roots for a path with a `.`
         // element (`-i .` arrives here as exactly that), so normalize before discovery.
         projectRoot = projectRoot.toAbsolutePath().normalize();
@@ -140,7 +149,6 @@ public final class L1Extractor {
         // Collect into a sorted map first: directory listings are not ordered, and output must not
         // depend on traversal order.
         Map<String, JModule> modules = new TreeMap<>();
-        String applicationId = CanId.applicationId(appName);
         JavaParser parser = new JavaParser(config);
         int reused = 0;
         for (SourceRoot sourceRoot : sourceRoots) {
@@ -249,9 +257,9 @@ public final class L1Extractor {
         return solver;
     }
 
-    /** The {@code symbol_table} key: path relative to the project root, always {@code /}-separated. */
-    private static String fileKey(Path projectRoot, Path file) {
-        Path relative = projectRoot.toAbsolutePath().normalize().relativize(file.toAbsolutePath().normalize());
+    /** The {@code symbol_table} key: path relative to the key root, always {@code /}-separated. */
+    private static String fileKey(Path keyRoot, Path file) {
+        Path relative = keyRoot.toAbsolutePath().normalize().relativize(file.toAbsolutePath().normalize());
         return relative.toString().replace('\\', '/');
     }
 

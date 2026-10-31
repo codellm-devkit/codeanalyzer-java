@@ -126,6 +126,7 @@ Usage: codeanalyzer [-hvV] [--no-build] [--no-clean-dependencies]
                     [-a=<analysisLevel>] [-b=<build>] [-f=<projectRootPom>]
                     [-i=<input>] [-o=<output>] [-s=<sourceAnalysis>]
                     [--emit=<emit>] [--app-name=<appName>]
+                    [--namespace=<namespace>]
                     [--neo4j-uri=<uri>] [--neo4j-user=<user>]
                     [--neo4j-password=<password>] [--neo4j-database=<db>]
                     [-t=<targetFiles>]...
@@ -145,6 +146,7 @@ Analyze java application.
                                schema (the Neo4j schema.neo4j.json contract).
       --app-name=<name>      Logical application name for the graph :JApplication
                                anchor (default: input dir name).
+      --namespace=<name>     Identity namespace (defaults to application name).
       --neo4j-uri=<uri>      Push the graph to a live Neo4j over Bolt (incremental);
                                omit to write graph.cypher. Falls back to the
                                NEO4J_URI environment variable.
@@ -156,6 +158,24 @@ Analyze java application.
   -h, --help                 Show this help message and exit.
   -V, --version              Print version information and exit.
 ```
+
+**Application identity.** `--app-name` defaults to the basename of `--input` and `--namespace`
+defaults to the resolved application name. The canonical root always contains both segments:
+`can://<namespace>/<application>`, including `can://inventory/inventory` for a default monolith.
+Names are case-sensitive raw strings encoded as UTF-8 URI segments without trimming or Unicode
+normalization. Explicit empty/whitespace-only names, controls, unpaired surrogates, slashes,
+backslashes, `.` and `..` are rejected. `--namespace` is unavailable with `--schema v1`.
+
+```bash
+codeanalyzer -i monorepo/services/orders --app-name orders --namespace commerce
+# root: can://commerce/orders
+# symbol_table key: src/main/java/com/acme/Order.java
+```
+
+File and artifact keys remain relative to `--input`. The draft `--workspace-root` option has
+been removed. Analysis envelopes and graph application anchors carry `identity_version: 2`;
+anchors also retain raw `application_name` and `identity_namespace`. Namespace changes invalidate
+the L1 cache. Legacy outputs must be regenerated from source; retire legacy graph data explicitly.
 
 
 ## 3. Installing `codeanalyzer` as a native binary (once built, no JVM will be required for running `codeanalyzer`)
@@ -241,15 +261,14 @@ build manifest or a configuration key is not a Java concept — a sibling-langua
 the same repository lands on the same nodes instead of a per-language duplicate.
 `SCHEMA_VERSION` is stamped onto the `:JApplication` node of every emitted graph.
 
-Every node id starts with `can://<app>/` — `can://<app>/java/…` for code, `can://<app>/artifact/…`
-for build manifests and config keys, `can://<app>/@external/…` for library symbols — so
-`can://<app>` is a prefix of every node the application emits, which is what the destructive
+Every node id starts with `can://<namespace>/<app>/` — `can://<namespace>/<app>/java/…` for code, `can://<namespace>/<app>/artifact/…`
+for build manifests and config keys, `can://<namespace>/<app>/@external/…` for library symbols — so
+`can://<namespace>/<app>` is a prefix of every node the application emits, which is what the destructive
 statements scope on. (`:Package` is the exception: it is keyed on a `pkg:` purl, sits under no
 application, and no wipe reaches it.) `:JApplication` is keyed on that id, not on the free-text
 `--app-name`, so the root is addressable by the same id its descendants are prefixed with. The id
-is derived from `--app-name` (`can://<app-name>`), so it does
-**not** disambiguate two services analyzed under the same name — those still merge onto one root.
-Give each service its own `--app-name` if they share a database.
+is derived from the pair (`--namespace`, `--app-name`). Services with the same raw application name
+remain distinct in different namespaces. Services selecting the same pair merge onto the same root.
 
 **Polyglot ids.** The `/java/` segment is what makes a code node this analyzer's. Three id families
 deliberately omit it and are therefore **language-neutral, shared merge targets**: `:Artifact`,
@@ -257,7 +276,7 @@ deliberately omit it and are therefore **language-neutral, shared merge targets*
 ids for them, so a `pom.xml`, a config key or `java.util.Map#get` is *one* node in a merged graph
 rather than a per-language duplicate. That sharing is the point, and its cost is accepted: two
 analyzers' notions of a library symbol are not necessarily the same thing, and merging them says
-they are. The consequence for writes: because these shared nodes sit inside `can://<app>/`, a Cypher
+they are. The consequence for writes: because these shared nodes sit inside `can://<namespace>/<app>/`, a Cypher
 snapshot's prefix wipe rebuilds them, so a cross-language edge into a shared `:Artifact` is dropped
 by one analyzer's snapshot and restored on the other's next push.
 
@@ -297,14 +316,13 @@ codeanalyzer -i /path/to/project -a 2 --emit neo4j -o ./out
 cypher-shell -u neo4j -p <password> < ./out/graph.cypher
 ```
 
-The snapshot is **not** incremental: it constraints, scopes-wipes this application's prior subgraph,
-then `UNWIND … MERGE`-loads the full truth. The wipe is everything under `can://<app>/`, plus a
-containment traversal that also replaces a prior v1 (pre-`3.0.0`) graph of the same application.
+Offline snapshots validate incoming identity metadata; they do not inspect an existing database. Execute them only as part of explicit regeneration. The snapshot is **not** incremental: it constraints, scopes-wipes this application's prior subgraph,
+then `UNWIND … MERGE`-loads the full truth. The wipe is everything under `can://<namespace>/<app>/`, plus a
+containment traversal scoped to the selected canonical application. Legacy roots are not retired automatically.
 That scope **includes** this application's `:Artifact` and `:ConfigKey` nodes — the snapshot rebuilds
 them, rather than leaving stale ones to accumulate with nothing ever cleaning them up. The one
 consequence: a sibling-language analyzer's edge into a shared `:Artifact` is dropped by a Java
-snapshot and restored on that analyzer's next push. The Bolt writer does **not** do this — its
-deletions are scoped per module, not per application.
+snapshot and restored on that analyzer's next push. The Bolt writer is narrower; see §4.2.
 
 ### 4.2. Live incremental push over Bolt
 
@@ -313,10 +331,22 @@ codeanalyzer -i /path/to/project -a 2 --emit neo4j \
   --neo4j-uri bolt://localhost:7687 --neo4j-user neo4j --neo4j-password <password>
 ```
 
-The Bolt writer reads the database's current state and updates **only what changed**: it diffs each
+The Bolt writer checks the selected existing anchor's identity marker and raw names before DDL or writes, then updates **only what changed**: it diffs each
 compilation unit's `content_hash`, replaces just the changed units' subgraphs (idempotent
 `MERGE` upserts), and — on a full run — prunes units whose source file vanished. Combine with
 `--target-files` for a targeted, partial re-push (orphan pruning is then skipped).
+
+On a full run it also reconciles the application's artifacts, so a deleted or renamed file, a
+or removed dependency leaves nothing stale within the selected namespace/application:
+
+- Java-owned artifact edges are rebuilt from the run: `HAS_ARTIFACT`, `DECLARES_DEPENDENCY`/`LOCKS`
+  to `pkg:maven/…`, and code reads of them (`J_USES_CONFIG`, `J_DISPATCHES_TO`,
+  `J_READS_CONFIG_UNRESOLVED`), so a config-only change updates them too.
+- An `:Artifact`/`:ConfigKey` the run no longer emits loses its `:JCanNode` label. An artifact is
+  then deleted only if no other analyzer's `HAS_ARTIFACT` still points at it; a config key only if
+  no other analyzer's marker (`:PyCanNode`, `:TSCanNode`) still claims it. A sibling's edges are
+  never removed.
+- Legacy artifacts require explicit retirement; reconciliation never falls back to a legacy root.
 
 ### 4.3. Schema contract
 

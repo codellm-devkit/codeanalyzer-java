@@ -72,8 +72,18 @@ public final class V2Emitter {
             List<JIdEdge> paramOut,
             Map<String, JArtifact> artifacts,
             List<JDependency> dependencies) {
+        return emit(appName, maxLevel, modules, analyzerVersion, callGraph, externalSymbols,
+                paramIn, paramOut, artifacts, dependencies, null);
+    }
+
+    public static Analysis emit(String appName, int maxLevel, Map<String, JModule> modules,
+            String analyzerVersion, List<JCallEdge> callGraph, Map<String, JExternalSymbol> externalSymbols,
+            List<JIdEdge> paramIn, List<JIdEdge> paramOut, Map<String, JArtifact> artifacts,
+            List<JDependency> dependencies, String namespace) {
         JApplication application = new JApplication();
-        application.setId(CanId.applicationId(appName));
+        application.setId(CanId.applicationId(appName, namespace));
+        application.setApplicationName(appName);
+        application.setIdentityNamespace(namespace == null ? appName : namespace);
 
         // Sort file keys so output is deterministic (the -j gate).
         Map<String, JModule> sorted = new LinkedHashMap<>();
@@ -103,6 +113,7 @@ public final class V2Emitter {
         }
 
         Analysis analysis = new Analysis();
+        analysis.setIdentityVersion(2);
         analysis.setSchemaVersion("2.0.0");
         analysis.setLanguage("java");
         analysis.setMaxLevel(maxLevel);

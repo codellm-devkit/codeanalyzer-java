@@ -134,7 +134,7 @@ public class CodeAnalyzerIntegrationTest {
         var runCodeAnalyzerOnCallGraphTest = container.execInContainer(
                 "bash", "-c",
                 String.format(
-                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --input=/test-applications/call-graph-test --analysis-level=2",
+                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --schema v1 --input=/test-applications/call-graph-test --analysis-level=2",
                         javaHomePath, codeanalyzerVersion
                 )
         );
@@ -169,7 +169,7 @@ public class CodeAnalyzerIntegrationTest {
         var corruptMavenProjectBuild = mavenContainer.withWorkingDirectory("/test-applications/mvnw-corrupt-test").execInContainer("mvn", "-f", "/test-applications/mvnw-corrupt-test/pom.xml", "clean", "compile");
         Assertions.assertEquals(0, corruptMavenProjectBuild.getExitCode(), "Failed to build the project with system's default Maven.");
         // NOw run codeanalyzer and assert if analysis.json is generated.
-        var runCodeAnalyzer = mavenContainer.execInContainer("java", "-jar", String.format("/opt/jars/codeanalyzer-%s.jar", codeanalyzerVersion), "--input=/test-applications/mvnw-corrupt-test", "--output=/tmp/", "--analysis-level=2", "--verbose", "--no-build");
+        var runCodeAnalyzer = mavenContainer.execInContainer("java", "-jar", String.format("/opt/jars/codeanalyzer-%s.jar", codeanalyzerVersion), "--schema", "v1", "--input=/test-applications/mvnw-corrupt-test", "--output=/tmp/", "--analysis-level=2", "--verbose", "--no-build");
         var codeAnalyzerOutputDirContents = mavenContainer.execInContainer("ls", "/tmp/analysis.json");
         String codeAnalyzerOutputDirContentsStdOut = codeAnalyzerOutputDirContents.getStdout();
         Assertions.assertTrue(codeAnalyzerOutputDirContentsStdOut.length() > 0, "Could not find 'analysis.json'.");
@@ -185,7 +185,7 @@ public class CodeAnalyzerIntegrationTest {
         var runCodeAnalyzer = container.execInContainer(
                 "bash", "-c",
                 String.format(
-                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --input=/test-applications/mvnw-corrupt-test --output=/tmp/ --analysis-level=2",
+                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --schema v1 --input=/test-applications/mvnw-corrupt-test --output=/tmp/ --analysis-level=2",
                         javaHomePath, codeanalyzerVersion
                 )
         );
@@ -199,7 +199,7 @@ public class CodeAnalyzerIntegrationTest {
         var runCodeAnalyzerOnDaytrader8 = mavenContainer.execInContainer(
                 "bash", "-c",
                 String.format(
-                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --input=/test-applications/daytrader8 --analysis-level=1",
+                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --schema v1 --input=/test-applications/daytrader8 --analysis-level=1",
                         javaHomePath, codeanalyzerVersion
                 )
         );
@@ -214,7 +214,7 @@ public class CodeAnalyzerIntegrationTest {
         var runCodeAnalyzerOnPlantsByWebsphere = container.execInContainer(
                 "bash", "-c",
                 String.format(
-                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --input=/test-applications/plantsbywebsphere --analysis-level=1",
+                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --schema v1 --input=/test-applications/plantsbywebsphere --analysis-level=1",
                         javaHomePath, codeanalyzerVersion
                 )
         );
@@ -307,7 +307,7 @@ public class CodeAnalyzerIntegrationTest {
         var runCodeAnalyzerOnCallGraphTest = container.execInContainer(
                 "bash", "-c",
                 String.format(
-                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --input=/test-applications/record-class-test --analysis-level=1",
+                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --schema v1 --input=/test-applications/record-class-test --analysis-level=1",
                         javaHomePath, codeanalyzerVersion
                 )
         );
@@ -324,7 +324,7 @@ public class CodeAnalyzerIntegrationTest {
         var runCodeAnalyzerOnCallGraphTest = container.execInContainer(
                 "bash", "-c",
                 String.format(
-                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --input=/test-applications/record-class-test --analysis-level=1",
+                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --schema v1 --input=/test-applications/record-class-test --analysis-level=1",
                         javaHomePath, codeanalyzerVersion
                 )
         );
@@ -354,7 +354,7 @@ public class CodeAnalyzerIntegrationTest {
         var runCodeAnalyzerOnCallGraphTest = container.execInContainer(
                 "bash", "-c",
                 String.format(
-                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --input=/test-applications/record-class-test --analysis-level=1",
+                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --schema v1 --input=/test-applications/record-class-test --analysis-level=1",
                         javaHomePath, codeanalyzerVersion
                 )
         );
@@ -389,7 +389,7 @@ public class CodeAnalyzerIntegrationTest {
         var runCodeAnalyzerOnCallGraphTest = container.execInContainer(
                 "bash", "-c",
                 String.format(
-                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --input=/test-applications/init-blocks-test --analysis-level=1",
+                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --schema v1 --input=/test-applications/init-blocks-test --analysis-level=1",
                         javaHomePath, codeanalyzerVersion
                 )
         );
@@ -420,7 +420,7 @@ public class CodeAnalyzerIntegrationTest {
         var runCodeAnalyzerOnCallGraphTest = container.execInContainer(
                 "bash", "-c",
                 String.format(
-                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --input=/test-applications/init-blocks-test --analysis-level=1",
+                        "export JAVA_HOME=%s && java -jar /opt/jars/codeanalyzer-%s.jar --schema v1 --input=/test-applications/init-blocks-test --analysis-level=1",
                         javaHomePath, codeanalyzerVersion
                 )
         );

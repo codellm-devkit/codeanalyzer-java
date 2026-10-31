@@ -44,6 +44,8 @@ import org.neo4j.driver.Values;
  *   <li>on a FULL run only, prune units whose source file vanished.</li>
  * </ol>
  *
+ * <p>A full run also reconciles the app's artifacts; see {@link #RELEASE_VANISHED_ARTIFACTS}.
+ *
  * <p>Nodes are MERGE-upserted, never blindly deleted, so a declaration another (unchanged) unit
  * still references survives and its incoming edges stay valid. {@code :JPackage}/{@code :JAnnotation}
  * are shared (no {@code _module}) and are MERGE-only.
@@ -74,27 +76,70 @@ public final class BoltWriter implements BoltSink {
             "MATCH (x:" + RowBuilder.CAN_NODE + ") WHERE (x.id = $mid OR x.id STARTS WITH $pre) "
                     + "AND NOT x.id IN $keys DETACH DELETE x";
 
-    /**
-     * The orphan prune: matches the application root by its {@code can://} {@code id} when it is a
-     * v2 root (exact, unique-constrained), OR by {@code name} when it is a legacy v1 root --
-     * identifiable because v1 never writes {@code id} (see {@code GraphProjector.java}). An
-     * id-only match would orphan a prior v1 graph instead of pruning it; an ungated
-     * {@code a.name =} disjunct would reach every v2 root carrying that display name -- including
-     * roots this analyzer never minted -- since {@code name} stopped being unique-constrained once
-     * the root was re-keyed. Hence the {@code a.id IS NULL} guard, which confines the name branch
-     * to legacy roots.
-     *
-     * <p>This does <b>not</b> separate two distinct applications sharing an {@code --app-name}:
-     * {@link com.ibm.cldk.schema.CanId#applicationId} is {@code "can://" + appName}, so they share
-     * an id byte-for-byte and are one node. Distinct services need distinct {@code --app-name}
-     * values; no predicate here can recover a distinction the id never encoded.
-     */
+    /** Hashes and orphan pruning are confined to the selected canonical application anchor. */
+    static final String MODULE_HASHES_V2 = "MATCH (a:JApplication {id: $appId})-[:J_HAS_MODULE]->(c:JModule) "
+            + "RETURN c.file_key AS k, c.content_hash AS h";
+
     static final String PRUNE_VANISHED_UNITS_V2 =
             "MATCH (a:JApplication)-[:J_HAS_UNIT|J_HAS_MODULE]->(c) "
-                    + "WHERE (a.id = $appId OR (a.id IS NULL AND a.name = $appName)) "
+                    + "WHERE a.id = $appId "
                     + "AND NOT c.file_key IN $present "
                     + "OPTIONAL MATCH (c)-" + CypherWriter.DESCENDANTS + "->(x) "
                     + "DETACH DELETE x, c RETURN count(c) AS pruned";
+
+    static final String PRUNE_VANISHED_UNITS_V1 =
+            "MATCH (a:JApplication)-[:J_HAS_UNIT]->(c) "
+                    + "WHERE a.id IS NULL AND a.name = $appName "
+                    + "AND NOT c.file_key IN $present "
+                    + "OPTIONAL MATCH (c)-" + CypherWriter.DESCENDANTS + "->(x) "
+                    + "DETACH DELETE x, c RETURN count(c) AS pruned";
+
+    static String orphanPruneQuery(GraphRows rows) {
+        return CypherWriter.legacyApplicationName(rows) != null
+                ? PRUNE_VANISHED_UNITS_V1 : PRUNE_VANISHED_UNITS_V2;
+    }
+
+    /**
+     * Drop every Java-owned edge on this app's artifacts and config keys so the run rebuilds them:
+     * {@code HAS_ARTIFACT} from a {@code :JApplication}, {@code DECLARES_DEPENDENCY}/{@code LOCKS}
+     * to {@code pkg:maven/}, and incoming {@code J_} edges ({@code J_USES_CONFIG},
+     * {@code J_DISPATCHES_TO}). Not sha-diffed: siblings overwrite the shared {@code sha256}, and a
+     * config change alters code edges while every module's hash stays put.
+     */
+    static final String PURGE_ARTIFACT_EDGES =
+            "UNWIND $pres AS pre "
+                    + "MATCH (t:" + RowBuilder.CAN_NODE + ") WHERE t.id STARTS WITH pre AND (t:Artifact OR t:ConfigKey) "
+                    + "CALL { WITH t "
+                    + "WITH [(t)<-[r]-(s) WHERE (type(r) = 'HAS_ARTIFACT' AND s:JApplication) "
+                    + "OR type(r) STARTS WITH 'J_' | r] "
+                    + "+ [(t)-[d:DECLARES_DEPENDENCY|LOCKS]->(p:Package) WHERE p.id STARTS WITH 'pkg:maven/' | d] AS rs "
+                    + "FOREACH (r IN rs | DELETE r) } IN TRANSACTIONS OF 1000 ROWS";
+
+    /** @see #PURGE_ARTIFACT_EDGES */
+    static final String PURGE_UNRESOLVED_CONFIG_READS =
+            "MATCH (:JApplication {id: $appId})-[r:J_READS_CONFIG_UNRESOLVED]->() "
+                    + "CALL { WITH r DELETE r } IN TRANSACTIONS OF 1000 ROWS";
+
+    /**
+     * Release Java's claim ({@code :JCanNode}) on artifacts/config keys the run no longer emits,
+     * after {@link #PURGE_ARTIFACT_EDGES}. An artifact is deleted once no {@code HAS_ARTIFACT} is
+     * left: every analyzer inventories its artifacts with one, marked or not. A config key is
+     * deleted once no other analyzer's {@code *CanNode} claims it.
+     */
+    static final String RELEASE_VANISHED_ARTIFACTS =
+            "UNWIND $pres AS pre "
+                    + "MATCH (n:" + RowBuilder.CAN_NODE + ") WHERE n.id STARTS WITH pre AND (n:Artifact OR n:ConfigKey) "
+                    + "AND NOT n.id IN $keep "
+                    + "CALL { WITH n REMOVE n:" + RowBuilder.CAN_NODE + " "
+                    + "WITH n WHERE (n:Artifact AND NOT ()-[:HAS_ARTIFACT]->(n)) "
+                    + "OR (n:ConfigKey AND none(l IN labels(n) WHERE l ENDS WITH 'CanNode')) "
+                    + "DETACH DELETE n } IN TRANSACTIONS OF 1000 ROWS "
+                    + "RETURN count(*) AS released";
+
+    /** Only the selected application's artifacts; legacy output requires explicit retirement. */
+    static List<String> artifactPrefixes(String appId, String appName) {
+        return List.of(appId + "/artifact/");
+    }
 
     /**
      * The prefix that matches a module's declarations but not a sibling module whose path merely
@@ -124,6 +169,21 @@ public final class BoltWriter implements BoltSink {
 
     private static final int BATCH = 1000;
 
+    static void requireCompatibleApplicationIdentity(String id, Map<String, Object> incoming, Map<String, Object> stored) {
+        Object name = incoming.get("application_name");
+        Object namespace = incoming.get("identity_namespace");
+        Object version = incoming.get("identity_version");
+        Object storedVersion = stored.get("identity_version");
+        if (!(name instanceof String) || !(namespace instanceof String)
+                || (!(version instanceof Integer) && !(version instanceof Long)) || ((Number) version).longValue() != 2
+                || !id.equals(CanId.applicationId((String) name, (String) namespace))
+                || (!(storedVersion instanceof Integer) && !(storedVersion instanceof Long)) || ((Number) storedVersion).longValue() != 2
+                || !name.equals(stored.get("application_name"))
+                || !namespace.equals(stored.get("identity_namespace"))) {
+            throw new IllegalArgumentException("Incompatible existing application identity; regenerate graph explicitly");
+        }
+    }
+
     /** Public no-arg constructor: {@link Neo4jEmitter} instantiates this reflectively via {@link BoltSink}. */
     public BoltWriter() {}
 
@@ -150,6 +210,19 @@ public final class BoltWriter implements BoltSink {
         }
 
         void run(GraphRows rows, boolean fullRun) {
+            // Validate the selected canonical anchor before any schema or data mutation.
+            for (NodeRow node : rows.nodes) {
+                if (!node.labels.contains("JApplication") || !RowBuilder.isCanId(node.value)) continue;
+                requireCompatibleApplicationIdentity(node.value, node.props, node.props);
+                try (Session s = session()) {
+                    var records = s.run("MATCH (a:JApplication {id: $id}) RETURN a.identity_version AS identity_version, "
+                                    + "a.application_name AS application_name, a.identity_namespace AS identity_namespace",
+                            Values.parameters("id", node.value)).list();
+                    for (var record : records) {
+                        requireCompatibleApplicationIdentity(node.value, node.props, record.asMap());
+                    }
+                }
+            }
             // 1. schema (DDL runs in its own autocommit transactions). Migrations run FIRST: a
             // constraint an older release created on a property this generation no longer keys on
             // is still live and enforcing, and would fail the very first push (see Schema.MIGRATIONS).
@@ -182,8 +255,9 @@ public final class BoltWriter implements BoltSink {
             // :JCompilationUnit and v2 :JModule.
             Map<String, String> dbHash = new HashMap<>();
             try (Session s = session()) {
-                s.run("MATCH (c) WHERE c:JCompilationUnit OR c:JModule "
-                                + "RETURN c.file_key AS k, c.content_hash AS h").list()
+                boolean v2 = rows.nodes.stream().anyMatch(n -> n.labels.contains("JApplication") && RowBuilder.isCanId(n.value));
+                String query = v2 ? MODULE_HASHES_V2 : "MATCH (c:JCompilationUnit) RETURN c.file_key AS k, c.content_hash AS h";
+                s.run(query, Values.parameters("appId", applicationIdOf(rows))).list()
                         .forEach(rec -> dbHash.put(rec.get("k").asString(null), rec.get("h").asString(null)));
             }
             Set<String> changed = new HashSet<>();
@@ -197,7 +271,10 @@ public final class BoltWriter implements BoltSink {
             Log.info("neo4j(bolt): " + byUnit.size() + " units (" + changed.size() + " changed), "
                     + shared.size() + " shared nodes, " + rows.edges.size() + " edges");
 
-            // 3. shared nodes are always upserted (MERGE-only).
+            // 3. full run: reconcile this app's artifacts, then upsert shared nodes (MERGE-only).
+            if (fullRun) {
+                reconcileArtifacts(rows);
+            }
             upsertNodes(shared);
 
             // 4. per changed unit: purge owned edges + vanished decls, then upsert its nodes.
@@ -236,50 +313,63 @@ public final class BoltWriter implements BoltSink {
                 upsertNodes(nodes);
             }
 
-            // 5. upsert edges owned by a changed unit (owner = source node's unit) or shared.
+            // 5. upsert edges owned by a changed unit (owner = source node's unit) or shared; on a
+            // full run also every edge into an artifact/config key, which step 3 purged.
             List<EdgeRow> edges = new ArrayList<>();
             for (EdgeRow e : rows.edges) {
                 String owner = unitOf.get(e.from.value);
-                if (owner == null || changed.contains(owner)) {
+                boolean intoArtifact = e.to.label.equals("Artifact") || e.to.label.equals("ConfigKey");
+                if (owner == null || changed.contains(owner) || (fullRun && intoArtifact)) {
                     edges.add(e);
                 }
             }
             upsertEdges(edges);
 
-            // 6. orphan prune — only safe on a full run. Reaches both generations' per-file nodes
-            // through the shared application anchor, so a v2 push also prunes a prior v1 graph's
-            // units (and other applications in the database are never touched).
+            // 6. Full-run orphan pruning uses the actual incoming schema family. A v1 request
+            // selects only an id-less legacy anchor; v2 selects only its exact canonical anchor.
             if (fullRun) {
                 List<String> present = new ArrayList<>(byUnit.keySet());
                 String appName = appNameOf(rows);
-                String appId = CanId.applicationId(appName);
-                // Checked against the same hazard as the _module purges above (#213) and found
-                // sound, so deliberately left alone: this traversal never leaves java's own graph.
-                // It enters at :JApplication (java-owned, and scoped to this app by its unique
-                // can:// id when the root is v2, or by name when it is a legacy v1 root that never
-                // got an id -- see PRUNE_VANISHED_UNITS_V2's javadoc), hops a java-owned
-                // relationship type, and expands only through DESCENDANTS -- every member of which
-                // is J_-prefixed containment. `c` and `x` are unlabelled but unreachable except
-                // along those edges, and DESCENDANTS deliberately excludes HAS_ARTIFACT, so no
-                // cross-language :Artifact/:ConfigKey and no shared :JPackage/:JAnnotation can be
-                // reached. Do not add a non-containment type to DESCENDANTS without re-checking that.
-                //
-                // The snapshot path (CypherWriter.wipe) deliberately went the other way and now
-                // deletes this app's :Artifact/:ConfigKey via a `can://<app>/` prefix sweep, so a
-                // full snapshot rebuilds them instead of letting them accumulate. That widening is
-                // NOT mirrored here, on purpose: this writer is incremental. Its unit of
-                // replacement is one module (descendantPrefix(moduleId)) or one vanished unit, and
-                // an app-level artifact belongs to neither -- an app-wide artifact sweep would
-                // delete artifacts a targeted `--target-files` run never re-pushes. The snapshot can
-                // afford the widening only because it always writes the full truth back.
+                String appId = applicationIdOf(rows);
+                // Only Java containment under this exact anchor is traversed. Shared artifacts
+                // are reconciled separately and sibling namespaces are never fallback matches.
                 try (Session s = session()) {
-                    long pruned = s.run(PRUNE_VANISHED_UNITS_V2,
+                    long pruned = s.run(orphanPruneQuery(rows),
                             Values.parameters("present", present, "appId", appId, "appName", appName))
                             .single().get("pruned").asLong(0);
                     Log.info("neo4j(bolt): pruned " + pruned + " vanished unit(s)");
                 }
             } else {
                 Log.info("neo4j(bolt): targeted run — orphan pruning skipped (deleted files not removed)");
+            }
+        }
+
+        /** v2 only: v1 emits no artifacts, so it would release every one. */
+        private void reconcileArtifacts(GraphRows rows) {
+            String appId = null;
+            List<String> keep = new ArrayList<>();
+            for (NodeRow n : rows.nodes) {
+                String label = n.labels.get(0);
+                if (label.equals("JApplication") && RowBuilder.isCanId(n.value)) {
+                    appId = n.value;
+                } else if (label.equals("Artifact") || label.equals("ConfigKey")) {
+                    keep.add(n.value);
+                }
+            }
+            if (appId == null) {
+                return;
+            }
+            Map<String, Object> args = new LinkedHashMap<>();
+            args.put("appId", appId);
+            args.put("pres", artifactPrefixes(appId, appNameOf(rows)));
+            args.put("keep", keep);
+            // Auto-commit and batched to bound full-run artifact reconciliation.
+            // A partial failure is safe; the next full push finishes it.
+            try (Session s = session()) {
+                s.run(PURGE_ARTIFACT_EDGES, args).consume();
+                s.run(PURGE_UNRESOLVED_CONFIG_READS, args).consume();
+                long released = s.run(RELEASE_VANISHED_ARTIFACTS, args).single().get("released").asLong(0);
+                Log.info("neo4j(bolt): released " + released + " vanished artifact/config node(s)");
             }
         }
 
@@ -362,6 +452,13 @@ public final class BoltWriter implements BoltSink {
          * identically by both generations, so this always yields the true app name to re-derive
          * the id from.
          */
+        private static String applicationIdOf(GraphRows rows) {
+            for (NodeRow n : rows.nodes) {
+                if (n.labels.contains("JApplication") && RowBuilder.isCanId(n.value)) return n.value;
+            }
+            return CanId.applicationId(appNameOf(rows));
+        }
+
         private static String appNameOf(GraphRows rows) {
             for (NodeRow n : rows.nodes) {
                 if (n.labels.get(0).equals("JApplication")) {

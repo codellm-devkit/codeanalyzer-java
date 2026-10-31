@@ -136,7 +136,15 @@ public final class ArtifactDiscovery {
      */
     public static Map<String, JArtifact> discover(
             Path projectDir, String appName, boolean captureText, int textMaxBytes) throws IOException {
+        return discover(projectDir, appName, captureText, textMaxBytes, null);
+    }
+
+    /** Discover application-relative artifacts in the selected identity namespace. */
+    public static Map<String, JArtifact> discover(
+            Path projectDir, String appName, boolean captureText, int textMaxBytes, String namespace)
+            throws IOException {
         Path root = projectDir.toAbsolutePath().normalize();
+        Path keyBase = projectDir.toAbsolutePath().normalize();
         List<Path> files;
         try (Stream<Path> walk = Files.walk(root)) {
             files = walk.filter(Files::isRegularFile).sorted().collect(Collectors.toList());
@@ -172,9 +180,10 @@ public final class ArtifactDiscovery {
                 roles = (!name.contains(".") && text.startsWith("#!")) ? List.of("script") : List.of("unknown");
             }
 
+            String keyPosix = keyBase.relativize(file).toString().replace('\\', '/');
             JArtifact artifact = new JArtifact();
-            artifact.setId(CanId.artifactId(appName, relPosix));
-            artifact.setPath(relPosix);
+            artifact.setId(CanId.artifactId(appName, keyPosix, namespace));
+            artifact.setPath(keyPosix);
             artifact.setFormat(format);
             artifact.setRoles(roles);
             // sha256/sizeBytes always describe the whole file, independent of capture/truncation
@@ -192,7 +201,7 @@ public final class ArtifactDiscovery {
                 }
             }
 
-            artifacts.put(relPosix, artifact);
+            artifacts.put(keyPosix, artifact);
         }
         return artifacts;
     }

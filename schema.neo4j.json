@@ -13,6 +13,9 @@
       "properties": {
         "id": "string",
         "name": "string",
+        "application_name": "string",
+        "identity_namespace": "string",
+        "identity_version": "integer",
         "schema_version": "string",
         "analyzer_name": "string",
         "analyzer_version": "string",

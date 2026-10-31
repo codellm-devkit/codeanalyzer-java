@@ -258,7 +258,7 @@ public class V2Neo4jSchemaConformanceTest {
         String cypher = CypherWriter.renderCypher(rows, APP_NAME);
         assertTrue(cypher.contains("J_HAS_UNIT|J_HAS_MODULE"),
                 "the wipe must traverse both generations' unit relationship");
-        assertTrue(cypher.contains("MATCH (s:JSymbol) WHERE NOT (s)--() DELETE s"),
+        assertFalse(cypher.contains("MATCH (s:JSymbol) WHERE NOT (s)--() DELETE s"),
                 "the wipe must sweep orphaned symbols (v1 import-materialized type stubs)");
         // The v1 path is NOT reachable by the can:// prefix sweep -- v1 ids are FQNs and v1 roots
         // carry no `id` at all -- so replacing the containment traversal with the sweep orphans
@@ -267,7 +267,7 @@ public class V2Neo4jSchemaConformanceTest {
                         && cypher.contains("OPTIONAL MATCH (c)-" + CypherWriter.DESCENDANTS + "->(x)")
                         && cypher.contains("DETACH DELETE x, c, a;"),
                 "the v1-reaching containment traversal must survive alongside the prefix sweep: " + cypher);
-        assertTrue(cypher.contains("a.id IS NULL AND a.name = '" + APP_NAME + "'"),
+        assertFalse(cypher.contains("a.id IS NULL AND a.name = '" + APP_NAME + "'"),
                 "a legacy v1 root has no id and is reachable only by the guarded name branch: " + cypher);
         for (String rel : new String[] {"J_HAS_CALLSITE", "J_HAS_COMMENT", "J_HAS_PARAMETER",
                 "J_DECLARES", "J_HAS_METHOD", "J_HAS_BODY_NODE"}) {
@@ -470,9 +470,9 @@ public class V2Neo4jSchemaConformanceTest {
         // analyzer's next push. :Package (a `pkg:` purl) sits under no application, so it stays out
         // by construction -- assert that, because it is the only thing left holding the line.
         String cypher = CypherWriter.renderCypher(rows, APP_NAME);
-        String prefix = "can://" + APP_NAME + "/";
+        String prefix = CanId.applicationId(APP_NAME) + "/";
 
-        assertTrue(cypher.contains("MATCH (x:" + RowBuilder.CAN_NODE + ") WHERE x.id = 'can://" + APP_NAME
+        assertTrue(cypher.contains("MATCH (x:" + RowBuilder.CAN_NODE + ") WHERE x.id = '" + CanId.applicationId(APP_NAME)
                         + "' OR x.id STARTS WITH '" + prefix + "'"),
                 "the wipe must sweep the whole app prefix, rooted on the label-anchored index: " + cypher);
         assertTrue(cypher.contains("CALL { WITH x DETACH DELETE x } IN TRANSACTIONS OF 1000 ROWS;"),

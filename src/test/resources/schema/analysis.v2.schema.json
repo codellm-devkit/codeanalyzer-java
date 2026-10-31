@@ -5,8 +5,9 @@
   "description": "Conformance oracle for codeanalyzer-java's v2 output. Encodes the canonical CPG shape: an envelope carrying one application node, whose containment tree is named maps down to callable depth, with body nodes keyed by local id. Strict (additionalProperties: false) so an accidentally renamed or stray key fails the gate rather than silently reaching consumers. Replace with the SDK's v2 models once they exist.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "language", "max_level", "application"],
+  "required": ["identity_version", "schema_version", "language", "max_level", "application"],
   "properties": {
+    "identity_version": { "const": 2 },
     "schema_version": { "const": "2.0.0" },
     "language": { "const": "java" },
     "max_level": { "type": "integer", "minimum": 1, "maximum": 4 },
@@ -27,12 +28,12 @@
 
     "canId": {
       "type": "string",
-      "pattern": "^can://[^/]+/java/",
+      "pattern": "^can://[^/]+/[^/]+/java/",
       "description": "Durable id for nodes at or above callable depth: can://<app>/java/..."
     },
     "applicationCanId": {
       "type": "string",
-      "pattern": "^can://[^/]+$",
+      "pattern": "^can://[^/]+/[^/]+$",
       "description": "Id of the application root node: can://<app>, no trailing segment."
     },
 
@@ -105,9 +106,11 @@
     "application": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "symbol_table"],
+      "required": ["id", "kind", "symbol_table", "application_name", "identity_namespace"],
       "properties": {
         "id": { "$ref": "#/$defs/applicationCanId" },
+        "application_name": { "type": "string", "minLength": 1 },
+        "identity_namespace": { "type": "string", "minLength": 1 },
         "kind": { "const": "application" },
         "symbol_table": {
           "type": "object",
@@ -280,7 +283,7 @@
 
     "externalCanId": {
       "type": "string",
-      "pattern": "^can://[^/]+/@external/",
+      "pattern": "^can://[^/]+/[^/]+/@external/",
       "description": "Id of a symbol outside the project, so an in-project id landing in the external map fails the gate instead of validating happily. Language-NEUTRAL like artifactCanId: @external sits where the language segment sits for code nodes, so sibling analyzers over the same <app> name a library symbol identically. It therefore does NOT match canId."
     },
 
@@ -306,7 +309,7 @@
 
     "artifactCanId": {
       "type": "string",
-      "pattern": "^can://[^/]+/artifact/",
+      "pattern": "^can://[^/]+/[^/]+/artifact/",
       "description": "Id of a repository-artifact node: nested under the app, language-neutral."
     },
 

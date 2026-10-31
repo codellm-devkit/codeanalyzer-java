@@ -791,4 +791,190 @@ class CodeAnalyzerV2CliTest {
         assertEquals(1, rows, "one J_DISPATCHES_TO row: the resolved forward, and not the unresolved one");
         assertTrue(script.contains("via: 'forward'"), "the row carries its mechanism");
     }
+
+    // ---- --workspace-root -----------------------------------------------------------------------
+
+    /** Every key in {@code keys} is repo-relative under {@code prefix}: never absolute, never {@code ..}. */
+    private static void assertRepoRelative(Set<String> keys, String prefix) {
+        assertFalse(keys.isEmpty(), "precondition: something was emitted");
+        for (String key : keys) {
+            assertTrue(key.startsWith(prefix), "expected the " + prefix + " prefix, got: " + key);
+            assertFalse(key.startsWith("/") || key.contains(".."), "keys stay relative: " + key);
+        }
+    }
+
+    @Test
+    void namespaceKeepsSymbolTableKeysApplicationRelative(@TempDir Path tmp) throws IOException {
+        Path repo = tmp.resolve("repo");
+        Path in = project(repo.resolve("services/app"));
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "-a", "2",
+                "--namespace", "team", "--app-name", "widgets"));
+
+        JsonObject app = application(out);
+        assertEquals(CanId.applicationId("widgets", "team"), app.get("id").getAsString(),
+                "the app segment does not move with the workspace root");
+        JsonObject symbolTable = app.getAsJsonObject("symbol_table");
+        assertRepoRelative(symbolTable.keySet(), "src/");
+        String key = "src/main/java/com/example/Widget.java";
+        assertTrue(symbolTable.has(key), "got: " + symbolTable.keySet());
+        assertEquals(CanId.moduleId(CanId.applicationId("widgets", "team"), key),
+                symbolTable.getAsJsonObject(key).get("id").getAsString());
+
+        String moduleId = CanId.moduleId(CanId.applicationId("widgets", "team"), key);
+        JsonArray callGraph = app.getAsJsonArray("call_graph");
+        assertFalse(callGraph.isEmpty(), "precondition: size() -> count() is an in-project edge");
+        for (JsonElement e : callGraph) {
+            assertTrue(e.getAsJsonObject().get("src").getAsString().startsWith(moduleId + "/"),
+                    "call-graph ids carry the repo-relative module id: " + e);
+        }
+        assertConformsToV2Schema(out);
+    }
+
+    @Test
+    void namespaceCarriesIntoLevelThreeOverlayIds(@TempDir Path tmp) throws IOException {
+        Path repo = tmp.resolve("repo");
+        Path in = project(repo.resolve("services/app"));
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "-a", "3",
+                "--namespace", "team", "--app-name", "widgets"));
+
+        String moduleId = CanId.moduleId(CanId.applicationId("widgets", "team"),
+                "src/main/java/com/example/Widget.java");
+        String json = Files.readString(out.resolve("analysis.json"));
+        assertTrue(json.contains("\"cfg\""), "precondition: level 3 lays the cfg overlay");
+        java.util.regex.Matcher ids = java.util.regex.Pattern.compile("\"(can://team/widgets/java/[^\"]*)\"").matcher(json);
+        int seen = 0;
+        while (ids.find()) {
+            assertTrue(ids.group(1).startsWith(moduleId),
+                    "every code id, overlay endpoints included, is under the repo-relative module: " + ids.group(1));
+            seen++;
+        }
+        assertTrue(seen > 0, "precondition: ids were emitted");
+        assertConformsToV2Schema(out);
+    }
+
+    @Test
+    void namespaceKeepsArtifactKeysAndClassification(@TempDir Path tmp) throws IOException {
+        Path repo = tmp.resolve("repo");
+        Path in = artifactProject(repo.resolve("services/app"));
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(),
+                "--namespace", "team", "--app-name", "widgets"));
+
+        JsonObject app = application(out);
+        JsonObject artifacts = app.getAsJsonObject("artifacts");
+        assertRepoRelative(artifacts.keySet(), "");
+
+        JsonObject pom = artifacts.getAsJsonObject("pom.xml");
+        assertNotNull(pom, "got: " + artifacts.keySet());
+        assertEquals("pom.xml", pom.get("path").getAsString());
+        assertEquals(CanId.artifactId("widgets", "pom.xml", "team"), pom.get("id").getAsString());
+        assertEquals("full", pom.get("extraction").getAsString(),
+                "the manifest is still read from disk under the repo-relative key");
+        assertFalse(app.getAsJsonArray("dependencies").isEmpty(), "and its dependency still extracted");
+
+        JsonArray propsKeys = artifacts.getAsJsonObject("application.properties")
+                .getAsJsonArray("config_keys");
+        assertEquals(1, propsKeys.size(), "config keys are still extracted");
+        assertConformsToV2Schema(out);
+    }
+
+    @Test
+    void explicitDefaultNamespaceChangesNothing(@TempDir Path tmp) throws IOException {
+        Path in = artifactProject(tmp.resolve("app"));
+        Path without = tmp.resolve("without");
+        Path with = tmp.resolve("with");
+        assertEquals(0, run("-i", in.toString(), "-o", without.toString(), "--app-name", "widgets"));
+        assertEquals(0, run("-i", in.toString(), "-o", with.toString(), "--app-name", "widgets",
+                "--namespace", "widgets"));
+        assertEquals(application(without).get("symbol_table").toString(),
+                application(with).get("symbol_table").toString());
+        assertEquals(application(without).get("artifacts").toString(),
+                application(with).get("artifacts").toString());
+    }
+
+    @Test
+    void removedWorkspaceRootIsRejected(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        Path elsewhere = Files.createDirectories(tmp.resolve("elsewhere"));
+        assertNotEquals(0, run("-i", in.toString(), "-o", tmp.resolve("out").toString(),
+                        "--workspace-root", elsewhere.toString()),
+                "an input outside the workspace root would need absolute or .. keys");
+        assertFalse(Files.exists(tmp.resolve("out/analysis.json")), "and nothing is written");
+    }
+
+    @Test
+    void namespaceIsRejectedWithSchemaV1(@TempDir Path tmp) throws IOException {
+        Path in = project(tmp.resolve("app"));
+        assertNotEquals(0, run("-i", in.toString(), "-o", tmp.resolve("out").toString(),
+                        "--schema", "v1", "--namespace", "team"),
+                "v1 keys are absolute: the flag has nothing to relativize");
+    }
+    @Test
+    void omittedIdentityFlagsDoNotReusePreviousInvocation(@TempDir Path tmp) throws Exception {
+        Path in = project(tmp.resolve("inventory"));
+        assertEquals(0, run("-i", in.toString(), "-o", tmp.resolve("first").toString(), "--app-name", "other", "--namespace", "team"));
+        assertEquals(0, run("-i", in.toString(), "-o", tmp.resolve("second").toString()));
+        assertEquals("can://inventory/inventory", application(tmp.resolve("second")).get("id").getAsString());
+    }
+
+    @Test
+    void namespaceScopesReferencesAndCache(@TempDir Path tmp) throws Exception {
+        Path in = project(tmp.resolve("repo/services/app"));
+        Files.writeString(in.resolve("application.properties"), "port=8080\n");
+        for (String ns : new String[] {"team one", "team two"}) {
+            Path out = tmp.resolve(ns);
+            assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "-a", "2", "--no-build", "--no-rta",
+                    "--external-calls", "--namespace", ns, "--app-name", "widgets", "--cache-dir", tmp.resolve("cache").toString()));
+            JsonObject app = application(out);
+            assertEquals(CanId.applicationId("widgets", ns), app.get("id").getAsString());
+            assertEquals("widgets", app.get("application_name").getAsString());
+            assertEquals(ns, app.get("identity_namespace").getAsString());
+            assertTrue(app.getAsJsonObject("symbol_table").has("src/main/java/com/example/Widget.java"));
+            assertTrue(app.getAsJsonObject("artifacts").has("application.properties"));
+            assertTrue(app.has("external_symbols"));
+            assertOwnedReferences(app, CanId.applicationId("widgets", ns));
+            var analysis = com.ibm.cldk.schema.V2Json.compact().fromJson(
+                    Files.readString(out.resolve("analysis.json")), com.ibm.cldk.schema.Analysis.class);
+            var rows = com.ibm.cldk.neo4j.V2GraphProjector.project(analysis, "widgets");
+            String root = CanId.applicationId("widgets", ns);
+            for (var node : rows.nodes) {
+                if (node.value.startsWith("can://")) assertTrue(node.value.equals(root) || node.value.startsWith(root + "/"));
+            }
+            for (var edge : rows.edges) {
+                for (String id : new String[] {edge.from.value, edge.to.value}) {
+                    if (id.startsWith("can://")) assertTrue(id.equals(root) || id.startsWith(root + "/"));
+                }
+            }
+
+            assertConformsToV2Schema(out);
+        }
+    }
+
+    private static void assertOwnedReferences(JsonElement element, String root) {
+        if (element.isJsonObject()) {
+            for (var e : element.getAsJsonObject().entrySet()) {
+                if (e.getKey().startsWith("can://")) assertTrue(e.getKey().startsWith(root + "/"));
+                assertOwnedReferences(e.getValue(), root);
+            }
+        } else if (element.isJsonArray()) {
+            for (var e : element.getAsJsonArray()) assertOwnedReferences(e, root);
+        } else if (element.isJsonPrimitive() && element.getAsJsonPrimitive().isString()) {
+            String value = element.getAsString();
+            if (value.startsWith("can://")) assertTrue(value.equals(root) || value.startsWith(root + "/"), value);
+        }
+    }
+
+    @Test
+    void invalidExplicitIdentityNeverDefaults(@TempDir Path tmp) throws Exception {
+        Path in = project(tmp.resolve("app"));
+        for (String flag : new String[] {"--app-name", "--namespace"}) {
+            for (String value : new String[] {"", " ", "a/b", ".."}) {
+                assertNotEquals(0, run("-i", in.toString(), "-o", tmp.resolve("out").toString(), flag, value));
+                assertFalse(Files.exists(tmp.resolve("out/analysis.json")));
+            }
+        }
+    }
+
 }

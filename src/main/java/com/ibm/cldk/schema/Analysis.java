@@ -9,6 +9,7 @@ import lombok.Data;
  */
 @Data
 public class Analysis {
+    private Integer identityVersion;
     private String schemaVersion;
     private String language;
     private int maxLevel;

@@ -62,6 +62,24 @@ class CypherWriterStreamingTest {
     }
 
     @Test
+    void actualV1SnapshotsReplaceOnlyTheNameKeyedLegacyApplication() {
+        GraphRows legacy = GraphProjector.project(Map.of(), null, "shared");
+        String script = CypherWriter.renderCypher(legacy, "shared");
+        assertTrue(script.contains("a.id IS NULL AND a.name = 'shared'"), script);
+        assertTrue(script.contains("OPTIONAL MATCH (a)-[:J_HAS_UNIT]->(c)"), script);
+        assertTrue(script.contains("OPTIONAL MATCH (c)-" + CypherWriter.DESCENDANTS + "->(x)"), script);
+        assertTrue(script.contains("DETACH DELETE x, c, a;"), script);
+        assertFalse(script.contains("STARTS WITH"), "v1 must not sweep a synthesized canonical root");
+        assertTrue(script.indexOf("DETACH DELETE x, c, a;") < script.indexOf("// ── nodes"));
+        var analysis = com.ibm.cldk.schema.V2Emitter.emit("shared", 1, Map.of(), null,
+                null, null, null, null, null, null, "team");
+        String canonical = CypherWriter.renderCypher(V2GraphProjector.project(analysis, "shared"), "shared");
+        assertTrue(canonical.contains("a.id = 'can://team/shared'"));
+        assertFalse(canonical.contains("a.name ="), "the same display name cannot activate v1 cleanup for v2");
+        assertFalse(canonical.contains("can://shared/shared"));
+    }
+
+    @Test
     void streamedOutputIsIdenticalToTheRenderedString() throws IOException {
         GraphRows rows = sampleRows(1200); // > 2 batches of 500
         StringWriter w = new StringWriter();
@@ -148,15 +166,9 @@ class CypherWriterStreamingTest {
         // "can://" + appName, so those share an id and are one node regardless.
         String out = CypherWriter.renderCypher(new RowBuilder().finish(), "app");
 
-        assertTrue(out.contains("a.id = 'can://app'"),
+        assertTrue(out.contains("a.id = 'can://app/app'"),
                 "must reach a v2 root of THIS app by its unique id, got: " + out);
-        assertTrue(out.contains("a.id IS NULL AND a.name = 'app'"),
-                "must reach a legacy v1 root (no id) by name, guarded by id IS NULL, got: " + out);
-        // Every `a.name =` in the predicate must be inside the `a.id IS NULL AND ...` guard: an
-        // unguarded one reaches v2 roots this analyzer never minted that carry the same name.
-        assertFalse(out.replace("a.id IS NULL AND a.name = 'app'", "").contains("a.name ="),
-                "a.name must never be matched outside the a.id IS NULL guard -- that would reach "
-                        + "any v2 root carrying this display name, not just this app's, got: " + out);
+        assertFalse(out.contains("a.name ="), "legacy roots require explicit retirement");
         assertFalse(out.contains("JApplication {name:"),
                 "the wipe must not property-match :JApplication by its no-longer-unique name: " + out);
     }
@@ -173,7 +185,7 @@ class CypherWriterStreamingTest {
                     "an unscoped destructive statement must never be rendered, app name: " + name);
         }
         // ... and the guard lives on the prefix itself, so every future caller inherits it.
-        assertEquals("can://app/", CypherWriter.applicationPrefix("app"),
+        assertEquals("can://app/app/", CypherWriter.applicationPrefix("app"),
                 "the swept prefix must end in the separator, or `can://appX` is in scope too");
     }
 }

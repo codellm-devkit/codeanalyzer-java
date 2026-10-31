@@ -34,6 +34,7 @@ public final class L1Cache {
     /** What is persisted: the modules plus the settings they were built under. */
     @Data
     static class Envelope {
+        private Integer identityVersion;
         private String schemaVersion;
         private String analyzerVersion;
         private String appName;
@@ -62,7 +63,7 @@ public final class L1Cache {
             if (envelope == null || envelope.getModules() == null) {
                 return new LinkedHashMap<>();
             }
-            boolean sameSettings = "2.0.0".equals(envelope.getSchemaVersion())
+            boolean sameSettings = Integer.valueOf(2).equals(envelope.getIdentityVersion()) && "2.0.0".equals(envelope.getSchemaVersion())
                     && java.util.Objects.equals(appName, envelope.getAppName())
                     && java.util.Objects.equals(analyzerVersion, envelope.getAnalyzerVersion());
             if (!sameSettings) {
@@ -83,6 +84,7 @@ public final class L1Cache {
             return;
         }
         Envelope envelope = new Envelope();
+        envelope.setIdentityVersion(2);
         envelope.setSchemaVersion("2.0.0");
         envelope.setAnalyzerVersion(analyzerVersion);
         envelope.setAppName(appName);
