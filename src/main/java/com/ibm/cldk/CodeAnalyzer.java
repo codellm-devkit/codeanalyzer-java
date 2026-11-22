@@ -516,6 +516,19 @@ public class CodeAnalyzer implements Runnable {
             modules = L1Extractor.extractAllForApplication(
                     Paths.get(input), applicationId, dependencyDir, cached,
                     analysisLevel, graphFieldDepth, l3Engine, entrypointReport);
+            // One qualified name in several files (vendored copies across source roots) is resolved
+            // caller-first, but a consumer keyed by qualified name cannot tell the copies apart, so
+            // it is reported, and fails a --strict run (#269).
+            Map<String, List<String>> duplicates = L1Extractor.duplicateTypeNames(modules);
+            if (!duplicates.isEmpty()) {
+                Map.Entry<String, List<String>> first = duplicates.entrySet().iterator().next();
+                String summary = duplicates.size() + " qualified type name(s) are declared in more than"
+                        + " one file (e.g. " + first.getKey() + " in " + String.join(", ", first.getValue())
+                        + ")";
+                Log.warn(summary + "; each caller resolves such a name against its own source root"
+                        + " first, then the other roots in source-root order");
+                degraded.add(summary);
+            }
             // The WALA L3 engine needs the RTA build; --no-rta suppresses it, so a level-3 wala run with
             // --no-rta would silently carry no overlays. Warn rather than degrade without a signal.
             if (analysisLevel >= 3 && noRta && "wala".equalsIgnoreCase(l3Engine)) {
