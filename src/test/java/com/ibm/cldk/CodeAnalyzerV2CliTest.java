@@ -17,8 +17,10 @@ import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
 import com.networknt.schema.SpecVersion;
 import com.networknt.schema.ValidationMessage;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PrintStream;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -110,6 +112,38 @@ class CodeAnalyzerV2CliTest {
         Field f = SymbolTable.class.getDeclaredField(field);
         f.setAccessible(true);
         ((java.util.Collection<?>) f.get(null)).clear();
+    }
+
+    /**
+     * The file and stdout are serialized as they are written, not built as one String first, so an
+     * analysis past a String's ~2^31-character limit can still be written (#277). Guard the
+     * observable result: both carry the same document, the file in UTF-8, stdout as one compact line.
+     */
+    @Test
+    void stdoutAndAnalysisJsonCarryTheSameDocument(@TempDir Path tmp) throws Exception {
+        Path in = project(tmp.resolve("app"));
+        Files.writeString(in.resolve("src/main/java/com/example/Café.java"),
+                "package com.example;\npublic class Café { public String name() { return \"naïve\"; } }\n",
+                StandardCharsets.UTF_8);
+        Path out = tmp.resolve("out");
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "--app-name", "widgets"));
+        JsonElement fromFile = JsonParser.parseString(
+                Files.readString(out.resolve("analysis.json"), StandardCharsets.UTF_8));
+        assertTrue(fromFile.toString().contains("Café"), "non-ASCII names survive the file write");
+
+        resetStaticOptions();
+        PrintStream saved = System.out;
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        System.setOut(new PrintStream(captured, true, StandardCharsets.UTF_8));
+        try {
+            assertEquals(0, run("-i", in.toString(), "--app-name", "widgets"));
+        } finally {
+            System.setOut(saved);
+        }
+        String stdout = captured.toString(StandardCharsets.UTF_8);
+        assertTrue(stdout.endsWith(System.lineSeparator()), "stdout ends with one line separator");
+        assertEquals(1, stdout.strip().lines().count(), "stdout is one compact line");
+        assertEquals(fromFile, JsonParser.parseString(stdout));
     }
 
     @Test

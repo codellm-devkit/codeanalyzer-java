@@ -47,11 +47,15 @@ import com.ibm.cldk.syntactic_analysis.dataflow.SummaryPass;
 import com.ibm.cldk.utils.BuildProject;
 import com.ibm.cldk.utils.Log;
 import com.ibm.cldk.wala.WalaAnalysis;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
 import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -675,16 +679,25 @@ public class CodeAnalyzer implements Runnable {
             return;
         }
 
+        // Serialized as it is written, never built as one String first: a String or StringBuilder
+        // cannot hold more than about 2^31 characters, so a large enough analysis would otherwise
+        // fail with OutOfMemoryError however much heap the JVM has (#277, as #209 was for neo4j).
         if (output == null) {
             // stdout is the data channel: compact JSON only, so the SDK can parse it directly.
-            System.out.println(V2Json.compact().toJson(analysis));
+            // The default charset, as System.out.println encodes; flushed, not closed, since
+            // System.out stays open for the rest of the run.
+            Writer out = new BufferedWriter(new OutputStreamWriter(System.out));
+            V2Json.compact().toJson(analysis, out);
+            out.write(System.lineSeparator());
+            out.flush();
         } else {
             Path outputPath = Paths.get(output);
             if (!Files.exists(outputPath)) {
                 Files.createDirectories(outputPath);
             }
-            try (FileWriter writer = new FileWriter(new File(output, outputFileName))) {
-                writer.write(V2Json.pretty().toJson(analysis));
+            try (Writer writer = Files.newBufferedWriter(outputPath.resolve(outputFileName),
+                    StandardCharsets.UTF_8)) {
+                V2Json.pretty().toJson(analysis, writer);
             }
         }
     }
