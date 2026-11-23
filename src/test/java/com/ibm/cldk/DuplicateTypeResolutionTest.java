@@ -1,7 +1,6 @@
 package com.ibm.cldk;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.google.gson.JsonElement;
@@ -154,17 +153,135 @@ class DuplicateTypeResolutionTest {
         }
     }
 
-    /** One name declared in several source roots is reported, and fails the run under --strict (#269). */
-    @Test
-    void duplicateQualifiedNamesFailUnderStrict(@TempDir Path tmp) throws Exception {
-        Path in = vendoredServices(tmp.resolve("app"));
-        assertEquals(0, run("-i", in.toString(), "-o", tmp.resolve("lenient").toString(),
+    /** Writes {@code text} at {@code root/svc/src/main/java/com/shared/name.java}. */
+    private static void shared(Path root, String svc, String name, String text) throws IOException {
+        Path pkg = root.resolve(svc).resolve("src/main/java/com/shared");
+        Files.createDirectories(pkg);
+        Files.writeString(pkg.resolve(name + ".java"), "package com.shared;\n" + text,
+                StandardCharsets.UTF_8);
+    }
+
+    private static java.util.List<String> targets(java.util.List<JsonObject> edges, String caller,
+            String callee) {
+        return edges.stream()
+                .filter(e -> e.get("src").getAsString().contains(caller))
+                .map(e -> e.get("dst").getAsString())
+                .filter(d -> d.contains(callee))
+                .collect(Collectors.toList());
+    }
+
+    private static java.util.List<JsonObject> level2Edges(Path in, Path out) throws IOException {
+        assertEquals(0, run("-i", in.toString(), "-o", out.toString(), "-a", "2", "--no-rta",
                 "--app-name", "dt"));
-        assertNotEquals(0, run("-i", in.toString(), "-o", tmp.resolve("strict").toString(),
-                "--app-name", "dt", "--strict"));
+        return callEdges(JsonParser.parseString(
+                Files.readString(out.resolve("analysis.json"), StandardCharsets.UTF_8)));
+    }
+
+    /**
+     * Copies whose signatures diverge (#269): each caller's call resolves only against its own
+     * copy, so the edge exists only if L1 resolved the call through the caller's own source root.
+     * Level 2's nearest-copy choice cannot recover a call L1 left unresolved.
+     */
+    @Test
+    void divergedCopiesResolveThroughTheCallersOwnRoot(@TempDir Path tmp) throws Exception {
+        Path in = tmp.resolve("app");
+        shared(in, "svc-a", "RunStatsDataBean",
+                "public class RunStatsDataBean {\n  public String origin(int n) { return \"a\"; }\n}\n");
+        shared(in, "svc-b", "RunStatsDataBean",
+                "public class RunStatsDataBean {\n  public String origin(String s) { return s; }\n}\n");
+        shared(in, "svc-c", "RunStatsDataBean",
+                "public class RunStatsDataBean {\n  public String origin() { return \"c\"; }\n}\n");
+        shared(in, "svc-a", "CallerA",
+                "public class CallerA {\n  public String go() { return new RunStatsDataBean().origin(1); }\n}\n");
+        shared(in, "svc-b", "CallerB",
+                "public class CallerB {\n  public String go() { return new RunStatsDataBean().origin(\"x\"); }\n}\n");
+        java.util.List<JsonObject> edges = level2Edges(in, tmp.resolve("out"));
+        java.util.List<String> a = targets(edges, "CallerA", "origin");
+        java.util.List<String> b = targets(edges, "CallerB", "origin");
+        assertEquals(1, a.size(), "CallerA -> origin(int): " + a);
+        assertTrue(a.get(0).contains("svc-a/") && a.get(0).contains("origin(int)"), a.get(0));
+        assertEquals(1, b.size(), "CallerB -> origin(String): " + b);
+        assertTrue(b.get(0).contains("svc-b/") && b.get(0).contains("origin(java.lang.String)"), b.get(0));
+    }
+
+    /**
+     * A caller whose own root has no copy falls back to the first other root in path order, wherever
+     * the application is checked out (#269). JavaParser lists source roots in hash order of their
+     * absolute paths, so without sorting, the fallback copy changed with the checkout location. The
+     * copies' signatures diverge, so only svc-b's copy can resolve the call.
+     */
+    @Test
+    void fallbackCopyIsTheFirstRootInPathOrderWhereverCheckedOut(@TempDir Path tmp) throws Exception {
+        for (int i = 0; i < 8; i++) {
+            Path in = tmp.resolve("checkout-" + i).resolve("app");
+            shared(in, "svc-b", "RunStatsDataBean",
+                    "public class RunStatsDataBean {\n  public String origin(int n) { return \"b\"; }\n}\n");
+            shared(in, "svc-c", "RunStatsDataBean",
+                    "public class RunStatsDataBean {\n  public String origin(String s) { return s; }\n}\n");
+            shared(in, "svc-d", "CallerD",
+                    "public class CallerD {\n  public String go() { return new RunStatsDataBean().origin(1); }\n}\n");
+            java.util.List<String> d = targets(level2Edges(in, tmp.resolve("out-" + i)), "CallerD", "origin");
+            assertEquals(1, d.size(), "checkout-" + i + ": CallerD -> origin(int): " + d);
+            assertTrue(d.get(0).contains("svc-b/"), d.get(0));
+        }
+    }
+
+    /**
+     * Known limitation, pinned (#269): only the caller's reference picks its own copy. What a found
+     * copy's declarations refer to (here, the return type of {@code Bean.helper()}) resolves in the
+     * application-wide order, so CallerB reaches svc-a's {@code Helper}, which lacks
+     * {@code tag(String)}, and that call stays unresolved. Fixing it needs a parse cache per source
+     * root; if that lands, this test should flip to expect the svc-b edge.
+     */
+    @Test
+    void knownLimitationMembersOfAFoundCopyResolveApplicationWide(@TempDir Path tmp) throws Exception {
+        Path in = tmp.resolve("app");
+        for (String svc : new String[] {"svc-a", "svc-b"}) {
+            shared(in, svc, "Bean",
+                    "public class Bean {\n  public Helper helper() { return new Helper(); }\n}\n");
+        }
+        shared(in, "svc-a", "Helper",
+                "public class Helper {\n  public String tag(int n) { return \"a\"; }\n}\n");
+        shared(in, "svc-b", "Helper",
+                "public class Helper {\n  public String tag(String s) { return s; }\n}\n");
+        shared(in, "svc-b", "CallerB",
+                "public class CallerB {\n  public String go() { return new Bean().helper().tag(\"x\"); }\n}\n");
+        java.util.List<JsonObject> edges = level2Edges(in, tmp.resolve("out"));
+        java.util.List<String> helper = targets(edges, "CallerB", "helper()");
+        assertEquals(1, helper.size(), "CallerB -> helper(): " + helper);
+        assertTrue(helper.get(0).contains("svc-b/"), helper.get(0));
+        assertEquals(java.util.List.of(), targets(edges, "CallerB", "tag("));
+    }
+
+    private static String stderrOf(String... args) throws Exception {
+        java.io.PrintStream original = System.err;
+        java.io.ByteArrayOutputStream captured = new java.io.ByteArrayOutputStream();
+        System.setErr(new java.io.PrintStream(captured, true, "UTF-8"));
+        try {
+            assertEquals(0, run(args), String.join(" ", args));
+        } finally {
+            System.setErr(original);
+        }
+        return captured.toString(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * A duplicated name is warned about on stderr on every run, verbose or not, and is not a
+     * degradation (#269): the output keeps every copy, so --strict passes.
+     */
+    @Test
+    void duplicateQualifiedNamesWarnOnStderrAndPassStrict(@TempDir Path tmp) throws Exception {
+        Path in = vendoredServices(tmp.resolve("app"));
+        String err = stderrOf("-i", in.toString(), "-o", tmp.resolve("strict").toString(),
+                "--app-name", "dt", "--strict");
+        assertTrue(err.contains("warning: 1 qualified type name(s) are declared in more than one file"),
+                err);
+        assertTrue(err.contains("com.shared.RunStatsDataBean in svc-a/src/main/java/com/shared/"
+                + "RunStatsDataBean.java, svc-b/"), err);
         Path single = project(tmp.resolve("single"));
-        assertEquals(0, run("-i", single.toString(), "-o", tmp.resolve("single-out").toString(),
-                "--app-name", "widgets", "--strict"));
+        String clean = stderrOf("-i", single.toString(), "-o", tmp.resolve("single-out").toString(),
+                "--app-name", "widgets", "--strict");
+        assertTrue(!clean.contains("warning:"), clean);
     }
 
 }

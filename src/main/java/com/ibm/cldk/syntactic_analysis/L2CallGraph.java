@@ -309,7 +309,8 @@ public final class L2CallGraph {
             return; // a library caller has no in-project node to attribute the edge to
         }
         // WALA loads one class per name, so an RTA source has no caller to be near: it takes the
-        // first copy, and its destination is then chosen near that source.
+        // first copy in id order that declares the signature, and its destination is then chosen
+        // near that source.
         String src = inProjectId(edge.srcType, edge.srcSignature, index, callableIds, null);
         if (src == null) {
             return; // an in-project synthetic (bridge, access$, lambda$) or an identity-join failure

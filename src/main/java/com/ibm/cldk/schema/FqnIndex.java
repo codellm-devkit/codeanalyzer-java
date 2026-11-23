@@ -30,7 +30,7 @@ public final class FqnIndex {
         return ids.containsKey(name);
     }
 
-    /** Every id declaring {@code name}, nearest {@code near} first ({@code near} may be null). */
+    /** Every id declaring {@code name}, nearest {@code near} first ({@code near} may be null); read-only. */
     public List<String> ordered(String name, String near) {
         sortOnce();
         List<String> found = ids.get(name);
@@ -38,7 +38,7 @@ public final class FqnIndex {
             return List.of();
         }
         if (near == null || found.size() < 2) {
-            return found;
+            return Collections.unmodifiableList(found);
         }
         List<String> ordered = new ArrayList<>(found);
         ordered.sort(Comparator.comparingInt((String id) -> -commonSegments(id, near))

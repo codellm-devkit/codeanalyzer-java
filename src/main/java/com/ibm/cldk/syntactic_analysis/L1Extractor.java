@@ -145,6 +145,9 @@ public final class L1Extractor {
                 sourceRoots.add(sourceRoot);
             }
         }
+        // ProjectRoot lists roots in hash order of their absolute paths, so the order changed with
+        // the checkout location. Resolution falls back through the roots in this order (#269).
+        sourceRoots.sort(java.util.Comparator.comparing(sr -> sr.getRoot().toString()));
 
         // One resolution order per source root, its own root first (#269): a type declared in
         // several roots (vendored copies of a shared library) then binds each caller to its own
@@ -241,7 +244,9 @@ public final class L1Extractor {
             this.jars = jars;
             // A solver's parent is what it resolves the insides of a found declaration through
             // (its supertypes, its members' types). That is the application-wide order; the
-            // per-root orders below decide only which copy a caller's reference finds (#269).
+            // per-root orders below decide only which copy a caller's reference finds (#269). So a
+            // chained call through a found copy (copy.helper().tag()) resolves helper()'s return type
+            // application-wide, a known limitation: lifting it needs a parse cache per source root.
             CombinedTypeSolver application = new CombinedTypeSolver();
             application.add(new ReflectionTypeSolver());
             roots.forEach(application::add);
@@ -249,7 +254,7 @@ public final class L1Extractor {
         }
 
         /**
-         * JDK, then source root {@code own}, then the other roots in source-root order, then the
+         * JDK, then source root {@code own}, then the other roots in path order, then the
          * jars. A caller whose own root lacks a duplicated type still gets the first other copy:
          * documented, and deterministic, rather than caller-local.
          */

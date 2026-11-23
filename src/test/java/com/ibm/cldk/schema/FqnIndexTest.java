@@ -2,6 +2,7 @@ package com.ibm.cldk.schema;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -42,5 +43,14 @@ class FqnIndexTest {
     void anUnknownNameHasNone() {
         assertNull(index().nearest("com.shared.Missing", A));
         assertEquals(List.of(), index().ordered("com.shared.Missing", null));
+    }
+
+    /** A caller cannot reorder or extend the index through a returned list. */
+    @Test
+    void orderedListsAreReadOnly() {
+        FqnIndex index = index();
+        assertThrows(UnsupportedOperationException.class, () -> index.ordered("com.shared.Bean", null).clear());
+        assertThrows(UnsupportedOperationException.class, () -> index.ordered("com.shared.Only", A).clear());
+        assertEquals(List.of(A, B, C), index.ordered("com.shared.Bean", null));
     }
 }
