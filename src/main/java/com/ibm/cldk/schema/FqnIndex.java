@@ -59,8 +59,8 @@ public final class FqnIndex {
         }
     }
 
-    /** How many leading {@code /}-separated segments two ids share. */
-    static int commonSegments(String a, String b) {
+    /** How many leading {@code /}-separated segments two ids (or two relative paths) share. */
+    public static int commonSegments(String a, String b) {
         String[] x = a.split("/");
         String[] y = b.split("/");
         int n = 0;

@@ -16,6 +16,7 @@ import com.github.javaparser.utils.ParserCollectionStrategy;
 import com.github.javaparser.utils.ProjectRoot;
 import com.github.javaparser.utils.SourceRoot;
 import com.ibm.cldk.schema.CanId;
+import com.ibm.cldk.schema.FqnIndex;
 import com.ibm.cldk.schema.JEntrypointReport;
 import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.utils.Log;
@@ -146,13 +147,19 @@ public final class L1Extractor {
             }
         }
         // ProjectRoot lists roots in hash order of their absolute paths, so the order changed with
-        // the checkout location. Resolution falls back through the roots in this order (#269).
-        sourceRoots.sort(java.util.Comparator.comparing(sr -> sr.getRoot().toString()));
+        // the checkout location. Sorted on the /-separated relative path, the same on every OS and
+        // the order L2 breaks ties in, since a node id spells that path (#269).
+        Path keyRoot = projectRoot;
+        sourceRoots.sort(java.util.Comparator.comparing(sr -> fileKey(keyRoot, sr.getRoot())));
+        List<String> rootKeys = new ArrayList<>();
+        for (SourceRoot sourceRoot : sourceRoots) {
+            rootKeys.add(fileKey(keyRoot, sourceRoot.getRoot()));
+        }
 
         // One resolution order per source root, its own root first (#269): a type declared in
         // several roots (vendored copies of a shared library) then binds each caller to its own
         // copy, not to whichever root a single shared solver happened to try first.
-        Solvers solvers = typeSolvers(sourceRoots, dependencyDir, discovery);
+        Solvers solvers = typeSolvers(sourceRoots, rootKeys, dependencyDir, discovery);
 
         // Collect into a sorted map first: directory listings are not ordered, and output must not
         // depend on traversal order.
@@ -237,10 +244,12 @@ public final class L1Extractor {
      */
     private static final class Solvers {
         final List<TypeSolver> roots;
+        final List<String> rootKeys;
         final List<TypeSolver> jars;
 
-        Solvers(List<TypeSolver> roots, List<TypeSolver> jars) {
+        Solvers(List<TypeSolver> roots, List<String> rootKeys, List<TypeSolver> jars) {
             this.roots = roots;
+            this.rootKeys = rootKeys;
             this.jars = jars;
             // A solver's parent is what it resolves the insides of a found declaration through
             // (its supertypes, its members' types). That is the application-wide order; the
@@ -254,9 +263,10 @@ public final class L1Extractor {
         }
 
         /**
-         * JDK, then source root {@code own}, then the other roots in path order, then the
-         * jars. A caller whose own root lacks a duplicated type still gets the first other copy:
-         * documented, and deterministic, rather than caller-local.
+         * JDK, then source root {@code own}, then the other roots nearest it first (the most leading
+         * path segments in common, so a sibling of the same service before another service), ties
+         * in path order, then the jars. That is the rule L2 binds a call by ({@link FqnIndex}), so
+         * the two levels pick the same copy when the caller's own root has none (#269).
          */
         CombinedTypeSolver orderedFor(int own) {
             CombinedTypeSolver solver = new CombinedTypeSolver();
@@ -265,11 +275,17 @@ public final class L1Extractor {
             // on them, silently inventing qualified names.
             solver.add(new ReflectionTypeSolver());
             solver.add(new SharedTypeSolver(roots.get(own)));
+            List<Integer> others = new ArrayList<>();
             for (int r = 0; r < roots.size(); r++) {
                 if (r != own) {
-                    solver.add(new SharedTypeSolver(roots.get(r)));
+                    others.add(r);
                 }
             }
+            String ownKey = rootKeys.get(own);
+            // Stable sort over path order: equal nearness keeps the roots in path order.
+            others.sort(java.util.Comparator.comparingInt(
+                    (Integer r) -> -FqnIndex.commonSegments(rootKeys.get(r), ownKey)));
+            others.forEach(r -> solver.add(new SharedTypeSolver(roots.get(r))));
             jars.forEach(jar -> solver.add(new SharedTypeSolver(jar)));
             return solver;
         }
@@ -305,8 +321,8 @@ public final class L1Extractor {
     }
 
     /** Project sources and dependency jars, each solver built once (see {@link Solvers}). */
-    private static Solvers typeSolvers(
-            List<SourceRoot> sourceRoots, Path dependencyDir, ParserConfiguration config) {
+    private static Solvers typeSolvers(List<SourceRoot> sourceRoots, List<String> rootKeys,
+            Path dependencyDir, ParserConfiguration config) {
         List<TypeSolver> roots = new ArrayList<>();
         for (SourceRoot sourceRoot : sourceRoots) {
             roots.add(new JavaParserTypeSolver(sourceRoot.getRoot(), config));
@@ -332,7 +348,7 @@ public final class L1Extractor {
         }
         Log.debug("Type solver: " + sourceRoots.size() + " source root(s), " + jarSolvers.size()
                 + " dependency jar(s)");
-        return new Solvers(roots, jarSolvers);
+        return new Solvers(roots, rootKeys, jarSolvers);
     }
 
     /**

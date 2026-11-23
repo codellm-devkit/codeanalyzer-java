@@ -226,6 +226,40 @@ class DuplicateTypeResolutionTest {
         }
     }
 
+    private static void write(Path root, String rel, String text) throws IOException {
+        Path file = root.resolve(rel);
+        Files.createDirectories(file.getParent());
+        Files.writeString(file, text, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * With no copy in the caller's own root, both levels fall back to the copy nearest it (#269):
+     * svc-a/vendor shares {@code svc-a} with the caller's root, lib shares nothing. L1 once fell
+     * back in path order (lib first) while L2 chose by nearness, so the edges contradicted each
+     * other: CallerA called svc-a/vendor's {@code get()} and, through lib's copy, {@code A.tag()}.
+     */
+    @Test
+    void bothLevelsFallBackToTheNearestCopy(@TempDir Path tmp) throws Exception {
+        Path in = tmp.resolve("app");
+        write(in, "lib/src/main/java/com/shared/Bean.java",
+                "package com.shared;\npublic class Bean {\n  public A get() { return new A(); }\n}\n");
+        write(in, "lib/src/main/java/com/shared/A.java",
+                "package com.shared;\npublic class A {\n  public String tag() { return \"a\"; }\n}\n");
+        write(in, "svc-a/vendor/com/shared/Bean.java",
+                "package com.shared;\npublic class Bean {\n  public B get() { return new B(); }\n}\n");
+        write(in, "svc-a/vendor/com/shared/B.java",
+                "package com.shared;\npublic class B {\n  public String tag() { return \"b\"; }\n}\n");
+        write(in, "svc-a/src/main/java/com/app/CallerA.java",
+                "package com.app;\nimport com.shared.Bean;\npublic class CallerA {\n"
+                        + "  public String go() { return new Bean().get().tag(); }\n}\n");
+        java.util.List<JsonObject> edges = level2Edges(in, tmp.resolve("out"));
+        java.util.List<String> get = targets(edges, "CallerA", "get()");
+        assertEquals(1, get.size(), "CallerA -> get(): " + get);
+        assertTrue(get.get(0).contains("svc-a/vendor/"), get.get(0));
+        assertEquals(1, targets(edges, "CallerA", "/B/tag()").size(), "CallerA -> B.tag(): " + edges);
+        assertEquals(java.util.List.of(), targets(edges, "CallerA", "/A/tag()"));
+    }
+
     /**
      * Known limitation, pinned (#269): only the caller's reference picks its own copy. What a found
      * copy's declarations refer to (here, the return type of {@code Bean.helper()}) resolves in the
