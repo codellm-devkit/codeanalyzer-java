@@ -1,6 +1,7 @@
 package com.ibm.cldk.syntactic_analysis;
 
 import com.ibm.cldk.schema.CanId;
+import com.ibm.cldk.schema.FqnIndex;
 import com.ibm.cldk.schema.JBodyNode;
 import com.ibm.cldk.schema.JCallEdge;
 import com.ibm.cldk.schema.JCallable;
@@ -139,7 +140,9 @@ public final class L2CallGraph {
     public static Result buildForApplication(String appName, Map<String, JModule> modules, List<RtaEndpoint> rtaEdges, boolean includeExternal) {
         // The type index (named types only) and the set of every callable id in the tree. The latter
         // turns no-dangling, the signature-miss case, and the RTA drop rules into O(1) membership checks.
-        Map<String, String> typeIdByBinaryName = new HashMap<>();
+        // A binary name maps to every type declaring it: vendored copies of one library across source
+        // roots declare one name in several files (#269), and a caller binds to the nearest copy.
+        FqnIndex typeIdByBinaryName = new FqnIndex();
         Set<String> callableIds = new HashSet<>();
         for (JModule module : modules.values()) {
             String pkg = module.getPackageName();
@@ -187,7 +190,7 @@ public final class L2CallGraph {
      * bodies are skipped — javac numbers those per outer class while L1 numbers them per scope, so they
      * have no binary name that would join; they are reached only by node identity, not this index.
      */
-    private static void indexNamedTypes(String binaryName, JType type, Map<String, String> index) {
+    private static void indexNamedTypes(String binaryName, JType type, FqnIndex index) {
         index.put(binaryName, type.getId());
         for (Map.Entry<String, JType> entry : type.getTypes().entrySet()) {
             if (!entry.getKey().startsWith("$")) {
@@ -213,7 +216,7 @@ public final class L2CallGraph {
     private static void backfillTree(
             JType type,
             String appName,
-            Map<String, String> index,
+            FqnIndex index,
             Set<String> callableIds,
             Map<String, Map<String, Integer>> weightBySrcDst,
             Map<String, JExternalSymbol> externalSymbols,
@@ -230,7 +233,7 @@ public final class L2CallGraph {
     private static void backfillCallable(
             JCallable callable,
             String appName,
-            Map<String, String> index,
+            FqnIndex index,
             Set<String> callableIds,
             Map<String, Map<String, Integer>> weightBySrcDst,
             Map<String, JExternalSymbol> externalSymbols,
@@ -240,7 +243,7 @@ public final class L2CallGraph {
             if (!"call".equals(node.getKind())) {
                 continue;
             }
-            String dst = resolveCallee(node, appName, index, callableIds, externalSymbols, includeExternal);
+            String dst = resolveCallee(node, src, appName, index, callableIds, externalSymbols, includeExternal);
             if (dst == null) {
                 // Signature-miss, unresolved, or (with external off) a dropped external target. Clear any
                 // prior value so build() is idempotent on a reused tree and no stale callee dangles when
@@ -259,8 +262,9 @@ public final class L2CallGraph {
      */
     private static String resolveCallee(
             JBodyNode node,
+            String caller,
             String appName,
-            Map<String, String> index,
+            FqnIndex index,
             Set<String> callableIds,
             Map<String, JExternalSymbol> externalSymbols,
             boolean includeExternal) {
@@ -278,7 +282,7 @@ public final class L2CallGraph {
             return null; // resolved the type but not a signature to compose
         }
         if (index.containsKey(hint)) {
-            return inProjectId(hint, signature, index, callableIds); // in-project hit (case 2) or signature-miss
+            return inProjectId(hint, signature, index, callableIds, caller); // in-project hit (case 2) or signature-miss
         }
         if (!includeExternal) {
             return null; // case 4 gated off: match v1's application-only graph
@@ -296,7 +300,7 @@ public final class L2CallGraph {
     private static void joinRtaEdge(
             RtaEndpoint edge,
             String appName,
-            Map<String, String> index,
+            FqnIndex index,
             Set<String> callableIds,
             Map<String, Map<String, Integer>> rtaWeights,
             Map<String, JExternalSymbol> externalSymbols,
@@ -304,13 +308,16 @@ public final class L2CallGraph {
         if (!edge.srcAppClass) {
             return; // a library caller has no in-project node to attribute the edge to
         }
-        String src = inProjectId(edge.srcType, edge.srcSignature, index, callableIds);
+        // WALA loads one class per name, so an RTA source has no caller to be near: it takes the
+        // first copy in id order that declares the signature, and its destination is then chosen
+        // near that source.
+        String src = inProjectId(edge.srcType, edge.srcSignature, index, callableIds, null);
         if (src == null) {
             return; // an in-project synthetic (bridge, access$, lambda$) or an identity-join failure
         }
         String dst;
         if (edge.dstAppClass) {
-            dst = inProjectId(edge.dstType, edge.dstSignature, index, callableIds);
+            dst = inProjectId(edge.dstType, edge.dstSignature, index, callableIds, src);
             if (dst == null) {
                 return; // in-project but absent from the tree — drop rather than fabricate
             }
@@ -325,15 +332,21 @@ public final class L2CallGraph {
         rtaWeights.computeIfAbsent(src, k -> new TreeMap<>()).merge(dst, 1, Integer::sum);
     }
 
-    /** The in-project callable id for a binary type + signature, or {@code null} if absent from the tree. */
-    private static String inProjectId(
-            String binaryType, String signature, Map<String, String> index, Set<String> callableIds) {
-        String typeId = index.get(binaryType);
-        if (typeId == null) {
-            return null;
+    /**
+     * The in-project callable id for a binary type + signature, or {@code null} if absent from the tree.
+     * When several types declare the name (#269), the one nearest {@code near} that declares the
+     * signature wins: the most leading id segments in common (its own source root first), then id
+     * order. With no {@code near}, id order alone, so the choice is always deterministic.
+     */
+    private static String inProjectId(String binaryType, String signature, FqnIndex index,
+            Set<String> callableIds, String near) {
+        for (String typeId : index.ordered(binaryType, near)) {
+            String composed = CanId.childId(typeId, signature);
+            if (callableIds.contains(composed)) {
+                return composed;
+            }
         }
-        String composed = CanId.childId(typeId, signature);
-        return callableIds.contains(composed) ? composed : null;
+        return null;
     }
 
     private static JExternalSymbol externalSymbol(String signature, String binaryType, boolean constructor) {

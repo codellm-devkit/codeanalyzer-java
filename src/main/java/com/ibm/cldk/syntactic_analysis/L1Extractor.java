@@ -4,6 +4,9 @@ import com.github.javaparser.JavaParser;
 import com.github.javaparser.ParseResult;
 import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.resolution.TypeSolver;
+import com.github.javaparser.resolution.declarations.ResolvedReferenceTypeDeclaration;
+import com.github.javaparser.resolution.model.SymbolReference;
 import com.github.javaparser.symbolsolver.JavaSymbolSolver;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.CombinedTypeSolver;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.JarTypeSolver;
@@ -13,6 +16,7 @@ import com.github.javaparser.utils.ParserCollectionStrategy;
 import com.github.javaparser.utils.ProjectRoot;
 import com.github.javaparser.utils.SourceRoot;
 import com.ibm.cldk.schema.CanId;
+import com.ibm.cldk.schema.FqnIndex;
 import com.ibm.cldk.schema.JEntrypointReport;
 import com.ibm.cldk.schema.JModule;
 import com.ibm.cldk.utils.Log;
@@ -142,16 +146,29 @@ public final class L1Extractor {
                 sourceRoots.add(sourceRoot);
             }
         }
+        // ProjectRoot lists roots in hash order of their absolute paths, so the order changed with
+        // the checkout location. Sorted on the /-separated relative path, the same on every OS and
+        // the order L2 breaks ties in, since a node id spells that path (#269).
+        Path keyRoot = projectRoot;
+        sourceRoots.sort(java.util.Comparator.comparing(sr -> fileKey(keyRoot, sr.getRoot())));
+        List<String> rootKeys = new ArrayList<>();
+        for (SourceRoot sourceRoot : sourceRoots) {
+            rootKeys.add(fileKey(keyRoot, sourceRoot.getRoot()));
+        }
 
-        ParserConfiguration config = parserConfiguration()
-                .setSymbolResolver(new JavaSymbolSolver(typeSolver(sourceRoots, dependencyDir, discovery)));
+        // One resolution order per source root, its own root first (#269): a type declared in
+        // several roots (vendored copies of a shared library) then binds each caller to its own
+        // copy, not to whichever root a single shared solver happened to try first.
+        Solvers solvers = typeSolvers(sourceRoots, rootKeys, dependencyDir, discovery);
 
         // Collect into a sorted map first: directory listings are not ordered, and output must not
         // depend on traversal order.
         Map<String, JModule> modules = new TreeMap<>();
-        JavaParser parser = new JavaParser(config);
         int reused = 0;
-        for (SourceRoot sourceRoot : sourceRoots) {
+        for (int r = 0; r < sourceRoots.size(); r++) {
+            SourceRoot sourceRoot = sourceRoots.get(r);
+            JavaParser parser = new JavaParser(parserConfiguration()
+                    .setSymbolResolver(new JavaSymbolSolver(solvers.orderedFor(r))));
             for (Path path : javaFilesUnder(sourceRoot.getRoot())) {
                 String fileKey = fileKey(projectRoot, path);
                 // Read the file's own text rather than printing the AST: `span.bytes` must index the
@@ -221,19 +238,96 @@ public final class L1Extractor {
                 .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21);
     }
 
-    /** JDK + project sources + dependency jars, in that resolution order. */
-    private static CombinedTypeSolver typeSolver(
-            List<SourceRoot> sourceRoots, Path dependencyDir, ParserConfiguration config) {
-        CombinedTypeSolver solver = new CombinedTypeSolver();
-        // JRE types only. A classpath-wide ReflectionTypeSolver would resolve the *analyzer's* own
-        // dependencies (WALA, Guava, JavaParser, ...) as if the analysed project depended on them,
-        // silently inventing qualified names. Project types come from the source roots below, and
-        // library types from the dependency jars.
-        solver.add(new ReflectionTypeSolver());
-        for (SourceRoot sourceRoot : sourceRoots) {
-            solver.add(new JavaParserTypeSolver(sourceRoot.getRoot(), config));
+    /**
+     * The type solvers of an application: one per source root and one per dependency jar, each
+     * built once, and arranged per source root by {@link #orderedFor}.
+     */
+    private static final class Solvers {
+        final List<TypeSolver> roots;
+        final List<String> rootKeys;
+        final List<TypeSolver> jars;
+
+        Solvers(List<TypeSolver> roots, List<String> rootKeys, List<TypeSolver> jars) {
+            this.roots = roots;
+            this.rootKeys = rootKeys;
+            this.jars = jars;
+            // A solver's parent is what it resolves the insides of a found declaration through
+            // (its supertypes, its members' types). That is the application-wide order; the
+            // per-root orders below decide only which copy a caller's reference finds (#269). So a
+            // chained call through a found copy (copy.helper().tag()) resolves helper()'s return type
+            // application-wide, a known limitation: lifting it needs a parse cache per source root.
+            CombinedTypeSolver application = new CombinedTypeSolver();
+            application.add(new ReflectionTypeSolver());
+            roots.forEach(application::add);
+            jars.forEach(application::add);
         }
-        int jars = 0;
+
+        /**
+         * JDK, then source root {@code own}, then the other roots nearest it first (the most leading
+         * path segments in common, so a sibling of the same service before another service), ties
+         * in path order, then the jars. That is the rule L2 binds a call by ({@link FqnIndex}), so
+         * the two levels pick the same copy when the caller's own root has none (#269).
+         */
+        CombinedTypeSolver orderedFor(int own) {
+            CombinedTypeSolver solver = new CombinedTypeSolver();
+            // JRE types only. A classpath-wide ReflectionTypeSolver would resolve the *analyzer's*
+            // own dependencies (WALA, Guava, JavaParser, ...) as if the analysed project depended
+            // on them, silently inventing qualified names.
+            solver.add(new ReflectionTypeSolver());
+            solver.add(new SharedTypeSolver(roots.get(own)));
+            List<Integer> others = new ArrayList<>();
+            for (int r = 0; r < roots.size(); r++) {
+                if (r != own) {
+                    others.add(r);
+                }
+            }
+            String ownKey = rootKeys.get(own);
+            // Stable sort over path order: equal nearness keeps the roots in path order.
+            others.sort(java.util.Comparator.comparingInt(
+                    (Integer r) -> -FqnIndex.commonSegments(rootKeys.get(r), ownKey)));
+            others.forEach(r -> solver.add(new SharedTypeSolver(roots.get(r))));
+            jars.forEach(jar -> solver.add(new SharedTypeSolver(jar)));
+            return solver;
+        }
+    }
+
+    /**
+     * A solver that answers for a shared one. A {@link TypeSolver} takes a single parent, so the one
+     * solver per source root (and its parse cache) can sit in every root's order only behind one of
+     * these: the wrapper takes the order as its parent, the shared solver keeps its own.
+     */
+    private static final class SharedTypeSolver implements TypeSolver {
+        private final TypeSolver delegate;
+        private TypeSolver parent;
+
+        SharedTypeSolver(TypeSolver delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public TypeSolver getParent() {
+            return parent;
+        }
+
+        @Override
+        public void setParent(TypeSolver parent) {
+            this.parent = parent;
+        }
+
+        @Override
+        public SymbolReference<ResolvedReferenceTypeDeclaration> tryToSolveType(String name) {
+            return delegate.tryToSolveType(name);
+        }
+    }
+
+    /** Project sources and dependency jars, each solver built once (see {@link Solvers}). */
+    private static Solvers typeSolvers(List<SourceRoot> sourceRoots, List<String> rootKeys,
+            Path dependencyDir, ParserConfiguration config) {
+        List<TypeSolver> roots = new ArrayList<>();
+        for (SourceRoot sourceRoot : sourceRoots) {
+            roots.add(new JavaParserTypeSolver(sourceRoot.getRoot(), config));
+        }
+        List<TypeSolver> jarSolvers = new ArrayList<>();
         if (dependencyDir != null && Files.isDirectory(dependencyDir)) {
             try (Stream<Path> entries = Files.walk(dependencyDir)) {
                 List<Path> jarFiles = entries
@@ -242,8 +336,7 @@ public final class L1Extractor {
                         .collect(java.util.stream.Collectors.toList());
                 for (Path jar : jarFiles) {
                     try {
-                        solver.add(new JarTypeSolver(jar));
-                        jars++;
+                        jarSolvers.add(new JarTypeSolver(jar));
                     } catch (IOException e) {
                         // A corrupt or unreadable jar degrades resolution; it must not fail analysis.
                         Log.debug("Skipping unreadable dependency jar " + jar + ": " + e.getMessage());
@@ -253,8 +346,28 @@ public final class L1Extractor {
                 Log.warn("Could not scan dependency directory " + dependencyDir + ": " + e.getMessage());
             }
         }
-        Log.debug("Type solver: " + sourceRoots.size() + " source root(s), " + jars + " dependency jar(s)");
-        return solver;
+        Log.debug("Type solver: " + sourceRoots.size() + " source root(s), " + jarSolvers.size()
+                + " dependency jar(s)");
+        return new Solvers(roots, rootKeys, jarSolvers);
+    }
+
+    /**
+     * Top-level qualified type names declared in more than one file, each with its files in sorted
+     * order (#269). Two source roots that vendor one library are the common case; each caller then
+     * resolves against its own root's copy first, but the name itself is ambiguous to a consumer.
+     */
+    public static Map<String, List<String>> duplicateTypeNames(Map<String, JModule> modules) {
+        Map<String, List<String>> files = new TreeMap<>();
+        for (Map.Entry<String, JModule> e : modules.entrySet()) {
+            String pkg = e.getValue().getPackageName();
+            for (String simple : e.getValue().getTypes().keySet()) {
+                String fqn = pkg == null || pkg.isEmpty() ? simple : pkg + "." + simple;
+                files.computeIfAbsent(fqn, k -> new ArrayList<>()).add(e.getKey());
+            }
+        }
+        files.values().removeIf(f -> f.size() < 2);
+        files.values().forEach(java.util.Collections::sort);
+        return files;
     }
 
     /** The {@code symbol_table} key: path relative to the key root, always {@code /}-separated. */

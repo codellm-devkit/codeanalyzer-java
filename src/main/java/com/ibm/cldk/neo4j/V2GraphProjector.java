@@ -15,6 +15,7 @@ package com.ibm.cldk.neo4j;
 import com.ibm.cldk.neo4j.GraphRows.NodeRef;
 import com.ibm.cldk.schema.Analysis;
 import com.ibm.cldk.schema.CanId;
+import com.ibm.cldk.schema.FqnIndex;
 import com.ibm.cldk.schema.JApplication;
 import com.ibm.cldk.schema.JArtifact;
 import com.ibm.cldk.schema.JBodyNode;
@@ -117,8 +118,10 @@ public final class V2GraphProjector {
 
         // First pass: an in-project index from a type's qualified (dotted) name to its node id and
         // owning module id, for resolving extends/implements/import spellings to emitted nodes.
-        Map<String, String> typeIdByFqn = new LinkedHashMap<>();
-        Map<String, String> moduleIdByFqn = new LinkedHashMap<>();
+        // A name may be declared by several types (vendored copies across source roots, #269): each
+        // reference resolves to the copy nearest the referring module.
+        FqnIndex typeIdByFqn = new FqnIndex();
+        FqnIndex moduleIdByFqn = new FqnIndex();
         for (Map.Entry<String, JModule> m : symbolTable.entrySet()) {
             indexTypes(m.getValue(), m.getValue().getTypes(), null, typeIdByFqn, moduleIdByFqn);
         }
@@ -204,7 +207,7 @@ public final class V2GraphProjector {
     // ------------------------------------------------------------------------------------------
 
     private static void indexTypes(JModule module, Map<String, JType> types, String qualifierFqn,
-            Map<String, String> typeIdByFqn, Map<String, String> moduleIdByFqn) {
+            FqnIndex typeIdByFqn, FqnIndex moduleIdByFqn) {
         for (Map.Entry<String, JType> e : types.entrySet()) {
             String fqn = qualifierFqn != null
                     ? qualifierFqn + "." + e.getKey()
@@ -221,7 +224,7 @@ public final class V2GraphProjector {
     }
 
     private static void projectType(RowBuilder b, NodeRef parent, String containmentRel, String name,
-            JType type, JModule module, String fileKey, Map<String, String> typeIdByFqn) {
+            JType type, JModule module, String fileKey, FqnIndex typeIdByFqn) {
         List<String> labels = type.isEntrypointClass()
                 ? Arrays.asList("JSymbol", "JType", "JEntrypoint")
                 : SYMBOL_TYPE;
@@ -245,13 +248,13 @@ public final class V2GraphProjector {
 
         String pkg = module.getPackageName();
         for (String base : type.getBaseTypes()) {
-            String target = resolveType(base, pkg, typeIdByFqn);
+            String target = resolveType(base, pkg, typeIdByFqn, module.getId());
             if (target != null) {
                 b.edgeToSymbol("J_EXTENDS", ref, target);
             }
         }
         for (String iface : type.getInterfaces()) {
-            String target = resolveType(iface, pkg, typeIdByFqn);
+            String target = resolveType(iface, pkg, typeIdByFqn, module.getId());
             if (target != null) {
                 b.edgeToSymbol("J_IMPLEMENTS", ref, target);
             }
@@ -320,7 +323,7 @@ public final class V2GraphProjector {
     // ------------------------------------------------------------------------------------------
 
     private static void projectCallable(RowBuilder b, NodeRef owner, String signature, JCallable c,
-            JModule module, String fileKey, Map<String, String> typeIdByFqn) {
+            JModule module, String fileKey, FqnIndex typeIdByFqn) {
         List<String> labels = c.isEntrypoint()
                 ? Arrays.asList("JSymbol", "JCallable", "JEntrypoint")
                 : SYMBOL_CALLABLE;
@@ -608,7 +611,7 @@ public final class V2GraphProjector {
     // ------------------------------------------------------------------------------------------
 
     private static void projectImports(RowBuilder b, NodeRef mod, JModule module,
-            Map<String, String> typeIdByFqn, Map<String, String> moduleIdByFqn) {
+            FqnIndex typeIdByFqn, FqnIndex moduleIdByFqn) {
         // Aggregate per target so one edge carries every spelling importing it.
         Map<String, List<JImport>> byTarget = new LinkedHashMap<>();
         Map<String, NodeRef> refByTarget = new LinkedHashMap<>();
@@ -617,7 +620,7 @@ public final class V2GraphProjector {
             if (path == null || path.isEmpty()) {
                 continue;
             }
-            String targetModule = imp.isWildcard() ? null : moduleIdByFqn.get(path);
+            String targetModule = imp.isWildcard() ? null : moduleIdByFqn.nearest(path, module.getId());
             String targetKey;
             NodeRef target;
             if (targetModule != null) {
@@ -680,16 +683,16 @@ public final class V2GraphProjector {
      * in-project type id, trying the spelling as-is then package-qualified. Unresolved spellings
      * stay as the string fallback on the node's {@code base_types}/{@code interfaces} props.
      */
-    private static String resolveType(String spelling, String pkg, Map<String, String> typeIdByFqn) {
+    private static String resolveType(String spelling, String pkg, FqnIndex typeIdByFqn, String near) {
         if (spelling == null || spelling.isEmpty()) {
             return null;
         }
-        String direct = typeIdByFqn.get(spelling);
+        String direct = typeIdByFqn.nearest(spelling, near);
         if (direct != null) {
             return direct;
         }
         if (pkg != null && !pkg.isEmpty()) {
-            return typeIdByFqn.get(pkg + "." + spelling);
+            return typeIdByFqn.nearest(pkg + "." + spelling, near);
         }
         return null;
     }
